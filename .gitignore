@@ -41,3 +41,13 @@ exports/
 .DS_Store
 Thumbs.db
 desktop.ini
+# Generated agent context snapshots
+docs/ai/generated/
+GIT_STATE.md
+repo_map_*.md
+
+# Local orchestration drafts
+docs/tz/
+
+# GNHF runtime
+.gnhf/
