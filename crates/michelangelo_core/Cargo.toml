@@ -1,0 +1,9 @@
+[package]
+name = "michelangelo_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+michelangelo_protocol = { path = "../michelangelo_protocol" }
+michelangelo_workspace = { path = "../michelangelo_workspace" }

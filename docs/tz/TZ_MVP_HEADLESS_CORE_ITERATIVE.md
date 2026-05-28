@@ -4,7 +4,7 @@
 
 - [x] 0. Context verified
 - [x] 1. Architecture boundaries confirmed
-- [ ] 2. Implementation stage 1 complete: `T-0001`–`T-0004` foundation
+- [x] 2. Implementation stage 1 complete: `T-0001`–`T-0004` foundation
 - [ ] 3. Implementation stage 2 complete: `T-0005`–`T-0008` workspace/snapshot/verification
 - [ ] 4. Implementation stage 3 complete: `T-0009+` headless core hardening
 - [ ] 5. Unit/component tests complete

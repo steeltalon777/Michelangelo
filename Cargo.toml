@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/michelangelo_protocol",
+    "crates/michelangelo_core",
+    "crates/michelangelo_workspace",
+    "crates/michelangelo_cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
