@@ -51,3 +51,6 @@ docs/tz/
 
 # GNHF runtime
 .gnhf/
+
+# Local OpenCode project config
+.opencode/
