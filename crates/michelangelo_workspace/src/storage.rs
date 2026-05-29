@@ -42,6 +42,21 @@ impl Storage {
                     name       TEXT NOT NULL,
                     root_path  TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id            TEXT PRIMARY KEY,
+                    project_id    TEXT NOT NULL,
+                    job_type      TEXT NOT NULL,
+                    status        TEXT NOT NULL,
+                    progress_pct  INTEGER,
+                    message       TEXT,
+                    input_json    TEXT,
+                    output_json   TEXT,
+                    error         TEXT,
+                    logs          TEXT,
+                    created_at    TEXT NOT NULL,
+                    started_at    TEXT,
+                    finished_at   TEXT
                 );",
             )
             .map_err(|e| {
@@ -127,6 +142,237 @@ impl Storage {
         let count: usize = self
             .conn
             .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+            .map_err(|e| {
+                WorkspaceError::Io(std::io::Error::other(format!("sqlite count failed: {e}")))
+            })?;
+        Ok(count)
+    }
+
+    // ------------------------------------------------------------------
+    //  Job operations
+    // ------------------------------------------------------------------
+
+    /// Generate a unique job id with a `job_` prefix.
+    fn generate_job_id() -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        format!("job_{}", now.as_nanos())
+    }
+
+    /// ISO 8601 UTC timestamp (same algorithm as `service.rs`).
+    fn iso_timestamp() -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let total_secs = now.as_secs();
+
+        let days = total_secs / 86400;
+        let time_secs = total_secs % 86400;
+        let hours = time_secs / 3600;
+        let minutes = (time_secs % 3600) / 60;
+        let seconds = time_secs % 60;
+
+        let mut y = 1970i64;
+        let mut remaining = days as i64;
+        loop {
+            let days_in_year = if Self::is_leap(y) { 366 } else { 365 };
+            if remaining < days_in_year {
+                break;
+            }
+            remaining -= days_in_year;
+            y += 1;
+        }
+        let month_days = if Self::is_leap(y) {
+            [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        } else {
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        };
+        let mut m = 1usize;
+        for &md in &month_days {
+            if remaining < md {
+                break;
+            }
+            remaining -= md;
+            m += 1;
+        }
+        let d = remaining + 1;
+
+        format!("{y:04}-{m:02}-{d:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
+    }
+
+    fn is_leap(year: i64) -> bool {
+        (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    }
+
+    /// Insert a new job with status `"queued"`. Returns the auto-generated job id.
+    pub fn create_job(&self, project_id: &str, job_type: &str) -> Result<String, WorkspaceError> {
+        let id = Self::generate_job_id();
+        let created_at = Self::iso_timestamp();
+        self.conn
+            .execute(
+                "INSERT INTO jobs (id, project_id, job_type, status, progress_pct, message, input_json, output_json, error, logs, created_at, started_at, finished_at)
+                 VALUES (?1, ?2, ?3, 'queued', NULL, NULL, NULL, NULL, NULL, NULL, ?4, NULL, NULL)",
+                rusqlite::params![id, project_id, job_type, created_at],
+            )
+            .map_err(|e| {
+                WorkspaceError::Io(std::io::Error::other(format!("sqlite create_job failed: {e}")))
+            })?;
+        Ok(id)
+    }
+
+    /// Update a job's status, and optionally its progress percentage and message.
+    ///
+    /// If the new status is `"running"` and `started_at` is still NULL, it is set
+    /// to the current timestamp.
+    pub fn update_job_status(
+        &self,
+        job_id: &str,
+        status: &str,
+        progress_pct: Option<u8>,
+        message: Option<&str>,
+    ) -> Result<(), WorkspaceError> {
+        let now = Self::iso_timestamp();
+        let pct: Option<i32> = progress_pct.map(|v| v as i32);
+        self.conn
+            .execute(
+                "UPDATE jobs SET
+                    status        = ?1,
+                    progress_pct  = COALESCE(?2, progress_pct),
+                    message       = COALESCE(?3, message),
+                    started_at    = CASE WHEN ?1 = 'running' AND started_at IS NULL THEN ?4 ELSE started_at END
+                 WHERE id = ?5",
+                rusqlite::params![status, pct, message, now, job_id],
+            )
+            .map_err(|e| {
+                WorkspaceError::Io(std::io::Error::other(format!(
+                    "sqlite update_job_status failed: {e}"
+                )))
+            })?;
+        Ok(())
+    }
+
+    /// Save output data for a finished or failed job.
+    ///
+    /// Each field is optional — pass `None` to leave the existing value unchanged.
+    pub fn update_job_output(
+        &self,
+        job_id: &str,
+        output_json: Option<&str>,
+        error: Option<&str>,
+        logs: Option<&str>,
+    ) -> Result<(), WorkspaceError> {
+        self.conn
+            .execute(
+                "UPDATE jobs SET
+                    output_json = COALESCE(?1, output_json),
+                    error       = COALESCE(?2, error),
+                    logs        = COALESCE(?3, logs)
+                 WHERE id = ?4",
+                rusqlite::params![output_json, error, logs, job_id],
+            )
+            .map_err(|e| {
+                WorkspaceError::Io(std::io::Error::other(format!(
+                    "sqlite update_job_output failed: {e}"
+                )))
+            })?;
+        Ok(())
+    }
+
+    /// Return all jobs for a project, ordered by `created_at DESC`.
+    pub fn list_jobs(&self, project_id: &str) -> Result<Vec<serde_json::Value>, WorkspaceError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, project_id, job_type, status, progress_pct, message,
+                        input_json, output_json, error, logs, created_at,
+                        started_at, finished_at
+                 FROM jobs
+                 WHERE project_id = ?1
+                 ORDER BY created_at DESC, id DESC",
+            )
+            .map_err(|e| {
+                WorkspaceError::Io(std::io::Error::other(format!("sqlite prepare failed: {e}")))
+            })?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![project_id], |row| {
+                Ok(serde_json::json!({
+                    "id":          row.get::<_, String>(0)?,
+                    "project_id":  row.get::<_, String>(1)?,
+                    "job_type":    row.get::<_, String>(2)?,
+                    "status":      row.get::<_, String>(3)?,
+                    "progress_pct": row.get::<_, Option<i32>>(4)?,
+                    "message":     row.get::<_, Option<String>>(5)?,
+                    "input_json":  row.get::<_, Option<String>>(6)?,
+                    "output_json": row.get::<_, Option<String>>(7)?,
+                    "error":       row.get::<_, Option<String>>(8)?,
+                    "logs":        row.get::<_, Option<String>>(9)?,
+                    "created_at":  row.get::<_, String>(10)?,
+                    "started_at":  row.get::<_, Option<String>>(11)?,
+                    "finished_at": row.get::<_, Option<String>>(12)?,
+                }))
+            })
+            .map_err(|e| {
+                WorkspaceError::Io(std::io::Error::other(format!("sqlite query failed: {e}")))
+            })?;
+
+        let mut jobs = Vec::new();
+        for row in rows {
+            jobs.push(row.map_err(|e| {
+                WorkspaceError::Io(std::io::Error::other(format!("sqlite row failed: {e}")))
+            })?);
+        }
+        Ok(jobs)
+    }
+
+    /// Return a single job by its id, or `None` if it does not exist.
+    pub fn get_job(&self, job_id: &str) -> Result<Option<serde_json::Value>, WorkspaceError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, project_id, job_type, status, progress_pct, message,
+                        input_json, output_json, error, logs, created_at,
+                        started_at, finished_at
+                 FROM jobs
+                 WHERE id = ?1",
+            )
+            .map_err(|e| {
+                WorkspaceError::Io(std::io::Error::other(format!("sqlite prepare failed: {e}")))
+            })?;
+
+        let result = stmt.query_row(rusqlite::params![job_id], |row| {
+            Ok(serde_json::json!({
+                "id":          row.get::<_, String>(0)?,
+                "project_id":  row.get::<_, String>(1)?,
+                "job_type":    row.get::<_, String>(2)?,
+                "status":      row.get::<_, String>(3)?,
+                "progress_pct": row.get::<_, Option<i32>>(4)?,
+                "message":     row.get::<_, Option<String>>(5)?,
+                "input_json":  row.get::<_, Option<String>>(6)?,
+                "output_json": row.get::<_, Option<String>>(7)?,
+                "error":       row.get::<_, Option<String>>(8)?,
+                "logs":        row.get::<_, Option<String>>(9)?,
+                "created_at":  row.get::<_, String>(10)?,
+                "started_at":  row.get::<_, Option<String>>(11)?,
+                "finished_at": row.get::<_, Option<String>>(12)?,
+            }))
+        });
+
+        match result {
+            Ok(job) => Ok(Some(job)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(WorkspaceError::Io(std::io::Error::other(format!(
+                "sqlite query failed: {e}"
+            )))),
+        }
+    }
+
+    /// Return the number of job records (used in tests).
+    pub fn job_count(&self) -> Result<usize, WorkspaceError> {
+        let count: usize = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
             .map_err(|e| {
                 WorkspaceError::Io(std::io::Error::other(format!("sqlite count failed: {e}")))
             })?;
@@ -221,5 +467,163 @@ mod tests {
 
         let result = storage.load_project_by_root("/nonexistent/path").unwrap();
         assert!(result.is_none());
+    }
+
+    // ------------------------------------------------------------------
+    //  Job tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_jobs_table_created() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+        assert_eq!(storage.job_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_create_and_list_jobs() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        let j1 = storage.create_job("proj1", "render").unwrap();
+        let j2 = storage.create_job("proj1", "export").unwrap();
+
+        let jobs = storage.list_jobs("proj1").unwrap();
+        assert_eq!(jobs.len(), 2);
+
+        let ids: Vec<&str> = jobs.iter().map(|j| j["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&j1.as_str()));
+        assert!(ids.contains(&j2.as_str()));
+    }
+
+    #[test]
+    fn test_get_job_by_id() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        let job_id = storage.create_job("proj1", "render").unwrap();
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+
+        assert_eq!(job["id"].as_str().unwrap(), job_id);
+        assert_eq!(job["project_id"].as_str().unwrap(), "proj1");
+        assert_eq!(job["job_type"].as_str().unwrap(), "render");
+    }
+
+    #[test]
+    fn test_get_job_missing() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+        assert!(storage.get_job("nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_update_job_status() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        let job_id = storage.create_job("proj1", "render").unwrap();
+
+        // transition to running — sets started_at
+        storage
+            .update_job_status(&job_id, "running", None, None)
+            .unwrap();
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+        assert_eq!(job["status"].as_str().unwrap(), "running");
+        assert!(!job["started_at"].as_str().unwrap_or("").is_empty());
+
+        // second running update — started_at stays set
+        storage
+            .update_job_status(&job_id, "running", None, None)
+            .unwrap();
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+        assert_eq!(job["status"].as_str().unwrap(), "running");
+        assert!(!job["started_at"].as_str().unwrap_or("").is_empty());
+    }
+
+    #[test]
+    fn test_update_job_progress_and_message() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        let job_id = storage.create_job("proj1", "render").unwrap();
+        storage
+            .update_job_status(&job_id, "processing", Some(50), Some("halfway"))
+            .unwrap();
+
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+        assert_eq!(job["status"].as_str().unwrap(), "processing");
+        assert_eq!(job["progress_pct"].as_i64().unwrap(), 50);
+        assert_eq!(job["message"].as_str().unwrap(), "halfway");
+    }
+
+    #[test]
+    fn test_update_job_output() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        let job_id = storage.create_job("proj1", "render").unwrap();
+        storage
+            .update_job_output(
+                &job_id,
+                Some(r#"{"result":"ok"}"#),
+                Some("no error"),
+                Some("log line 1\nlog line 2"),
+            )
+            .unwrap();
+
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+        assert_eq!(job["output_json"].as_str().unwrap(), r#"{"result":"ok"}"#);
+        assert_eq!(job["error"].as_str().unwrap(), "no error");
+        assert_eq!(job["logs"].as_str().unwrap(), "log line 1\nlog line 2");
+    }
+
+    #[test]
+    fn test_job_survives_storage_reopen() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("j.db");
+        let job_id = {
+            let storage = Storage::open(&db_path).unwrap();
+            storage.create_job("proj1", "render").unwrap()
+            // storage dropped here
+        };
+
+        let storage = Storage::open(&db_path).unwrap();
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+        assert_eq!(job["project_id"].as_str().unwrap(), "proj1");
+        assert_eq!(job["job_type"].as_str().unwrap(), "render");
+        assert_eq!(job["status"].as_str().unwrap(), "queued");
+    }
+
+    #[test]
+    fn test_list_jobs_ordered() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        let j1 = storage.create_job("proj1", "render").unwrap();
+        // Small delay so created_at differs (second‑precision timestamps)
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let j2 = storage.create_job("proj1", "export").unwrap();
+
+        let jobs = storage.list_jobs("proj1").unwrap();
+        assert_eq!(jobs.len(), 2);
+        // most recent first
+        assert_eq!(jobs[0]["id"].as_str().unwrap(), j2);
+        assert_eq!(jobs[1]["id"].as_str().unwrap(), j1);
+    }
+
+    #[test]
+    fn test_job_default_fields() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        let job_id = storage.create_job("proj1", "render").unwrap();
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+
+        assert_eq!(job["status"].as_str().unwrap(), "queued");
+        assert!(!job["created_at"].as_str().unwrap_or("").is_empty());
+        assert!(job["started_at"].is_null());
+        assert!(job["finished_at"].is_null());
+        assert!(job["progress_pct"].is_null());
+        assert!(job["message"].is_null());
     }
 }
