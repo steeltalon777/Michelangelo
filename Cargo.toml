@@ -4,6 +4,8 @@ members = [
     "crates/michelangelo_protocol",
     "crates/michelangelo_core",
     "crates/michelangelo_workspace",
+    "crates/michelangelo_jobs",
+    "crates/michelangelo_blender",
     "crates/michelangelo_cli",
 ]
 
