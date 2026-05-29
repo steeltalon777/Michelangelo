@@ -3,7 +3,11 @@
 //! Responsible for command routing, service coordination, and
 //! exposing the core API to transport layers (stdio, HTTP, etc.).
 
-/// Placeholder: core logic will be implemented in subsequent tasks.
+pub mod service;
+
+pub use service::CoreService;
+
+/// Core crate version string.
 pub fn core_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }

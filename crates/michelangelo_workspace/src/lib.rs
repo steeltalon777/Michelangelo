@@ -3,7 +3,13 @@
 //! Handles create/open/inspect operations for local Michelangelo
 //! project workspaces on the filesystem.
 
-/// Placeholder: workspace logic will be implemented in T-0005+.
+pub mod error;
+pub mod layout;
+pub mod service;
+
+pub use service::WorkspaceService;
+
+/// Workspace crate version string.
 pub fn workspace_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }

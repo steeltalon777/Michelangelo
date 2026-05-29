@@ -5,15 +5,15 @@
 - [x] 0. Context verified
 - [x] 1. Architecture boundaries confirmed
 - [x] 2. Implementation stage 1 complete: `T-0001`–`T-0004` foundation
-- [ ] 3. Implementation stage 2 complete: `T-0005`–`T-0008` workspace/snapshot/verification
+- [x] 3. Implementation stage 2 complete: `T-0005`–`T-0008` workspace/snapshot/verification
 - [ ] 4. Implementation stage 3 complete: `T-0009+` headless core hardening
-- [ ] 5. Unit/component tests complete
-- [ ] 6. Integration tests with real dependencies complete
-- [ ] 7. Stand smoke tests complete
-- [ ] 8. UI automation tests complete
+- [x] 5. Unit/component tests complete
+- [x] 6. Integration tests with real dependencies complete
+- [x] 7. Stand smoke tests complete
+- [ ] 8. UI automation tests complete — not applicable: no UI touched
 - [ ] 9. User scenario tests complete
-- [ ] 10. Regression checks complete
-- [ ] 11. Documentation updated
+- [x] 10. Regression checks complete
+- [x] 11. Documentation updated
 - [ ] 12. Final acceptance review complete
 
 ## Check Rules

@@ -16,9 +16,27 @@ pub enum ErrorCode {
     InternalError = -32603,
     /// No project is currently open.
     WorkspaceNotOpen = -32000,
+    /// Project workspace already exists at the requested path.
+    AlreadyExists = -32001,
 }
 
 impl ErrorCode {
+    /// Create an `ErrorCode` from a numeric code.
+    ///
+    /// Returns `InternalError` for unknown codes.
+    pub fn from_code(code: i32) -> Self {
+        match code {
+            -32700 => ErrorCode::ParseError,
+            -32600 => ErrorCode::InvalidRequest,
+            -32601 => ErrorCode::MethodNotFound,
+            -32602 => ErrorCode::InvalidParams,
+            -32603 => ErrorCode::InternalError,
+            -32000 => ErrorCode::WorkspaceNotOpen,
+            -32001 => ErrorCode::AlreadyExists,
+            _ => ErrorCode::InternalError,
+        }
+    }
+
     pub fn message(&self) -> &'static str {
         match self {
             ErrorCode::ParseError => "Parse error",
@@ -27,6 +45,7 @@ impl ErrorCode {
             ErrorCode::InvalidParams => "Invalid params",
             ErrorCode::InternalError => "Internal error",
             ErrorCode::WorkspaceNotOpen => "Workspace not open",
+            ErrorCode::AlreadyExists => "Already exists",
         }
     }
 }

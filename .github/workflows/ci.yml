@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Rust workspace checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build CLI
+        run: cargo build -p michelangelo_cli
+
+      - name: Smoke — system.ping
+        run: |
+          printf '{"id":"1","method":"system.ping","params":{}}\n' \
+            | cargo run -p michelangelo_cli -- core stdio
+
+      - name: Smoke — project.create + get_snapshot
+        run: |
+          tmpdir=$(mktemp -d)
+          printf "{\"id\":\"c1\",\"method\":\"project.create\",\"params\":{\"path\":\"$tmpdir\",\"name\":\"smoke\"}}\n{\"id\":\"c2\",\"method\":\"project.get_snapshot\",\"params\":{}}\n" \
+            | cargo run -p michelangelo_cli -- core stdio
+
+      - name: Smoke — project.open + get_snapshot
+        run: |
+          tmpdir=$(mktemp -d)
+          printf "{\"id\":\"o1\",\"method\":\"project.create\",\"params\":{\"path\":\"$tmpdir\",\"name\":\"open-smoke\"}}\n{\"id\":\"o2\",\"method\":\"project.open\",\"params\":{\"path\":\"$tmpdir\"}}\n{\"id\":\"o3\",\"method\":\"project.get_snapshot\",\"params\":{}}\n" \
+            | cargo run -p michelangelo_cli -- core stdio
+
+      - name: Smoke — get_snapshot with no project (error)
+        run: |
+          printf '{"id":"e1","method":"project.get_snapshot","params":{}}\n' \
+            | cargo run -p michelangelo_cli -- core stdio
