@@ -24,23 +24,32 @@ verify: fmt-check clippy test
 
 # Run JSONL stdio smoke tests
 smoke-jsonl:
-    @echo "=== JSONL smoke: system.ping ==="
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "=== JSONL smoke: system.ping ==="
     printf '{"id":"1","method":"system.ping","params":{}}\n' \
         | cargo run -p michelangelo_cli -- core stdio 2>/dev/null
-    @echo ""
-    @echo "=== JSONL smoke: project.create + get_snapshot ==="
-    tmpdir=`mktemp -d` && \
-    printf "{\"id\":\"c1\",\"method\":\"project.create\",\"params\":{\"path\":\"$$tmpdir\",\"name\":\"smoke\"}}\n{\"id\":\"c2\",\"method\":\"project.get_snapshot\",\"params\":{}}\n" \
+
+    echo ""
+    echo "=== JSONL smoke: project.create + get_snapshot ==="
+    tmpdir=$(mktemp -d)
+    printf '{"id":"c1","method":"project.create","params":{"path":"%s","name":"smoke"}}\n{"id":"c2","method":"project.get_snapshot","params":{}}\n' "$tmpdir" \
         | cargo run -p michelangelo_cli -- core stdio 2>/dev/null
-    @echo ""
-    @echo "=== JSONL smoke: project.open + get_snapshot ==="
-    tmpdir=`mktemp -d` && \
-    printf "{\"id\":\"o1\",\"method\":\"project.create\",\"params\":{\"path\":\"$$tmpdir\",\"name\":\"open-smoke\"}}\n{\"id\":\"o2\",\"method\":\"project.open\",\"params\":{\"path\":\"$$tmpdir\"}}\n{\"id\":\"o3\",\"method\":\"project.get_snapshot\",\"params\":{}}\n" \
+
+    echo ""
+    echo "=== JSONL smoke: project.open + get_snapshot ==="
+    tmpdir=$(mktemp -d)
+    printf '{"id":"o1","method":"project.create","params":{"path":"%s","name":"open-smoke"}}\n{"id":"o2","method":"project.open","params":{"path":"%s"}}\n{"id":"o3","method":"project.get_snapshot","params":{}}\n' "$tmpdir" "$tmpdir" \
         | cargo run -p michelangelo_cli -- core stdio 2>/dev/null
-    @echo ""
-    @echo "=== JSONL smoke: project.get_snapshot with no project (error) ==="
+
+    echo ""
+    echo "=== JSONL smoke: project.get_snapshot with no project (error) ==="
     printf '{"id":"e1","method":"project.get_snapshot","params":{}}\n' \
         | cargo run -p michelangelo_cli -- core stdio 2>/dev/null
+
+    echo ""
+    echo "=== smoke-jsonl complete ==="
 
 # Build the CLI binary
 build:
