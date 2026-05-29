@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::WorkspaceError;
 use crate::layout;
+use crate::storage::Storage;
 
 /// On-disk metadata stored in `.michelangelo/project.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,9 +20,19 @@ pub struct ProjectMeta {
 }
 
 impl ProjectMeta {
-    /// Create a new metadata record.
+    /// Create a new metadata record with auto-generated timestamp.
     pub fn new(id: String, name: String, root_path: String) -> Self {
         let created_at = timestamp_iso8601();
+        Self {
+            id,
+            name,
+            root_path,
+            created_at,
+        }
+    }
+
+    /// Create a metadata record from explicit parts (used when loading from storage).
+    pub fn from_row(id: String, name: String, root_path: String, created_at: String) -> Self {
         Self {
             id,
             name,
@@ -69,7 +80,7 @@ impl WorkspaceService {
         };
         let project_id = id_from_name(&project_name);
 
-        // Write metadata file.
+        // Write metadata file (JSON — backward compatible marker).
         let meta = ProjectMeta::new(
             project_id.clone(),
             project_name.clone(),
@@ -78,6 +89,12 @@ impl WorkspaceService {
         let meta_path = layout::project_file_path(&resolved);
         let meta_json = serde_json::to_string_pretty(&meta)?;
         std::fs::write(&meta_path, meta_json)?;
+
+        // Also persist to SQLite.
+        let db_path = layout::db_path(&resolved);
+        if let Ok(storage) = Storage::open(&db_path) {
+            let _ = storage.save_project(&meta);
+        }
 
         Ok(ProjectDto::new(
             project_id,
@@ -111,13 +128,36 @@ impl WorkspaceService {
             ));
         }
 
-        // Read and parse metadata.
-        let meta_path = layout::project_file_path(&resolved);
-        let meta_json = std::fs::read_to_string(&meta_path)?;
-        let meta: ProjectMeta = serde_json::from_str(&meta_json)?;
+        // Validate that required sub-directories exist.
+        layout::validate_layout(&resolved)?;
+
+        // Prefer SQLite storage; fall back to JSON project file.
+        let root_path_str = resolved.display().to_string();
+        let meta = match load_meta_from_sqlite(&resolved, &root_path_str) {
+            Ok(Some(m)) => m,
+            _ => load_meta_from_json(&resolved)?,
+        };
 
         Ok(ProjectDto::new(meta.id, meta.name, meta.root_path))
     }
+}
+
+/// Try to load project metadata from SQLite storage.
+fn load_meta_from_sqlite(
+    root: &Path,
+    root_path: &str,
+) -> Result<Option<ProjectMeta>, WorkspaceError> {
+    let db_path = layout::db_path(root);
+    let storage = Storage::open(&db_path)?;
+    storage.load_project_by_root(root_path)
+}
+
+/// Load project metadata from the JSON project file (backward compat).
+fn load_meta_from_json(root: &Path) -> Result<ProjectMeta, WorkspaceError> {
+    let meta_path = layout::project_file_path(root);
+    let meta_json = std::fs::read_to_string(&meta_path)?;
+    let meta: ProjectMeta = serde_json::from_str(&meta_json)?;
+    Ok(meta)
 }
 
 /// Resolve a path to an absolute form, following symlinks if the path exists.
@@ -277,5 +317,115 @@ mod tests {
         for sub in crate::layout::WORKSPACE_DIRS {
             assert!(dir.path().join(sub).is_dir(), "missing: {sub}");
         }
+    }
+
+    #[test]
+    fn test_open_corrupted_missing_subdir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WorkspaceService;
+        svc.create_project(dir.path(), "corrupt-test").unwrap();
+
+        // Remove a required subdirectory
+        std::fs::remove_dir(dir.path().join("refs")).unwrap();
+
+        let err = svc.open_project(dir.path()).unwrap_err();
+        assert!(matches!(err, WorkspaceError::Corrupted(_)));
+        assert!(err.to_string().contains("refs"));
+    }
+
+    #[test]
+    fn test_open_corrupted_project_json_without_sqlite() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WorkspaceService;
+        svc.create_project(dir.path(), "json-test").unwrap();
+
+        // Remove SQLite DB so open_project falls back to JSON
+        let db_path = crate::layout::db_path(dir.path());
+        if db_path.exists() {
+            std::fs::remove_file(&db_path).unwrap();
+        }
+
+        // Overwrite project.json with invalid JSON
+        let meta_path = crate::layout::project_file_path(dir.path());
+        std::fs::write(&meta_path, r#"{invalid json content}"#).unwrap();
+
+        let err = svc.open_project(dir.path()).unwrap_err();
+        assert!(matches!(err, WorkspaceError::Json(_)));
+    }
+
+    #[test]
+    fn test_open_corrupted_empty_project_json_without_sqlite() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WorkspaceService;
+        svc.create_project(dir.path(), "empty-json").unwrap();
+
+        // Remove SQLite DB so open_project falls back to JSON
+        let db_path = crate::layout::db_path(dir.path());
+        if db_path.exists() {
+            std::fs::remove_file(&db_path).unwrap();
+        }
+
+        // Overwrite project.json with empty content
+        let meta_path = crate::layout::project_file_path(dir.path());
+        std::fs::write(&meta_path, "").unwrap();
+
+        let err = svc.open_project(dir.path()).unwrap_err();
+        assert!(matches!(err, WorkspaceError::Json(_)));
+    }
+
+    #[test]
+    fn test_open_prefers_sqlite_over_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WorkspaceService;
+        svc.create_project(dir.path(), "sqlite-first").unwrap();
+
+        // Corrupt the JSON but keep SQLite — open should succeed from SQLite
+        let meta_path = crate::layout::project_file_path(dir.path());
+        std::fs::write(&meta_path, r#"{garbage}"#).unwrap();
+
+        let result = svc.open_project(dir.path());
+        assert!(
+            result.is_ok(),
+            "should open from SQLite: {:?}",
+            result.err()
+        );
+        let dto = result.unwrap();
+        assert_eq!(dto.name, "sqlite-first");
+    }
+
+    #[test]
+    fn test_open_falls_back_to_json_without_sqlite() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WorkspaceService;
+
+        // Create a workspace, then delete the SQLite DB
+        svc.create_project(dir.path(), "json-fallback").unwrap();
+        let db_path = crate::layout::db_path(dir.path());
+        assert!(db_path.exists());
+        std::fs::remove_file(&db_path).unwrap();
+
+        // Open should still work via JSON
+        let result = svc.open_project(dir.path());
+        assert!(
+            result.is_ok(),
+            "should fall back to JSON: {:?}",
+            result.err()
+        );
+        let dto = result.unwrap();
+        assert_eq!(dto.name, "json-fallback");
+    }
+
+    #[test]
+    fn test_open_after_subdir_repair() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WorkspaceService;
+        svc.create_project(dir.path(), "repair-test").unwrap();
+
+        // Remove and restore a directory
+        std::fs::remove_dir(dir.path().join("masks")).unwrap();
+        assert!(svc.open_project(dir.path()).is_err());
+
+        std::fs::create_dir(dir.path().join("masks")).unwrap();
+        assert!(svc.open_project(dir.path()).is_ok());
     }
 }

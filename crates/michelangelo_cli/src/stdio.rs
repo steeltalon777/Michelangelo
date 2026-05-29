@@ -7,6 +7,7 @@
 use std::io::{self, BufRead, Write};
 
 use michelangelo_core::CoreService;
+use michelangelo_protocol::error::{ErrorCode, ProtocolError};
 use michelangelo_protocol::response::ResponseEnvelope;
 
 /// Run the JSONL stdin/stdout loop until EOF on stdin.
@@ -40,17 +41,17 @@ pub fn run_loop() -> Result<(), io::Error> {
 
 /// Parse a single input line and dispatch it through the core service.
 fn process_line(core: &mut CoreService, line: &str) -> ResponseEnvelope {
+    use serde_json::error::Category;
+
     let cmd = match serde_json::from_str(line) {
         Ok(cmd) => cmd,
         Err(e) => {
             let id = extract_id_from_partial(line);
-            return ResponseEnvelope::error(
-                id,
-                michelangelo_protocol::error::ProtocolError::new(
-                    michelangelo_protocol::error::ErrorCode::ParseError,
-                    format!("invalid JSON: {e}"),
-                ),
-            );
+            let code = match e.classify() {
+                Category::Data => ErrorCode::InvalidRequest,
+                _ => ErrorCode::ParseError,
+            };
+            return ResponseEnvelope::error(id, ProtocolError::new(code, format!("{e}")));
         }
     };
 
@@ -59,12 +60,26 @@ fn process_line(core: &mut CoreService, line: &str) -> ResponseEnvelope {
 
 /// Attempt to extract an `id` field from a string that may not be valid JSON.
 fn extract_id_from_partial(text: &str) -> Option<String> {
-    if let Some(start) = text.find(r#""id":""#) {
-        let value_start = start + 6;
-        if let Some(value_end) = text[value_start..].find('"') {
-            let extracted = &text[value_start..value_start + value_end];
-            if !extracted.is_empty() {
-                return Some(extracted.to_string());
+    // First, try structural extraction from valid JSON
+    // This handles whitespace around the colon, numeric ids, etc.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+        return match v.get("id") {
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        };
+    }
+    // Fallback heuristic for truly malformed JSON (e.g., truncated or syntax error)
+    // Search for "id": followed by optional whitespace then a quoted string value
+    if let Some(pos) = text.find(r#""id":"#) {
+        let after = &text[pos + 5..];
+        if let Some(quote_pos) = after.find('"') {
+            let after_quote = &after[quote_pos + 1..];
+            if let Some(end) = after_quote.find('"') {
+                let extracted = &after_quote[..end];
+                if !extracted.is_empty() {
+                    return Some(extracted.to_string());
+                }
             }
         }
     }
@@ -199,5 +214,129 @@ mod tests {
             err.code,
             michelangelo_protocol::error::ErrorCode::WorkspaceNotOpen
         );
+    }
+
+    #[test]
+    fn test_reopen_across_process_boundary() {
+        // Simulate process boundary: create in one CoreService, open in another
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // "Process 1": create project
+        let mut c1 = core();
+        let create_resp = process_line(
+            &mut c1,
+            &format!(
+                r#"{{"id":"c1","method":"project.create","params":{{"path":"{}","name":"reopen-test"}}}}"#,
+                dir.path().display()
+            ),
+        );
+        assert!(create_resp.error.is_none());
+
+        // "Process 2": open and get snapshot
+        let mut c2 = core();
+        let open_resp = process_line(
+            &mut c2,
+            &format!(
+                r#"{{"id":"o1","method":"project.open","params":{{"path":"{}"}}}}"#,
+                dir.path().display()
+            ),
+        );
+        assert!(
+            open_resp.error.is_none(),
+            "reopen failed: {:?}",
+            open_resp.error
+        );
+        assert_eq!(open_resp.result.unwrap()["name"], "reopen-test");
+
+        let snap_resp = process_line(
+            &mut c2,
+            r#"{"id":"s1","method":"project.get_snapshot","params":{}}"#,
+        );
+        assert!(snap_resp.error.is_none());
+        let snap = snap_resp.result.unwrap();
+        assert_eq!(snap["project"]["name"], "reopen-test");
+        assert_eq!(snap["workspace_status"], "active");
+    }
+
+    #[test]
+    fn test_extract_id_whitespace_colon() {
+        // Valid JSON with whitespace around colon — T-0009 acceptance
+        let id = extract_id_from_partial(r#"{"id": "inv2", "params": {}}"#);
+        assert_eq!(id, Some("inv2".into()));
+    }
+
+    #[test]
+    fn test_extract_id_compact() {
+        // Compact format — no whitespace
+        let id = extract_id_from_partial(r#"{"id":"42","method":"foo"}"#);
+        assert_eq!(id, Some("42".into()));
+    }
+
+    #[test]
+    fn test_extract_id_numeric() {
+        // Numeric id converted to string
+        let id = extract_id_from_partial(r#"{"id":123,"method":"foo"}"#);
+        assert_eq!(id, Some("123".into()));
+    }
+
+    #[test]
+    fn test_extract_id_null() {
+        // Explicit null id
+        let id = extract_id_from_partial(r#"{"id":null,"method":"foo"}"#);
+        assert_eq!(id, None);
+    }
+
+    #[test]
+    fn test_extract_id_no_id() {
+        // No id field at all
+        let id = extract_id_from_partial(r#"{"method":"foo","params":{}}"#);
+        assert_eq!(id, None);
+    }
+
+    #[test]
+    fn test_extract_id_malformed_heuristic() {
+        // Truly malformed JSON — falls back to string heuristic
+        let id = extract_id_from_partial(r#"{"id":"42","method":"system.ping"params:{}}"#);
+        assert_eq!(id, Some("42".into()));
+    }
+
+    #[test]
+    fn test_process_invalid_request_preserves_id() {
+        // Valid JSON, missing method — must preserve id with whitespace
+        let mut c = core();
+        let resp = process_line(&mut c, r#"{"id": "inv2", "params": {}}"#);
+        assert_eq!(resp.id, Some("inv2".into()));
+        assert!(resp.error.is_some());
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, ErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn test_reopen_preserves_metadata() {
+        // Verify metadata survives across CoreService instances
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let mut c1 = core();
+        let _ = process_line(
+            &mut c1,
+            &format!(
+                r#"{{"id":"c1","method":"project.create","params":{{"path":"{}","name":"meta-survival"}}}}"#,
+                dir.path().display()
+            ),
+        );
+
+        // Second process — verify name/id match
+        let mut c2 = core();
+        let open_resp = process_line(
+            &mut c2,
+            &format!(
+                r#"{{"id":"o1","method":"project.open","params":{{"path":"{}"}}}}"#,
+                dir.path().display()
+            ),
+        );
+        assert!(open_resp.error.is_none());
+        let dto = open_resp.result.unwrap();
+        assert_eq!(dto["name"], "meta-survival");
+        assert_eq!(dto["id"], "meta-survival");
     }
 }

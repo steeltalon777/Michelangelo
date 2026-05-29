@@ -6,6 +6,7 @@
 pub mod error;
 pub mod layout;
 pub mod service;
+pub mod storage;
 
 pub use service::WorkspaceService;
 

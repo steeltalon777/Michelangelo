@@ -11,6 +11,8 @@ pub enum WorkspaceError {
     Json(serde_json::Error),
     /// Project with the given path already exists and is valid.
     AlreadyExists(String),
+    /// Workspace metadata exists but the layout is incomplete or corrupt.
+    Corrupted(String),
 }
 
 impl fmt::Display for WorkspaceError {
@@ -20,6 +22,7 @@ impl fmt::Display for WorkspaceError {
             WorkspaceError::Io(e) => write!(f, "I/O error: {e}"),
             WorkspaceError::Json(e) => write!(f, "metadata error: {e}"),
             WorkspaceError::AlreadyExists(p) => write!(f, "workspace already exists: {p}"),
+            WorkspaceError::Corrupted(d) => write!(f, "workspace is corrupt: {d}"),
         }
     }
 }
@@ -43,15 +46,5 @@ impl From<std::io::Error> for WorkspaceError {
 impl From<serde_json::Error> for WorkspaceError {
     fn from(e: serde_json::Error) -> Self {
         WorkspaceError::Json(e)
-    }
-}
-
-/// Map a `WorkspaceError` to a protocol `ErrorCode` and message.
-pub fn workspace_error_to_protocol(err: &WorkspaceError) -> (i32, String) {
-    match err {
-        WorkspaceError::NotAWorkspace(_) => (-32000, err.to_string()),
-        WorkspaceError::Io(e) => (-32603, format!("filesystem error: {e}")),
-        WorkspaceError::Json(e) => (-32603, format!("metadata error: {e}")),
-        WorkspaceError::AlreadyExists(_) => (-32001, err.to_string()),
     }
 }

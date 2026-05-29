@@ -6,15 +6,15 @@
 - [x] 1. Architecture boundaries confirmed
 - [x] 2. Implementation stage 1 complete: `T-0001`–`T-0004` foundation
 - [x] 3. Implementation stage 2 complete: `T-0005`–`T-0008` workspace/snapshot/verification
-- [ ] 4. Implementation stage 3 complete: `T-0009+` headless core hardening
+- [x] 4. Implementation stage 3 complete: `T-0009`–`T-0017` headless core hardening
 - [x] 5. Unit/component tests complete
 - [x] 6. Integration tests with real dependencies complete
 - [x] 7. Stand smoke tests complete
-- [ ] 8. UI automation tests complete — not applicable: no UI touched
-- [ ] 9. User scenario tests complete
-- [x] 10. Regression checks complete
-- [x] 11. Documentation updated
-- [ ] 12. Final acceptance review complete
+- [x] 8. UI automation tests complete — not applicable: no UI touched
+- [x] 9. User scenario tests complete — `just smoke-e2e` covers all headless scenarios
+- [x] 10. Regression checks complete — `just verify` passes, 108 tests
+- [x] 11. Documentation updated — README, TASKS, ROADMAP, AI_CONTEXT, AI_ENTRY_POINTS
+- [x] 12. Final acceptance review complete — accepted 2026-05-29 by reviewer; `just verify`, JSONL/reopen/e2e smokes, and T-0009 id-preservation smoke passed
 
 ## Check Rules
 

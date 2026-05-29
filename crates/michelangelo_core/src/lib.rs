@@ -3,8 +3,10 @@
 //! Responsible for command routing, service coordination, and
 //! exposing the core API to transport layers (stdio, HTTP, etc.).
 
+pub mod router;
 pub mod service;
 
+pub use router::{default_router, Router};
 pub use service::CoreService;
 
 /// Core crate version string.
