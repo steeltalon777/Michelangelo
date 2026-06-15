@@ -153,7 +153,7 @@ impl Storage {
     // ------------------------------------------------------------------
 
     /// Generate a unique job id with a `job_` prefix.
-    fn generate_job_id() -> String {
+    pub fn generate_job_id() -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
@@ -208,6 +208,17 @@ impl Storage {
     /// Insert a new job with status `"queued"`. Returns the auto-generated job id.
     pub fn create_job(&self, project_id: &str, job_type: &str) -> Result<String, WorkspaceError> {
         let id = Self::generate_job_id();
+        self.create_job_with_id(&id, project_id, job_type)?;
+        Ok(id)
+    }
+
+    /// Insert a new job with an explicit job id.
+    pub fn create_job_with_id(
+        &self,
+        id: &str,
+        project_id: &str,
+        job_type: &str,
+    ) -> Result<(), WorkspaceError> {
         let created_at = Self::iso_timestamp();
         self.conn
             .execute(
@@ -218,7 +229,7 @@ impl Storage {
             .map_err(|e| {
                 WorkspaceError::Io(std::io::Error::other(format!("sqlite create_job failed: {e}")))
             })?;
-        Ok(id)
+        Ok(())
     }
 
     /// Update a job's status, and optionally its progress percentage and message.

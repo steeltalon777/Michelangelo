@@ -333,6 +333,8 @@ dependencies = [
 name = "michelangelo_core"
 version = "0.1.0"
 dependencies = [
+ "michelangelo_blender",
+ "michelangelo_jobs",
  "michelangelo_protocol",
  "michelangelo_workspace",
  "serde_json",

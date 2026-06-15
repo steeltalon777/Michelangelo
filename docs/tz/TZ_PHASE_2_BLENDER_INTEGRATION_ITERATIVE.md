@@ -11,15 +11,15 @@
 - [x] 1. Architecture boundaries confirmed
 - [x] 2. Implementation stage 1 complete — protocol contract and crate skeletons
 - [x] 3. Implementation stage 2 complete — accepted 2026-05-29: all three reviewer findings resolved; `cargo test --workspace` passes; real Blender worker smoke passes
-- [ ] 4. Implementation stage 3 complete — core/router/CLI integration
-- [ ] 5. Implementation stage 4 complete — hardening, smoke recipes, docs sync
-- [ ] 6. Unit/component tests complete
-- [ ] 7. Integration tests with real dependencies complete
-- [ ] 8. Stand smoke tests complete
-- [ ] 9. UI automation tests complete
-- [ ] 10. User scenario tests complete
-- [ ] 11. Regression checks complete
-- [ ] 12. Documentation updated
+- [x] 4. Implementation stage 3 complete — core/router/CLI integration
+- [x] 5. Implementation stage 4 complete — hardening, smoke recipes, docs sync
+- [x] 6. Unit/component tests complete
+- [x] 7. Integration tests with real dependencies complete
+- [x] 8. Stand smoke tests complete
+- [ ] 9. UI automation tests — not applicable: no UI touched (QA to confirm)
+- [x] 10. User scenario tests complete
+- [x] 11. Regression checks complete
+- [x] 12. Documentation updated
 - [ ] 13. Final acceptance review complete
 
 ## Check Rules
@@ -102,7 +102,7 @@ Recommended Phase 2 MVP vertical scenario:
 ```text
 project.create
   → blender.run_job(wait=true, job_type="blender_smoke_scene")
-  → stdout JSONL event stream: job.queued/job.started/job.progress/job.completed
+  → stdout JSONL event stream: job.queued/job.started/(optional job.progress)/job.completed
   → response for blender.run_job contains terminal JobDto + artifact paths
   → project.get_snapshot shows recent job
   → process restart: project.open + job.list returns persisted job history
@@ -344,6 +344,7 @@ Recommended `blender.run_job` params:
 
 Rules:
 
+- Required smoke path: `create_box` + `save_blend` only. `export_glb` is optional and depends on local Blender glTF prerequisites (e.g. numpy). See `TZ_PHASE_2_ACCEPTANCE_HARDENING.md`.
 - `wait=false` or missing `wait` returns after queueing.
 - `wait=true` blocks only up to the effective timeout and returns a terminal `JobDto` or structured error.
 - Events may be emitted before the final response.

@@ -179,17 +179,28 @@ impl Scheduler {
     /// Returns the assigned job id.
     /// Fails if a job of the same type is already running.
     pub fn enqueue(&mut self, project_id: &str, job_type: &str) -> Result<JobId, String> {
+        let id = format!("job-{}", self.next_id);
+        self.next_id += 1;
+        self.enqueue_with_id(&id, project_id, job_type)
+    }
+
+    /// Enqueue a new job with an explicit external job id.
+    ///
+    /// Fails if a job of the same type is already running.
+    pub fn enqueue_with_id(
+        &mut self,
+        id: &str,
+        project_id: &str,
+        job_type: &str,
+    ) -> Result<JobId, String> {
         if let Some(ref running) = self.running {
             if running.job_type == job_type {
                 return Err(format!("a job of type '{}' is already running", job_type));
             }
         }
 
-        let id = format!("job-{}", self.next_id);
-        self.next_id += 1;
-
         let job = JobState {
-            id: JobId(id.clone()),
+            id: JobId(id.to_string()),
             project_id: project_id.to_string(),
             job_type: job_type.to_string(),
             status: JobStatus::Queued,
@@ -205,11 +216,11 @@ impl Scheduler {
         self.queue.push_back(job);
 
         self.send_event(JobEvent::Queued {
-            job_id: id.clone(),
+            job_id: id.to_string(),
             job_type: job_type.to_string(),
         })?;
 
-        Ok(JobId(id))
+        Ok(JobId(id.to_string()))
     }
 
     /// Get next queued job (transition queued→running).

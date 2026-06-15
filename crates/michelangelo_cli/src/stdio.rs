@@ -1,20 +1,23 @@
 //! JSONL stdin/stdout transport loop for the Michelangelo Core Protocol.
 //!
 //! Reads one JSON message per line from stdin, dispatches it to the
-//! core service, and writes one JSON response per line to stdout.
+//! core service, and writes JSON messages per line to stdout.
+//! Events (from job execution) are emitted before the final response.
 //! All human-readable diagnostics go to stderr.
 
 use std::io::{self, BufRead, Write};
+use std::sync::mpsc::Receiver;
 
 use michelangelo_core::CoreService;
 use michelangelo_protocol::error::{ErrorCode, ProtocolError};
+use michelangelo_protocol::event::EventEnvelope;
 use michelangelo_protocol::response::ResponseEnvelope;
 
 /// Run the JSONL stdin/stdout loop until EOF on stdin.
 ///
 /// Returns `Ok(())` after a clean EOF, or `Err` on an unrecoverable I/O error.
 pub fn run_loop() -> Result<(), io::Error> {
-    let mut core = CoreService::new();
+    let (mut core, event_rx) = CoreService::new();
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut stdout_lock = stdout.lock();
@@ -27,6 +30,11 @@ pub fn run_loop() -> Result<(), io::Error> {
         }
 
         let response = process_line(&mut core, &line);
+
+        // Drain pending events BEFORE the response (events must precede the
+        // terminal response per protocol contract).
+        drain_events(&event_rx, &mut stdout_lock)?;
+
         let json = serde_json::to_string(&response).unwrap_or_else(|e| {
             eprintln!("[michelangelo] fatal serialization error: {e}");
             r#"{"id":null,"error":{"code":"InternalError","message":"internal serialization error"}}"#.to_string()
@@ -36,6 +44,20 @@ pub fn run_loop() -> Result<(), io::Error> {
         stdout_lock.flush()?;
     }
 
+    Ok(())
+}
+
+/// Drain all available events from the channel and write them as JSONL to stdout.
+fn drain_events(rx: &Receiver<EventEnvelope>, writer: &mut impl Write) -> Result<(), io::Error> {
+    for event in rx.try_iter() {
+        let json = serde_json::to_string(&event).unwrap_or_else(|e| {
+            eprintln!("[michelangelo] event serialization error: {e}");
+            String::new()
+        });
+        if !json.is_empty() {
+            writeln!(writer, "{json}")?;
+        }
+    }
     Ok(())
 }
 
@@ -91,7 +113,8 @@ mod tests {
     use super::*;
 
     fn core() -> CoreService {
-        CoreService::new()
+        let (svc, _rx) = CoreService::new();
+        svc
     }
 
     #[test]

@@ -91,7 +91,7 @@ def op_set_camera_set(ctx, params):
 def op_render_views(ctx, params):
     """Render each camera to a PNG file."""
     import bpy
-    base_path = params.get("base_path", "blender/renders")
+    base_path = params.get("path", "blender/renders")
     workspace_root = Path(ctx.get("workspace_root", "."))
     output_dir = workspace_root / base_path
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -292,7 +292,7 @@ def main():
             if p:
                 _validate_path(p, workspace_root)
         elif op_name == "render_views":
-            bp = op_def.get("base_path", "blender/renders")
+            bp = op_def.get("path", "blender/renders")
             _validate_path(bp, workspace_root)
 
     artifacts = []

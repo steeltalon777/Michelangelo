@@ -7,11 +7,16 @@ workspace create/open, snapshot recovery, verification commands, and CI.
 
 **Test count:** 108 tests across 4 crates.
 
-## 🔜 Phase 2 — Blender Integration
+## 🔧 Phase 2 (In hardening) — Blender Integration
 
-- Job scheduling and execution
-- Blender subprocess management
-- Job progress events
+- Job scheduling and execution (`job.list`, `job.get`, `job.cancel`)
+- Blender subprocess management (`blender.get_capabilities`, `blender.run_job`)
+- Job lifecycle events (`job.queued`, `job.started`, `job.completed`, `job.failed`, `job.cancelled`; `job.progress` is optional for Phase 2)
+- SQLite job persistence across process boundaries
+- Fake Blender smoke for CI
+- Real Blender smoke for local validation (required: `.blend`; optional: GLB)
+
+Acceptance hardening: see `docs/tz/TZ_PHASE_2_ACCEPTANCE_HARDENING.md`.
 
 ## 🔜 Phase 3 — Asset Pipeline
 

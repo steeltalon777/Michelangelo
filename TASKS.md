@@ -26,10 +26,28 @@
 - [x] T-0016 Headless end-to-end scenario (smoke-e2e with Python validation)
 - [x] T-0017 Documentation sync
 
+## Completed — Phase 2 (Blender Integration)
+
+- [x] T-0201 Protocol contract (methods, events, Blender DTOs, crate skeletons)
+- [x] T-0202 SQLite job persistence (`jobs` table, CRUD APIs)
+- [x] T-0203 Job scheduler and event queue (in-process, max concurrency 1, mpsc events)
+- [x] T-0204 Blender worker contract (`blender/worker.py`, 7 safe operations)
+- [x] T-0205 Headless Blender adapter (`HeadlessBlenderAdapter`, fake executable support)
+- [x] T-0206 Core command wiring (Phase 2 handlers in Router, CoreService integration)
+- [x] T-0207 CLI JSONL event transport (event channel, stdout JSONL streaming)
+- [x] T-0208 Snapshot includes jobs, process-boundary job persistence
+- [x] T-0209 Failure/cancel/timeout hardening
+- [x] T-0210 Verification recipes (`smoke-blender-fake`, `smoke-blender-real`)
+- [x] T-0211 Real Blender stand smoke (validated with Blender 4.0.2)
+- [x] T-0212 Documentation sync
+
+## In Progress — Phase 2 Hardening
+
+- [ ] T-0213 Acceptance hardening (smoke validation, contract sync, docs) — see `docs/tz/TZ_PHASE_2_ACCEPTANCE_HARDENING.md`
+
 ## Not yet started
 
-- Blender job execution
-- PNG/asset ingest
-- LLM integration
-- GUI/TUI
+- PNG/asset ingest (Phase 3)
+- LLM integration (Phase 4)
+- GUI/TUI (Phase 5)
 - Network transport
