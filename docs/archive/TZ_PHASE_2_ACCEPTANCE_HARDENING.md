@@ -1,5 +1,13 @@
 # TZ: Phase 2 — Acceptance Hardening
 
+> **Historical note (2026-11-07).** This archived TZ was executed on a Linux stand under
+> `/home/makc/AI_sandbox/Michelangelo/michelangelo`; the repository has since moved to the current
+> Windows dev stand. Absolute paths in the text below are historical and are not valid
+> instructions for the current checkout. For the current environment see
+> [DEVSTAND_WINDOWS.md](../dev/DEVSTAND_WINDOWS.md) (and
+> [DEVSTAND_LINUX.md](../dev/DEVSTAND_LINUX.md) for the Linux workflow). The body of this archive
+> is intentionally left unchanged.
+
 ## Execution Strategy
 
 - [x] 🟢 Parallel execution recommended

@@ -11,7 +11,7 @@ env:
 
 jobs:
   check:
-    name: Rust workspace checks
+    name: Ubuntu — Rust checks, Python worker checks, fake Blender smoke
     runs-on: ubuntu-latest
 
     steps:
@@ -31,11 +31,23 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Real-Blender tests auto-skip on runners without a Blender installation.
       - name: Run tests
         run: cargo test --workspace
 
       - name: Build CLI
         run: cargo build -p michelangelo_cli
+
+      - name: Python worker syntax check
+        run: python3 -m py_compile blender/worker.py scripts/test_worker_validation.py scripts/smoke_blender_scene.py
+
+      - name: Python worker validation tests (no bpy)
+        run: python3 scripts/test_worker_validation.py
+
+      # Deterministic acceptance E2E through JSONL: generated fake Blender, all
+      # protocol/event/identity/artifact checks (pixel assertions are real-mode only).
+      - name: Acceptance smoke — fake Blender
+        run: python3 scripts/smoke_blender_scene.py --fake
 
       - name: Smoke — system.ping
         run: |
@@ -58,3 +70,48 @@ jobs:
         run: |
           printf '{"id":"e1","method":"project.get_snapshot","params":{}}\n' \
             | cargo run -p michelangelo_cli -- core stdio
+
+  windows:
+    name: Windows — Rust checks, Python worker checks, fake Blender smoke
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Real-Blender tests auto-skip on runners without a Blender installation.
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build CLI
+        run: cargo build -p michelangelo_cli
+
+      - name: Python worker syntax check
+        run: python -m py_compile blender/worker.py scripts/test_worker_validation.py scripts/smoke_blender_scene.py
+
+      - name: Python worker validation tests (no bpy)
+        run: python scripts/test_worker_validation.py
+
+      # Exercises the production Windows batch-wrapper path (`cmd /C call` on the
+      # generated fake_blender.cmd) end to end through the CLI.
+      - name: Acceptance smoke — fake Blender
+        run: python scripts/smoke_blender_scene.py --fake
+
+# BLOCKER (documented): GitHub-hosted runners do not ship Blender 5.x, so the real
+# acceptance smoke (`python scripts/smoke_blender_scene.py`, calibrated silhouette)
+# stays a local/manual check and is not part of CI. CI covers the deterministic
+# fake mode plus every Rust/Python check; real-Blender tests auto-skip when the
+# `blender` binary is absent (see docs/dev/DEVSTAND_WINDOWS.md).

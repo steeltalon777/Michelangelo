@@ -1,0 +1,82 @@
+{
+  "job_type": "blender_acceptance_scene",
+  "description": "Composite acceptance scene used by scripts/smoke_blender_scene.py (real and --fake) and the documentation. The calibrated front silhouette depends on the 2x1x0.5 box at the origin, the orthographic front camera at (0,-10,0) with ortho_scale 4 and a 512x512 render.",
+  "operations": [
+    {
+      "op": "create_component",
+      "name": "body"
+    },
+    {
+      "op": "create_box",
+      "name": "body_box",
+      "size": [2.0, 1.0, 0.5],
+      "location": [0.0, 0.0, 0.0],
+      "component": "body"
+    },
+    {
+      "op": "create_cylinder",
+      "name": "post",
+      "radius": 0.25,
+      "depth": 2.0,
+      "location": [3.0, 0.0, 1.0],
+      "component": "extra"
+    },
+    {
+      "op": "create_sphere",
+      "name": "ball",
+      "radius": 0.5,
+      "location": [-3.0, 0.0, 0.5],
+      "component": "extra"
+    },
+    {
+      "op": "set_material",
+      "object": "body_box",
+      "color": [0.2, 0.4, 0.8, 1.0]
+    },
+    {
+      "op": "create_ortho_camera",
+      "name": "cam_front",
+      "location": [0.0, -10.0, 0.0],
+      "look_at": [0.0, 0.0, 0.0],
+      "ortho_scale": 4.0
+    },
+    {
+      "op": "create_ortho_camera",
+      "name": "cam_scene",
+      "location": [7.0, -7.0, 5.0],
+      "look_at": [0.0, 0.0, 0.0],
+      "ortho_scale": 8.0
+    },
+    {
+      "op": "set_render_settings",
+      "resolution": [512, 512]
+    },
+    {
+      "op": "render_camera",
+      "camera": "cam_front",
+      "path": "blender/renders/front_silhouette.png",
+      "silhouette": true
+    },
+    {
+      "op": "frame_camera",
+      "camera": "cam_scene",
+      "margin": 1.1
+    },
+    {
+      "op": "render_camera",
+      "camera": "cam_scene",
+      "path": "blender/renders/scene.png"
+    },
+    {
+      "op": "get_scene_summary"
+    },
+    {
+      "op": "save_blend",
+      "path": "blender/scenes/scene.blend"
+    },
+    {
+      "op": "export_glb",
+      "path": "blender/exports/scene.glb"
+    }
+  ]
+}

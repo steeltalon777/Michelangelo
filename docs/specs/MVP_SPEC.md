@@ -108,6 +108,13 @@ MVP должен включать:
 19. Экспорт `.blend` и `.glb`.
 20. Job history, status, logs, errors.
 
+> **Статус реализации (Phase 2.5, 2026-11-07).** Фактически реализованы: headless Core с JSONL,
+> создание/открытие проекта, jobs/history и безопасный Blender batch-worker (18 операций,
+> Workbench-only) — пункты 1–3, 15, 18–20 в объёме контракта `docs/specs/BLENDER_WORKER.md`.
+> Пункты 4–14 (PNG-декомпозиция, Asset Graph, FTS/RTree, LLM-оркестрация, build plan) и 16–17
+> (reference planes, автоматический blockout) в текущем коде отсутствуют и остаются будущими
+> фазами. Visual Hull, Parametric Solver и Unreal import не реализованы.
+
 ### 3.2 Не входит в MVP
 
 В MVP не входят:
@@ -924,92 +931,99 @@ CREATE VIRTUAL TABLE node_bbox_rtree USING rtree(
 
 ## 10. Blender Worker MVP
 
+> **Статус (Phase 2.5, 2026-11-07).** Реализован безопасный batch-worker
+> `blender/worker.py` с 18 типизированными операциями (см. 10.3) на Blender 5.2.3 LTS.
+> `create_reference_planes`, `apply_bevel`, curve/extrusion/boolean-операции, Visual Hull,
+> Parametric Solver, LLM-оркестрация, Asset Graph и Unreal import **не реализованы** — это
+> будущие итерации. Точный wire-контракт: `docs/specs/BLENDER_WORKER.md`.
+
 ### 10.1 Worker contract
 
-Input:
+Вызов (Blender — внешний bounded batch-процесс, источник истины — workspace):
 
 ```text
-job.json
+blender --background --factory-startup --python blender/worker.py -- <job.json> <result.json>
+blender --background --factory-startup --python blender/worker.py -- --capabilities
 ```
 
-Output:
-
-```text
-result.json
-.blend
-.glb
-renders/*.png
-logs
-```
-
-`worker.py` должен быть тонким исполнителем над `bpy`, а не вторым ядром системы. Он не принимает архитектурных решений, не общается с LLM, не строит Asset Graph и не содержит бизнес-логики проекта.
-
-Каждая операция из `BlenderJobSpec` должна иметь строго типизированный handler внутри worker layer:
-
-```text
-create_reference_planes → handle_create_reference_planes
-create_box              → handle_create_box
-create_cylinder         → handle_create_cylinder
-apply_bevel             → handle_apply_bevel
-render_views            → handle_render_views
-export_glb              → handle_export_glb
-```
-
-Если операция неизвестна или параметры не проходят валидацию, worker возвращает ошибку в `result.json`, а Core помечает job как `failed`.
-
-### 10.2 Example BlenderJobSpec
+Input `<workspace>/jobs/<job_id>/job.json`:
 
 ```json
 {
-  "job_id": "job_001",
-  "job_type": "build_blockout",
-  "project_dir": "D:/Michelangelo/demo",
-  "input_blend": null,
-  "output_blend": "blender/scenes/model_v001.blend",
-  "operations": [
-    {
-      "op": "create_reference_planes",
-      "views": ["front", "side", "top"]
-    },
-    {
-      "op": "create_box",
-      "name": "body",
-      "size": [3.0, 1.6, 0.5],
-      "location": [0, 0, 0]
-    },
-    {
-      "op": "apply_bevel",
-      "object": "body",
-      "width": 0.05,
-      "segments": 3
-    },
-    {
-      "op": "render_views",
-      "views": ["front", "side", "top", "perspective"],
-      "output_dir": "blender/renders/job_001"
-    },
-    {
-      "op": "export_glb",
-      "path": "blender/exports/model_v001.glb"
-    }
-  ]
+  "job_id": "job_...",
+  "spec": {"operations": [{"op": "create_box", "name": "body", "size": [2.0, 1.0, 0.5]}]},
+  "workspace_root": "<absolute workspace path>"
 }
 ```
 
+Output: `result.json` со статусом `completed`/`failed`, артефактами
+`{path, type, size_bytes}` (типы `blend|glb|png`) и `scene_summary`; `stdout`/`stderr` Blender
+перенаправляются адаптером в per-job лог-файлы.
+
+`worker.py` — тонкий исполнитель над `bpy`, а не второе ядро системы. Он не принимает
+архитектурных решений, не общается с LLM, не строит Asset Graph и не содержит бизнес-логики
+проекта. Каждый job начинается с детерминированной пустой сцены (без default Cube/Camera/Light).
+Рендеринг поддерживается только через **Workbench** (EEVEE/Cycles вне контракта этой итерации);
+силуэты — RGBA PNG с прозрачным фоном и белой заливкой. Произвольный Python через протокол не
+исполняется.
+
+Если операция неизвестна или параметры не проходят валидацию, Core отклоняет spec до создания
+job-записи (`-32602`, с указанием `operation[i]`), а worker повторно валидирует и возвращает
+`status:"failed"` с ошибкой в `result.json`; Core помечает job как `failed` и отдаёт
+job-level результат (не protocol error).
+
+### 10.2 Example BlenderJobSpec
+
+Реализованная форма запроса `blender.run_job` (JSONL):
+
+```json
+{
+  "id": "j1",
+  "method": "blender.run_job",
+  "params": {
+    "job_type": "blender_acceptance_scene",
+    "wait": true,
+    "timeout_ms": 300000,
+    "spec": {
+      "operations": [
+        {"op": "create_component", "name": "body"},
+        {"op": "create_box", "name": "body_box", "size": [2.0, 1.0, 0.5], "component": "body"},
+        {"op": "create_cylinder", "name": "post", "radius": 0.25, "depth": 2.0,
+         "location": [3.0, 0.0, 1.0], "component": "extra"},
+        {"op": "create_ortho_camera", "name": "cam_front",
+         "location": [0.0, -10.0, 0.0], "look_at": [0.0, 0.0, 0.0], "ortho_scale": 4.0},
+        {"op": "set_render_settings", "resolution": [512, 512]},
+        {"op": "render_camera", "camera": "cam_front",
+         "path": "blender/renders/front_silhouette.png", "silhouette": true},
+        {"op": "save_blend", "path": "blender/scenes/scene.blend"},
+        {"op": "export_glb", "path": "blender/exports/scene.glb"}
+      ]
+    }
+  }
+}
+```
+
+Полный composite-сценарий: `examples/scene_ops/composite_scene_spec.json`; исполняемая проверка:
+`python scripts/smoke_blender_scene.py` (real Blender) / `--fake`.
+
 ### 10.3 Supported MVP operations
 
-- `create_reference_planes`;
-- `create_box`;
-- `create_cylinder`;
-- `apply_bevel`;
-- `set_material`;
-- `set_camera_set`;
-- `render_views`;
-- `export_glb`;
-- `save_blend`;
-- `get_scene_summary`.
+Реализованный безопасный набор (`SAFE_WORKER_OPS`, 18 операций; контракт —
+`docs/specs/BLENDER_WORKER.md`):
 
-`execute_arbitrary_python` is not part of safe MVP. It may exist only in dev/debug mode behind explicit flag.
+- Phase 2: `create_box`, `set_material`, `set_camera_set`, `render_views`, `export_glb`,
+  `save_blend`, `get_scene_summary`;
+- Scene ops: `create_cylinder`, `create_sphere`, `import_mesh` (`.glb/.gltf/.obj/.stl/.ply`),
+  `set_transform`, `create_ortho_camera`, `set_camera_pose`, `set_camera_settings`,
+  `frame_camera`, `set_render_settings`, `render_camera` (включая силуэты), `create_component`.
+
+Ограничения: Workbench-only рендеринг; максимум 256 операций на job; только
+workspace-relative пути; имена объектов уникальны в пределах job; произвольный Python не
+исполняется. `execute_arbitrary_python` отсутствует в безопасном наборе.
+
+**Будущие операции (не реализованы, требуют отдельного TZ):** `create_reference_planes`,
+`apply_bevel`, curve-from-contour/extrusion/boolean-операции, импорт PNG-слоёв как reference
+planes. Они не принимаются текущим worker'ом и не должны документироваться как доступные.
 
 ---
 

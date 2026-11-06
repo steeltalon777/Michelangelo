@@ -1,4 +1,13 @@
 # Michelangelo Headless Core — verification commands
+#
+# Recipes are POSIX shell scripts: they need `just` plus `sh` (on Windows run them
+# from Git Bash/WSL, or use the direct `cargo`/`python` commands documented in
+# docs/dev/DEVSTAND_WINDOWS.md). The acceptance recipes below are thin wrappers
+# around the cross-platform Python driver scripts/smoke_blender_scene.py.
+
+# Python interpreter for the Python-based recipes; override on hosts where only
+# `python3` is on PATH: `just python_bin=python3 smoke-blender-scene-fake`.
+python_bin := "python"
 
 _default:
     just --list
@@ -221,6 +230,28 @@ smoke-blender-real-glb:
     fi
     echo ""
     echo "=== smoke-blender-real-glb PASSED ==="
+
+# Cross-platform acceptance E2E: composite scene + calibrated silhouette (real Blender).
+# Blender resolves from --blender-bin > BLENDER_BIN > `blender` on PATH; the driver
+# prints SKIP and exits 0 when Blender is unavailable.
+smoke-blender-scene:
+    cargo build -p michelangelo_cli
+    {{python_bin}} scripts/smoke_blender_scene.py
+
+# Cross-platform acceptance E2E against a generated fake Blender (no Blender required).
+smoke-blender-scene-fake:
+    cargo build -p michelangelo_cli
+    {{python_bin}} scripts/smoke_blender_scene.py --fake
+
+# Strict real-Blender acceptance: exit 2 when Blender is unavailable (strict local gate).
+smoke-blender-scene-required:
+    cargo build -p michelangelo_cli
+    {{python_bin}} scripts/smoke_blender_scene.py --require-blender
+
+# Python worker syntax + validation tests (no bpy, no Blender required).
+test-worker-python:
+    {{python_bin}} -m py_compile blender/worker.py scripts/test_worker_validation.py scripts/smoke_blender_scene.py
+    {{python_bin}} scripts/test_worker_validation.py
 
 # Build the CLI binary
 build:
