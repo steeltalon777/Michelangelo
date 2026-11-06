@@ -13,7 +13,8 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use michelangelo_protocol::{
-    BlenderArtifactDto, BlenderCapabilitiesDto, BlenderJobResult, BlenderJobSpec, SAFE_WORKER_OPS,
+    BlenderArtifactDto, BlenderCapabilitiesDto, BlenderJobResult, BlenderJobSpec, BlenderOperation,
+    SAFE_WORKER_OPS,
 };
 
 /// Built-in default wall-clock timeout for a Blender job (explicit arg >
@@ -412,7 +413,9 @@ impl HeadlessBlenderAdapter {
         timeout_ms: Option<u64>,
     ) -> Result<BlenderJobResult, BlenderError> {
         validate_job_id(job_id)?;
-        validate_job_spec_paths(job_spec)?;
+        job_spec.validate().map_err(|message| {
+            BlenderError::MalformedResult(format!("invalid job spec: {message}"))
+        })?;
 
         if !self.worker_script.is_file() {
             return Err(BlenderError::Io(std::io::Error::new(
@@ -430,6 +433,10 @@ impl HeadlessBlenderAdapter {
                 ),
             ))
         })?;
+
+        // Workspace-dependent checks (file existence/containment) happen here,
+        // before the job directory or any worker input file is created.
+        validate_import_mesh_files(job_spec, workspace_root)?;
 
         let job_dir = output_dir.join(job_id);
         std::fs::create_dir_all(&job_dir)?;
@@ -980,54 +987,50 @@ fn validate_artifact_type_and_extension(artifact: &BlenderArtifactDto) -> Result
     }
 }
 
-/// Validate all file paths in a job spec BEFORE any I/O.
+/// Workspace-dependent `import_mesh` checks, performed BEFORE any job I/O.
 ///
-/// Checks that `save_blend`, `export_glb`, and `render_views` paths
-/// are relative and have no parent-traversal components.
-fn validate_job_spec_paths(spec: &BlenderJobSpec) -> Result<(), BlenderError> {
-    for op in &spec.spec.operations {
-        if op.op == "save_blend" || op.op == "export_glb" {
-            if let Some(ref path) = op.path {
-                validate_spec_path(path)?;
-            }
-        }
-        if op.op == "render_views" {
-            // base_path defaults to "blender/renders" (safe)
-            if let Some(ref base) = op.path {
-                validate_spec_path(base)?;
-            }
-        }
-    }
-    Ok(())
-}
+/// The protocol validator already enforced path syntax and the allowed
+/// extension set; this function additionally requires the artifact to exist, be
+/// a regular non-empty file, and canonicalize inside the workspace (symlink
+/// escapes are rejected here).
+fn validate_import_mesh_files(
+    spec: &BlenderJobSpec,
+    workspace_root: &Path,
+) -> Result<(), BlenderError> {
+    let canonical_root = std::fs::canonicalize(workspace_root).map_err(BlenderError::Io)?;
 
-/// Validate a single spec path (must be relative, no parent/root components).
-///
-/// Component-based (aligned with the router rule): a `..` *inside a file name*
-/// (e.g. `model.v1..2.blend`) is a normal component and is accepted, while
-/// `..`, root and prefix components are rejected.
-fn validate_spec_path(path: &str) -> Result<(), BlenderError> {
-    let parsed = Path::new(path);
-    if parsed.is_absolute() {
-        return Err(BlenderError::MalformedResult(format!(
-            "Absolute path in job spec rejected: '{path}'"
-        )));
-    }
-    for component in parsed.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir => {
-                return Err(BlenderError::MalformedResult(format!(
-                    "Parent-traversal path in job spec rejected: '{path}'"
-                )));
-            }
-            _ => {
-                return Err(BlenderError::MalformedResult(format!(
-                    "Root/prefix path component in job spec rejected: '{path}'"
-                )));
-            }
+    for (index, operation) in spec.spec.operations.iter().enumerate() {
+        let BlenderOperation::ImportMesh { path, .. } = operation else {
+            continue;
+        };
+        let label = format!("operation[{index}] ('import_mesh')");
+
+        let candidate = workspace_root.join(path);
+        let canonical = std::fs::canonicalize(&candidate).map_err(|_| {
+            BlenderError::MalformedResult(format!(
+                "{label}: import file does not exist or is not accessible: '{path}'"
+            ))
+        })?;
+        if !canonical.starts_with(&canonical_root) {
+            return Err(BlenderError::MalformedResult(format!(
+                "{label}: import path resolves outside the workspace: '{path}'"
+            )));
+        }
+        let metadata = std::fs::metadata(&canonical).map_err(|e| {
+            BlenderError::MalformedResult(format!("{label}: cannot stat import file '{path}': {e}"))
+        })?;
+        if !metadata.is_file() {
+            return Err(BlenderError::MalformedResult(format!(
+                "{label}: import path is not a regular file: '{path}'"
+            )));
+        }
+        if metadata.len() == 0 {
+            return Err(BlenderError::MalformedResult(format!(
+                "{label}: import file is empty: '{path}'"
+            )));
         }
     }
+
     Ok(())
 }
 
@@ -1160,7 +1163,10 @@ fn create_fake_blender_unix(dir: &Path, mode: &str) -> PathBuf {
 fn create_fake_blender_windows(dir: &Path, mode: &str) -> PathBuf {
     let wrapper = dir.join("fake_blender.cmd");
     let implementation = dir.join("fake_blender.ps1");
-    write_fake_executable(&wrapper, WINDOWS_FAKE_WRAPPER.as_bytes());
+    write_fake_executable(
+        &wrapper,
+        WINDOWS_FAKE_WRAPPER.replace("__MODE__", mode).as_bytes(),
+    );
     write_fake_executable(
         &implementation,
         WINDOWS_FAKE_SCRIPT.replace("__MODE__", mode).as_bytes(),
@@ -1192,7 +1198,7 @@ if [ "$result_json" = "--capabilities" ]; then
         echo 'fake capabilities probe failure' >&2
         exit 1
     fi
-    echo 'MICHELANGELO_CAPABILITIES:{"operations":["create_box","export_glb","get_scene_summary","render_views","save_blend","set_camera_set","set_material"],"blender_version":"Blender fake 0.0.0","python_version":"3.13.0","gltf_export_available":true,"render_engines":["BLENDER_WORKBENCH"]}'
+    echo 'MICHELANGELO_CAPABILITIES:{"operations":["create_box","set_material","set_camera_set","render_views","export_glb","save_blend","get_scene_summary","create_cylinder","create_sphere","import_mesh","set_transform","create_ortho_camera","set_camera_pose","set_camera_settings","frame_camera","set_render_settings","render_camera","create_component"],"blender_version":"Blender fake 0.0.0","python_version":"3.13.0","gltf_export_available":true,"render_engines":["BLENDER_WORKBENCH"]}'
     exit 0
 fi
 
@@ -1322,6 +1328,11 @@ esac
 /// Windows fake wrapper: parses the last two argv entries into env vars
 /// (Unicode-safe argument passing) and delegates to `fake_blender.ps1`.
 ///
+/// It emits one mode-specific diagnostic to stderr *before* starting
+/// PowerShell: under a heavily loaded parallel test run, PowerShell startup can
+/// exceed a short timeout, and timeout tests must still observe a stderr tail
+/// (never an empty log).
+///
 /// `%~dp0` must be captured before `shift` runs: SHIFT also shifts `%0`, so a
 /// late `%~dp0` would point at the working directory (or an argument) instead
 /// of the script directory.
@@ -1331,6 +1342,11 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 set "JOB_JSON="
 set "RESULT_JSON="
+if "__MODE__"=="version_hang" (
+    echo Fake Blender: version hang 1>&2
+) else (
+    echo Fake Blender: __MODE__ 1>&2
+)
 :parse_args
 if "%~1"=="" goto args_done
 set "JOB_JSON=%RESULT_JSON%"
@@ -1346,7 +1362,7 @@ exit /b %ERRORLEVEL%
 #[cfg(windows)]
 const WINDOWS_FAKE_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
 $Mode = '__MODE__'
-$CapabilitiesJson = '{"operations":["create_box","export_glb","get_scene_summary","render_views","save_blend","set_camera_set","set_material"],"blender_version":"Blender fake 0.0.0","python_version":"3.13.0","gltf_export_available":true,"render_engines":["BLENDER_WORKBENCH"]}'
+$CapabilitiesJson = '{"operations":["create_box","set_material","set_camera_set","render_views","export_glb","save_blend","get_scene_summary","create_cylinder","create_sphere","import_mesh","set_transform","create_ortho_camera","set_camera_pose","set_camera_settings","frame_camera","set_render_settings","render_camera","create_component"],"blender_version":"Blender fake 0.0.0","python_version":"3.13.0","gltf_export_available":true,"render_engines":["BLENDER_WORKBENCH"]}'
 $lastArgument = [string]$env:RESULT_JSON
 if ($lastArgument -eq '--version') {
     if ($Mode -eq 'version_hang') {
@@ -1528,36 +1544,41 @@ mod tests {
             wait: true,
             timeout_ms: Some(30_000),
             spec: BlenderSpecBody {
-                operations: vec![BlenderOperation {
-                    op: "create_box".into(),
+                operations: vec![BlenderOperation::CreateBox {
                     name: Some("test_cube".into()),
                     size: Some(vec![2.0, 1.0, 0.5]),
                     location: Some(vec![0.0, 0.0, 0.0]),
-                    color: None,
-                    object: None,
-                    views: None,
-                    path: None,
+                    rotation_deg: None,
+                    component: None,
                 }],
             },
         }
     }
 
+    /// Build a one-operation spec for pre-spawn validation tests.
     fn spec_with_op(op_name: &str, path: Option<&str>) -> BlenderJobSpec {
+        let operation = match op_name {
+            "create_box" => BlenderOperation::CreateBox {
+                name: None,
+                size: None,
+                location: None,
+                rotation_deg: None,
+                component: None,
+            },
+            "save_blend" => BlenderOperation::SaveBlend {
+                path: path.unwrap_or_default().to_string(),
+            },
+            "export_glb" => BlenderOperation::ExportGlb {
+                path: path.unwrap_or_default().to_string(),
+            },
+            other => panic!("unsupported test operation: {other}"),
+        };
         BlenderJobSpec {
             job_type: "test".into(),
             wait: true,
             timeout_ms: None,
             spec: BlenderSpecBody {
-                operations: vec![BlenderOperation {
-                    op: op_name.into(),
-                    name: None,
-                    size: None,
-                    location: None,
-                    color: None,
-                    object: None,
-                    views: None,
-                    path: path.map(|s| s.to_string()),
-                }],
+                operations: vec![operation],
             },
         }
     }
@@ -2426,29 +2447,38 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_spec_path_absolute_rejected() {
-        let err = validate_spec_path(&absolute_path("/etc/passwd")).unwrap_err();
-        assert!(format!("{err}").contains("Absolute"));
+    fn test_adapter_spec_rejects_absolute_path() {
+        let spec = spec_with_op("save_blend", Some(&absolute_path("/etc/passwd")));
+        let err = spec.validate().unwrap_err();
+        assert!(
+            err.contains("workspace-relative"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn test_validate_spec_path_parent_traversal_rejected() {
-        let err = validate_spec_path("../outside/file.blend").unwrap_err();
-        assert!(format!("{err}").contains("Parent-traversal"));
+    fn test_adapter_spec_rejects_parent_traversal() {
+        let spec = spec_with_op("export_glb", Some("../outside/file.glb"));
+        let err = spec.validate().unwrap_err();
+        assert!(err.contains("parent-traversal"), "unexpected error: {err}");
     }
 
     #[test]
-    fn test_validate_spec_path_relative_accepted() {
-        assert!(validate_spec_path("blender/scenes/test.blend").is_ok());
-        assert!(validate_spec_path("jobs/job_001/output.glb").is_ok());
+    fn test_adapter_spec_accepts_relative() {
+        for (op, path) in [
+            ("save_blend", "blender/scenes/test.blend"),
+            ("export_glb", "jobs/job_001/output.glb"),
+        ] {
+            let spec = spec_with_op(op, Some(path));
+            assert!(spec.validate().is_ok(), "{op} should accept {path}");
+        }
     }
 
     #[test]
     fn test_spec_path_allows_dotdot_inside_file_name() {
         // `..` inside a file-name component is not traversal (P2-3).
-        assert!(validate_spec_path("blender/scenes/model.v1..2.blend").is_ok());
         let spec = spec_with_op("save_blend", Some("blender/scenes/model.v1..2.blend"));
-        assert!(validate_job_spec_paths(&spec).is_ok());
+        assert!(spec.validate().is_ok());
     }
 
     #[cfg(windows)]
@@ -2460,53 +2490,37 @@ mod tests {
                 matches!(artifact_error, BlenderError::InvalidArtifact(_)),
                 "artifact path {path:?} must be rejected"
             );
-            let spec_error = validate_spec_path(path).unwrap_err();
+            let spec_error = spec_with_op("save_blend", Some(path))
+                .validate()
+                .unwrap_err();
             assert!(
-                format!("{spec_error}").contains("Absolute")
-                    || format!("{spec_error}").contains("Root/prefix"),
+                spec_error.contains("absolute") || spec_error.contains("root/prefix"),
                 "spec path {path:?} must be rejected, got: {spec_error}"
             );
         }
     }
 
     #[test]
-    fn test_validate_job_spec_rejects_absolute_path() {
-        let absolute = absolute_path("/absolute/path.blend");
-        let spec = spec_with_op("save_blend", Some(&absolute));
-        let err = validate_job_spec_paths(&spec).unwrap_err();
-        assert!(format!("{err}").contains("Absolute"));
+    fn test_adapter_spec_rejects_export_absolute_path() {
+        let spec = spec_with_op("export_glb", Some(&absolute_path("/etc/out.glb")));
+        let err = spec.validate().unwrap_err();
+        assert!(
+            err.contains("workspace-relative"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn test_validate_job_spec_rejects_parent_traversal() {
-        let spec = spec_with_op("export_glb", Some("../../outside.glb"));
-        let err = validate_job_spec_paths(&spec).unwrap_err();
-        assert!(format!("{err}").contains("Parent-traversal"));
-    }
-
-    #[test]
-    fn test_validate_job_spec_accepts_relative() {
-        let spec = spec_with_op("save_blend", Some("blender/scenes/test.blend"));
-        assert!(validate_job_spec_paths(&spec).is_ok());
-    }
-
-    #[test]
-    fn test_validate_job_spec_skips_non_file_ops() {
+    fn test_adapter_spec_skips_non_file_ops() {
+        // A valid create_box spec has no path fields and passes validation.
         let spec = spec_with_op("create_box", None);
-        assert!(validate_job_spec_paths(&spec).is_ok());
+        assert!(spec.validate().is_ok());
     }
 
     #[test]
-    fn test_validate_job_spec_export_rejects_absolute() {
-        let absolute = absolute_path("/etc/out.glb");
-        let spec = spec_with_op("export_glb", Some(&absolute));
-        let err = validate_job_spec_paths(&spec).unwrap_err();
-        assert!(format!("{err}").contains("Absolute"));
-    }
-
-    #[test]
-    fn test_validate_job_spec_fake_rejects_absolute_before_run() {
-        // Verify that run_job_with_fake rejects before launching fake binary
+    fn test_adapter_rejects_invalid_spec_before_creating_job_dir() {
+        // run_job_with_fake must reject before launching the fake binary or
+        // creating the job directory.
         let dir = TempDir::new().unwrap();
         let fake = create_fake_blender(dir.path(), "success");
 
@@ -2526,9 +2540,102 @@ mod tests {
         assert!(result.is_err(), "expected spec validation error");
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
-            err_msg.contains("Absolute"),
-            "expected Absolute rejection, got: {err_msg}"
+            err_msg.contains("invalid job spec") && err_msg.contains("workspace-relative"),
+            "expected pre-spawn spec rejection, got: {err_msg}"
         );
+        assert!(
+            !output.path().join("job_spec_abs").exists(),
+            "invalid spec must not create a job directory"
+        );
+    }
+
+    #[test]
+    fn test_adapter_rejects_mismatched_extension_before_spawn() {
+        let dir = TempDir::new().unwrap();
+        let fake = create_fake_blender(dir.path(), "success");
+        let spec = spec_with_op("save_blend", Some("blender/scenes/out.glb"));
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+        let result = test_adapter().run_job_with_fake(
+            &fake,
+            "job_bad_ext",
+            &spec,
+            workspace.path(),
+            output.path(),
+            Some(30_000),
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid job spec") && err_msg.contains(".blend"),
+            "unexpected error: {err_msg}"
+        );
+        assert!(!output.path().join("job_bad_ext").exists());
+    }
+
+    #[test]
+    fn test_adapter_import_mesh_workspace_checks_reject_before_spawn() {
+        let dir = TempDir::new().unwrap();
+        let fake = create_fake_blender(dir.path(), "success");
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+
+        let import_spec = |path: &str| BlenderJobSpec {
+            job_type: "import".into(),
+            wait: true,
+            timeout_ms: None,
+            spec: BlenderSpecBody {
+                operations: vec![BlenderOperation::ImportMesh {
+                    path: path.to_string(),
+                    name: None,
+                    component: None,
+                }],
+            },
+        };
+
+        // Missing file.
+        let result = test_adapter().run_job_with_fake(
+            &fake,
+            "job_import_missing",
+            &import_spec("assets/missing.glb"),
+            workspace.path(),
+            output.path(),
+            Some(30_000),
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("does not exist"), "unexpected: {err_msg}");
+        assert!(!output.path().join("job_import_missing").exists());
+
+        // Empty file.
+        let empty_path = workspace.path().join("assets/empty.glb");
+        std::fs::create_dir_all(empty_path.parent().unwrap()).unwrap();
+        std::fs::write(&empty_path, b"").unwrap();
+        let result = test_adapter().run_job_with_fake(
+            &fake,
+            "job_import_empty",
+            &import_spec("assets/empty.glb"),
+            workspace.path(),
+            output.path(),
+            Some(30_000),
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("empty"), "unexpected: {err_msg}");
+        assert!(!output.path().join("job_import_empty").exists());
+
+        // Unsupported extension is rejected by the protocol validator.
+        let result = test_adapter().run_job_with_fake(
+            &fake,
+            "job_import_ext",
+            &import_spec("assets/model.fbx"),
+            workspace.path(),
+            output.path(),
+            Some(30_000),
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid job spec") && err_msg.contains(".glb"),
+            "unexpected: {err_msg}"
+        );
+        assert!(!output.path().join("job_import_ext").exists());
     }
 
     #[test]
@@ -2544,9 +2651,10 @@ mod tests {
         assert!(caps.binary_found);
         assert!(caps.bpy_available, "probe error: {:?}", caps.error);
         assert!(caps.error.is_none());
-        assert!(caps
-            .supported_operations
-            .contains(&"create_box".to_string()));
+        // The fake advertises the same full whitelist as the static fallback.
+        let expected_ops: Vec<String> =
+            SAFE_WORKER_OPS.iter().map(|op| (*op).to_string()).collect();
+        assert_eq!(caps.supported_operations, expected_ops);
         assert!(caps
             .blender_version
             .as_deref()
@@ -2594,15 +2702,212 @@ mod tests {
             .contains(&"create_box".to_string()));
     }
 
+    // -- Real Blender coverage (auto-skip only when Blender is absent) --------
+
+    /// Real Blender adapter, or `None` when the binary is unavailable.
+    fn real_blender_adapter_or_skip(test_name: &str) -> Option<HeadlessBlenderAdapter> {
+        let adapter = HeadlessBlenderAdapter::with_config("blender", resolve_worker_script());
+        if adapter.check_binary().is_err() {
+            eprintln!("[skip] {test_name}: blender binary not available");
+            return None;
+        }
+        Some(adapter)
+    }
+
+    fn read_bytes(path: &Path) -> Vec<u8> {
+        std::fs::read(path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    }
+
+    fn assert_png_rgba(path: &Path, width: u32, height: u32) {
+        let bytes = read_bytes(path);
+        assert!(
+            bytes.len() > 33,
+            "{} is too small to be a PNG",
+            path.display()
+        );
+        assert_eq!(
+            &bytes[0..8],
+            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+            "{} has no PNG signature",
+            path.display()
+        );
+        assert_eq!(&bytes[12..16], b"IHDR", "first PNG chunk must be IHDR");
+        let png_width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+        let png_height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+        assert_eq!((png_width, png_height), (width, height));
+        assert_eq!(bytes[24], 8, "expected 8-bit PNG");
+        assert_eq!(bytes[25], 6, "expected RGBA (color type 6) PNG");
+    }
+
+    fn assert_blend_magic(path: &Path) {
+        let bytes = read_bytes(path);
+        let uncompressed = bytes.starts_with(b"BLENDER");
+        let zstd_compressed = bytes.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]);
+        assert!(
+            uncompressed || zstd_compressed,
+            "{} is not a Blender file (magic: {:02x?})",
+            path.display(),
+            &bytes[..bytes.len().min(8)]
+        );
+    }
+
+    fn assert_glb_magic(path: &Path) {
+        let bytes = read_bytes(path);
+        assert!(
+            bytes.len() > 12,
+            "{} is too small to be a GLB",
+            path.display()
+        );
+        assert_eq!(
+            &bytes[0..4],
+            b"glTF",
+            "{} has no glTF magic",
+            path.display()
+        );
+        let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        assert_eq!(version, 2, "expected GLB version 2");
+    }
+
+    fn find_artifact<'a>(
+        artifacts: &'a [BlenderArtifactDto],
+        artifact_type: &str,
+    ) -> &'a BlenderArtifactDto {
+        artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_type == artifact_type)
+            .unwrap_or_else(|| panic!("missing '{artifact_type}' artifact in {artifacts:?}"))
+    }
+
+    fn assert_artifact_on_disk(
+        artifact: &BlenderArtifactDto,
+        workspace_root: &Path,
+    ) -> std::path::PathBuf {
+        let path = workspace_root.join(&artifact.path);
+        assert!(path.is_file(), "artifact {} must exist", artifact.path);
+        let size = std::fs::metadata(&path).unwrap().len();
+        assert!(size > 0, "artifact {} must not be empty", artifact.path);
+        if let Some(reported) = artifact.size_bytes {
+            assert_eq!(
+                reported, size,
+                "artifact size mismatch for {}",
+                artifact.path
+            );
+        }
+        path
+    }
+
+    /// Composite real-Blender acceptance scene for IT-2: component, primitives,
+    /// material, exact transform, calibrated ortho silhouette + framed scene
+    /// render, summary, `.blend` and GLB artifacts.
+    fn composite_scene_spec() -> BlenderJobSpec {
+        BlenderJobSpec {
+            job_type: "blender_composite_scene".into(),
+            wait: true,
+            timeout_ms: Some(120_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateComponent {
+                        name: "body".into(),
+                    },
+                    BlenderOperation::CreateBox {
+                        name: Some("body_box".into()),
+                        size: Some(vec![2.0, 1.0, 0.5]),
+                        location: Some(vec![0.0, 0.0, 0.0]),
+                        rotation_deg: None,
+                        component: Some("body".into()),
+                    },
+                    BlenderOperation::CreateCylinder {
+                        name: Some("cyl".into()),
+                        radius: Some(0.3),
+                        depth: Some(1.0),
+                        location: Some(vec![3.0, 0.0, 1.0]),
+                        rotation_deg: Some(vec![0.0, 0.0, 15.0]),
+                        vertices: Some(32),
+                        component: None,
+                    },
+                    BlenderOperation::CreateSphere {
+                        name: Some("sphere".into()),
+                        radius: Some(0.5),
+                        location: Some(vec![-3.0, 0.0, 0.5]),
+                        rotation_deg: None,
+                        segments: Some(16),
+                        ring_count: Some(8),
+                        component: None,
+                    },
+                    BlenderOperation::SetMaterial {
+                        object: "body_box".into(),
+                        color: Some(vec![0.2, 0.4, 0.8, 1.0]),
+                    },
+                    BlenderOperation::SetTransform {
+                        object: "cyl".into(),
+                        location: None,
+                        rotation_deg: Some(vec![0.0, 0.0, 15.0]),
+                        scale: Some(vec![1.0, 1.0, 1.0]),
+                        apply_scale: Some(false),
+                    },
+                    BlenderOperation::CreateOrthoCamera {
+                        name: "Cam_silhouette".into(),
+                        location: vec![0.0, -10.0, 0.0],
+                        rotation_deg: None,
+                        look_at: Some(vec![0.0, 0.0, 0.0]),
+                        ortho_scale: Some(4.0),
+                        shift_x: None,
+                        shift_y: None,
+                        clip_start: None,
+                        clip_end: None,
+                        component: None,
+                    },
+                    BlenderOperation::SetRenderSettings {
+                        resolution: Some(vec![512, 512]),
+                        resolution_percentage: Some(100),
+                    },
+                    BlenderOperation::RenderCamera {
+                        camera: "Cam_silhouette".into(),
+                        path: "blender/renders/silhouette.png".into(),
+                        silhouette: Some(true),
+                    },
+                    BlenderOperation::CreateOrthoCamera {
+                        name: "Cam_scene".into(),
+                        location: vec![6.0, -8.0, 4.0],
+                        rotation_deg: None,
+                        look_at: Some(vec![0.0, 0.0, 0.5]),
+                        ortho_scale: None,
+                        shift_x: None,
+                        shift_y: None,
+                        clip_start: None,
+                        clip_end: None,
+                        component: None,
+                    },
+                    BlenderOperation::FrameCamera {
+                        camera: "Cam_scene".into(),
+                        objects: None,
+                        component: None,
+                        margin: Some(1.2),
+                    },
+                    BlenderOperation::RenderCamera {
+                        camera: "Cam_scene".into(),
+                        path: "blender/renders/scene.png".into(),
+                        silhouette: Some(false),
+                    },
+                    BlenderOperation::GetSceneSummary {},
+                    BlenderOperation::SaveBlend {
+                        path: "blender/scenes/composite.blend".into(),
+                    },
+                    BlenderOperation::ExportGlb {
+                        path: "blender/exports/composite.glb".into(),
+                    },
+                ],
+            },
+        }
+    }
+
     /// Real Blender smoke test — runs only if `blender` CLI is available.
     /// Verifies worker.py can be executed and produces a valid result.json.
     #[test]
     fn test_real_blender_worker_smoke() {
-        let adapter = HeadlessBlenderAdapter::with_config("blender", resolve_worker_script());
-        if adapter.check_binary().is_err() {
-            eprintln!("[skip] real_blender_worker_smoke: blender not available");
+        let Some(adapter) = real_blender_adapter_or_skip("test_real_blender_worker_smoke") else {
             return;
-        }
+        };
 
         let workspace = TempDir::new().unwrap();
         let output = TempDir::new().unwrap();
@@ -2613,25 +2918,15 @@ mod tests {
             timeout_ms: Some(60_000),
             spec: BlenderSpecBody {
                 operations: vec![
-                    BlenderOperation {
-                        op: "create_box".into(),
+                    BlenderOperation::CreateBox {
                         name: Some("smoke_cube".into()),
                         size: Some(vec![2.0, 1.0, 0.5]),
                         location: Some(vec![0.0, 0.0, 0.0]),
-                        color: None,
-                        object: None,
-                        views: None,
-                        path: None,
+                        rotation_deg: None,
+                        component: None,
                     },
-                    BlenderOperation {
-                        op: "save_blend".into(),
-                        name: None,
-                        size: None,
-                        location: None,
-                        color: None,
-                        object: None,
-                        views: None,
-                        path: Some("blender/scenes/smoke_test.blend".into()),
+                    BlenderOperation::SaveBlend {
+                        path: "blender/scenes/smoke_test.blend".into(),
                     },
                 ],
             },
@@ -2655,13 +2950,7 @@ mod tests {
         let artifacts = result.artifacts.clone().unwrap_or_default();
         assert!(!artifacts.is_empty(), "Expected at least one artifact");
         for artifact in &artifacts {
-            let path = workspace.path().join(&artifact.path);
-            assert!(
-                path.is_file(),
-                "artifact {} should exist at {path:?}",
-                artifact.path
-            );
-            assert!(std::fs::metadata(&path).unwrap().len() > 0);
+            assert_artifact_on_disk(artifact, workspace.path());
         }
 
         let job_dir = output.path().join("real_blender_smoke_001");
@@ -2677,14 +2966,460 @@ mod tests {
         eprintln!("[info] Real Blender smoke artifacts: {artifacts:?}");
     }
 
+    /// Real Blender: full IT-2 composite scene (all core scene operations).
+    #[test]
+    fn test_real_blender_scene_ops() {
+        let Some(adapter) = real_blender_adapter_or_skip("test_real_blender_scene_ops") else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+        let result = adapter
+            .run_job(
+                "real_blender_scene_ops_001",
+                &composite_scene_spec(),
+                workspace.path(),
+                output.path(),
+                Some(120_000),
+            )
+            .expect("Composite real Blender job should succeed");
+
+        assert_eq!(
+            result.status, "completed",
+            "composite job failed: {:?}",
+            result.error
+        );
+        assert!(result.error.is_none());
+
+        // Four artifacts: silhouette PNG, scene PNG, .blend, .glb.
+        let artifacts = result.artifacts.clone().unwrap_or_default();
+        assert_eq!(artifacts.len(), 4, "artifacts: {artifacts:?}");
+        let silhouette = find_artifact(&artifacts, "png");
+        let pngs: Vec<&BlenderArtifactDto> = artifacts
+            .iter()
+            .filter(|artifact| artifact.artifact_type == "png")
+            .collect();
+        assert_eq!(pngs.len(), 2);
+        let blend = find_artifact(&artifacts, "blend");
+        let glb = find_artifact(&artifacts, "glb");
+
+        for artifact in &artifacts {
+            assert_artifact_on_disk(artifact, workspace.path());
+        }
+
+        // PNG headers: both renders are 512x512 RGBA (color type 6).
+        assert_png_rgba(&workspace.path().join(&silhouette.path), 512, 512);
+        for png in &pngs {
+            assert_png_rgba(&workspace.path().join(&png.path), 512, 512);
+        }
+        assert_blend_magic(&workspace.path().join(&blend.path));
+        assert_glb_magic(&workspace.path().join(&glb.path));
+
+        // Deterministic scene summary of the composite scene.
+        let summary = result
+            .scene_summary
+            .clone()
+            .expect("get_scene_summary must populate scene_summary");
+        assert_eq!(summary["objects"], serde_json::json!(5));
+        assert_eq!(summary["meshes"], serde_json::json!(3));
+        assert_eq!(summary["cameras"], serde_json::json!(2));
+        assert_eq!(summary["materials"], serde_json::json!(1));
+        assert_eq!(summary["triangles"], serde_json::json!(360));
+        assert_eq!(summary["vertices"], serde_json::json!(186));
+        let components = summary["components"].as_array().expect("components array");
+        assert_eq!(components.len(), 1, "components: {components:?}");
+        assert_eq!(components[0]["name"], serde_json::json!("Component_body"));
+        assert_eq!(components[0]["objects"], serde_json::json!(["body_box"]));
+        let bounds = &summary["bounds"];
+        let min = bounds["min"].as_array().expect("bounds.min");
+        let max = bounds["max"].as_array().expect("bounds.max");
+        assert_eq!(min.len(), 3);
+        assert_eq!(max.len(), 3);
+        assert!(min.iter().all(serde_json::Value::is_number));
+        assert!(max.iter().all(serde_json::Value::is_number));
+        assert_eq!(min[0], serde_json::json!(-3.5));
+        assert_eq!(max[2], serde_json::json!(1.5));
+
+        // Worker result file itself is valid and identity-consistent.
+        let job_dir = output.path().join("real_blender_scene_ops_001");
+        let parsed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(job_dir.join("result.json")).expect("result.json"),
+        )
+        .expect("valid result JSON");
+        assert_eq!(
+            parsed["job_id"],
+            serde_json::json!("real_blender_scene_ops_001")
+        );
+        assert_eq!(parsed["status"], serde_json::json!("completed"));
+        eprintln!("[info] Composite scene summary: {summary}");
+    }
+
+    /// Real Blender: GLB export -> import round-trip through components.
+    #[test]
+    fn test_real_blender_import_mesh() {
+        let Some(adapter) = real_blender_adapter_or_skip("test_real_blender_import_mesh") else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+
+        // Job A: create a single box and export it as GLB.
+        let export_spec = BlenderJobSpec {
+            job_type: "export_source".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateBox {
+                        name: Some("source_box".into()),
+                        size: Some(vec![1.0, 1.0, 1.0]),
+                        location: Some(vec![0.0, 0.0, 0.0]),
+                        rotation_deg: None,
+                        component: None,
+                    },
+                    BlenderOperation::ExportGlb {
+                        path: "assets/import_source.glb".into(),
+                    },
+                ],
+            },
+        };
+        let export_result = adapter
+            .run_job(
+                "real_blender_import_a",
+                &export_spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("GLB export job should succeed");
+        assert_eq!(
+            export_result.status, "completed",
+            "{:?}",
+            export_result.error
+        );
+        let exported =
+            find_artifact(&export_result.artifacts.clone().unwrap_or_default(), "glb").clone();
+        let exported_path = assert_artifact_on_disk(&exported, workspace.path());
+        assert_glb_magic(&exported_path);
+
+        // Job B: import that artifact into a component with an explicit name.
+        let import_spec = BlenderJobSpec {
+            job_type: "import_roundtrip".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateComponent {
+                        name: "imported".into(),
+                    },
+                    BlenderOperation::ImportMesh {
+                        path: "assets/import_source.glb".into(),
+                        name: Some("imported_box".into()),
+                        component: Some("imported".into()),
+                    },
+                    BlenderOperation::GetSceneSummary {},
+                ],
+            },
+        };
+        let import_result = adapter
+            .run_job(
+                "real_blender_import_b",
+                &import_spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("import job should succeed");
+        assert_eq!(
+            import_result.status, "completed",
+            "{:?}",
+            import_result.error
+        );
+        let summary = import_result
+            .scene_summary
+            .clone()
+            .expect("imported scene summary");
+        assert_eq!(summary["objects"], serde_json::json!(1));
+        assert_eq!(summary["meshes"], serde_json::json!(1));
+        assert_eq!(summary["cameras"], serde_json::json!(0));
+        let components = summary["components"].as_array().expect("components");
+        assert_eq!(components.len(), 1);
+        assert_eq!(
+            components[0]["name"],
+            serde_json::json!("Component_imported")
+        );
+        assert_eq!(
+            components[0]["objects"],
+            serde_json::json!(["imported_box"])
+        );
+
+        // Missing file and wrong extension are rejected before spawn, with no
+        // job directory created.
+        let missing_spec = BlenderJobSpec {
+            job_type: "import_missing".into(),
+            wait: true,
+            timeout_ms: Some(30_000),
+            spec: BlenderSpecBody {
+                operations: vec![BlenderOperation::ImportMesh {
+                    path: "assets/does_not_exist.glb".into(),
+                    name: None,
+                    component: None,
+                }],
+            },
+        };
+        let error = adapter
+            .run_job(
+                "real_blender_import_missing",
+                &missing_spec,
+                workspace.path(),
+                output.path(),
+                Some(30_000),
+            )
+            .expect_err("missing import file must be rejected");
+        assert!(
+            format!("{error}").contains("does not exist"),
+            "unexpected error: {error}"
+        );
+        assert!(!output.path().join("real_blender_import_missing").exists());
+
+        let wrong_extension_spec = BlenderJobSpec {
+            job_type: "import_wrong_ext".into(),
+            wait: true,
+            timeout_ms: Some(30_000),
+            spec: BlenderSpecBody {
+                operations: vec![BlenderOperation::ImportMesh {
+                    path: "assets/import_source.fbx".into(),
+                    name: None,
+                    component: None,
+                }],
+            },
+        };
+        let error = adapter
+            .run_job(
+                "real_blender_import_wrong_ext",
+                &wrong_extension_spec,
+                workspace.path(),
+                output.path(),
+                Some(30_000),
+            )
+            .expect_err("unsupported import extension must be rejected");
+        assert!(
+            format!("{error}").contains("invalid job spec"),
+            "unexpected error: {error}"
+        );
+        assert!(!output.path().join("real_blender_import_wrong_ext").exists());
+    }
+
+    /// Real Blender (Windows): a verbatim project root (`\\?\...`, as stored by
+    /// the core on Windows) must still allow GLB export. Regression for the
+    /// E2E defect where the glTF add-on's `os.makedirs` rejects verbatim paths;
+    /// the worker strips the prefix defensively.
+    #[cfg(windows)]
+    #[test]
+    fn test_real_blender_verbatim_workspace_root_glb_export() {
+        let Some(adapter) =
+            real_blender_adapter_or_skip("test_real_blender_verbatim_workspace_root_glb_export")
+        else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let verbatim = PathBuf::from(format!("\\\\?\\{}", workspace.path().display()));
+        assert!(verbatim.is_dir(), "verbatim workspace path must exist");
+        let output = TempDir::new().unwrap();
+        let spec = BlenderJobSpec {
+            job_type: "verbatim_root".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateBox {
+                        name: Some("verbatim_box".into()),
+                        size: Some(vec![1.0, 1.0, 1.0]),
+                        location: Some(vec![0.0, 0.0, 0.0]),
+                        rotation_deg: None,
+                        component: None,
+                    },
+                    BlenderOperation::ExportGlb {
+                        path: "blender/exports/verbatim.glb".into(),
+                    },
+                ],
+            },
+        };
+
+        let result = adapter
+            .run_job(
+                "real_blender_verbatim_root",
+                &spec,
+                &verbatim,
+                output.path(),
+                Some(60_000),
+            )
+            .expect("verbatim-root GLB export should succeed");
+        assert_eq!(result.status, "completed", "{:?}", result.error);
+        let artifacts = result.artifacts.clone().unwrap_or_default();
+        assert_eq!(artifacts.len(), 1);
+        let glb = assert_artifact_on_disk(&artifacts[0], &verbatim);
+        assert_glb_magic(&glb);
+    }
+
+    /// Real Blender: the Phase 2 documented legacy camera set uses the `"side"`
+    /// back-compat alias. It must create exactly four cameras
+    /// (front/left/top/perspective), and `["side", "left"]` must deduplicate to
+    /// one camera.
+    #[test]
+    fn test_real_blender_legacy_camera_set_side_alias() {
+        let Some(adapter) =
+            real_blender_adapter_or_skip("test_real_blender_legacy_camera_set_side_alias")
+        else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+
+        let documented_spec = BlenderJobSpec {
+            job_type: "legacy_camera_set".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::SetCameraSet {
+                        views: Some(vec![
+                            "front".into(),
+                            "side".into(),
+                            "top".into(),
+                            "perspective".into(),
+                        ]),
+                    },
+                    BlenderOperation::GetSceneSummary {},
+                ],
+            },
+        };
+        let documented = adapter
+            .run_job(
+                "real_blender_legacy_cameras",
+                &documented_spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("documented Phase 2 camera set must run");
+        assert_eq!(documented.status, "completed", "{:?}", documented.error);
+        let summary = documented.scene_summary.expect("scene summary");
+        assert_eq!(summary["cameras"], serde_json::json!(4));
+        assert_eq!(summary["objects"], serde_json::json!(4));
+        assert_eq!(summary["meshes"], serde_json::json!(0));
+
+        let dedupe_spec = BlenderJobSpec {
+            job_type: "legacy_camera_dedupe".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::SetCameraSet {
+                        views: Some(vec!["side".into(), "left".into()]),
+                    },
+                    BlenderOperation::GetSceneSummary {},
+                ],
+            },
+        };
+        let deduped = adapter
+            .run_job(
+                "real_blender_legacy_camera_dedupe",
+                &dedupe_spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("side/left alias dedupe must run");
+        assert_eq!(deduped.status, "completed", "{:?}", deduped.error);
+        let summary = deduped.scene_summary.expect("scene summary");
+        assert_eq!(summary["cameras"], serde_json::json!(1));
+        assert_eq!(summary["objects"], serde_json::json!(1));
+    }
+
+    /// Real Blender: calibrated front orthographic silhouette (projection
+    /// contract TZ 5.6). Pixel-count/alpha assertions belong to IT-3's Python
+    /// validator; this test locks the PNG format and projection setup.
+    #[test]
+    fn test_real_blender_calibrated_silhouette_projection() {
+        let Some(adapter) =
+            real_blender_adapter_or_skip("test_real_blender_calibrated_silhouette_projection")
+        else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+        let spec = BlenderJobSpec {
+            job_type: "calibrated_silhouette".into(),
+            wait: true,
+            timeout_ms: Some(120_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateBox {
+                        name: Some("body".into()),
+                        size: Some(vec![2.0, 1.0, 0.5]),
+                        location: Some(vec![0.0, 0.0, 0.0]),
+                        rotation_deg: None,
+                        component: None,
+                    },
+                    BlenderOperation::CreateOrthoCamera {
+                        name: "Cam_silhouette".into(),
+                        location: vec![0.0, -10.0, 0.0],
+                        rotation_deg: None,
+                        look_at: Some(vec![0.0, 0.0, 0.0]),
+                        ortho_scale: Some(4.0),
+                        shift_x: None,
+                        shift_y: None,
+                        clip_start: Some(0.1),
+                        clip_end: Some(1000.0),
+                        component: None,
+                    },
+                    BlenderOperation::SetRenderSettings {
+                        resolution: Some(vec![512, 512]),
+                        resolution_percentage: Some(100),
+                    },
+                    BlenderOperation::RenderCamera {
+                        camera: "Cam_silhouette".into(),
+                        path: "blender/renders/calibrated_silhouette.png".into(),
+                        silhouette: Some(true),
+                    },
+                ],
+            },
+        };
+
+        let result = adapter
+            .run_job(
+                "real_blender_calibrated_silhouette",
+                &spec,
+                workspace.path(),
+                output.path(),
+                Some(120_000),
+            )
+            .expect("calibrated silhouette job should succeed");
+        assert_eq!(result.status, "completed", "{:?}", result.error);
+        let artifacts = result.artifacts.clone().unwrap_or_default();
+        assert_eq!(artifacts.len(), 1);
+        let png = assert_artifact_on_disk(&artifacts[0], workspace.path());
+        assert_png_rgba(&png, 512, 512);
+
+        eprintln!(
+            "[info] Calibrated ortho silhouette written: {} bytes",
+            std::fs::metadata(&png).unwrap().len()
+        );
+    }
+
     /// Real capabilities probe — runs only if `blender` CLI is available.
     #[test]
     fn test_real_blender_capabilities_probe() {
-        let adapter = HeadlessBlenderAdapter::with_config("blender", resolve_worker_script());
-        if adapter.check_binary().is_err() {
-            eprintln!("[skip] real_blender_capabilities_probe: blender not available");
+        let Some(adapter) = real_blender_adapter_or_skip("test_real_blender_capabilities_probe")
+        else {
             return;
-        }
+        };
 
         let caps = adapter.probe_capabilities();
         assert!(caps.binary_found);
@@ -2694,9 +3429,16 @@ mod tests {
             caps.error
         );
         assert!(caps.error.is_none());
+        // The probe must report the actual 18 worker operations.
+        let expected_ops: Vec<String> =
+            SAFE_WORKER_OPS.iter().map(|op| (*op).to_string()).collect();
+        assert_eq!(caps.supported_operations, expected_ops);
         assert!(caps
             .supported_operations
-            .contains(&"create_box".to_string()));
+            .contains(&"render_camera".to_string()));
+        assert!(caps
+            .supported_operations
+            .contains(&"create_ortho_camera".to_string()));
         let version = caps.blender_version.as_deref().unwrap_or_default();
         assert!(
             version.starts_with("Blender "),

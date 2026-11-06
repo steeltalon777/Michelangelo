@@ -7,12 +7,11 @@ use michelangelo_protocol::method;
 use michelangelo_protocol::response::ResponseEnvelope;
 use michelangelo_protocol::snapshot::ProjectSnapshotDto;
 use michelangelo_protocol::{
-    BlenderJobResult, BlenderJobSpec, BlenderOperation, JobDto, JobStatus, PROTOCOL_VERSION,
-    SAFE_WORKER_OPS,
+    BlenderJobResult, BlenderJobSpec, JobDto, JobStatus, PROTOCOL_VERSION,
 };
 use michelangelo_workspace::error::WorkspaceError;
 use michelangelo_workspace::storage::Storage;
-use std::path::{Component, Path};
+use std::path::Path;
 
 use crate::service::CoreService;
 
@@ -253,8 +252,10 @@ fn handle_blender_run_job(core: &mut CoreService, cmd: &CommandEnvelope) -> Resp
     };
 
     // Validate before creating any job record: invalid specs must not leave
-    // orphan queued/stored jobs behind (TZ 5.8).
-    if let Err(message) = validate_blender_spec(&spec) {
+    // orphan queued/stored jobs behind (TZ 5.8). All semantic validation
+    // (unknown ops are already rejected by deserialization) lives in the typed
+    // protocol layer and is mirrored by the Blender worker.
+    if let Err(message) = spec.validate() {
         return invalid_params(cmd, &message);
     }
 
@@ -767,151 +768,6 @@ fn mark_storage_failed(
         None => problems.push("storage not initialized".to_string()),
     }
     problems
-}
-
-// ---------------------------------------------------------------------------
-// Blender spec validation
-// ---------------------------------------------------------------------------
-
-const MAX_BLENDER_OPERATIONS: usize = 256;
-const MAX_JOB_TYPE_CHARS: usize = 128;
-const MAX_SPEC_PATH_CHARS: usize = 1024;
-const MAX_VIEWS: usize = 64;
-
-/// Basic `BlenderJobSpec` validation performed before a job record is created.
-///
-/// Rejects unknown operations, unsafe paths and non-finite numeric parameters
-/// with a `-32602` (`InvalidParams`) response and no persisted job.
-fn validate_blender_spec(spec: &BlenderJobSpec) -> Result<(), String> {
-    if spec.job_type.trim().is_empty() {
-        return Err("spec.job_type must not be empty".to_string());
-    }
-    if spec.job_type.chars().count() > MAX_JOB_TYPE_CHARS {
-        return Err(format!(
-            "spec.job_type is too long (max {MAX_JOB_TYPE_CHARS} chars)"
-        ));
-    }
-    if spec.job_type.chars().any(char::is_control) {
-        return Err("spec.job_type must not contain control characters".to_string());
-    }
-    if spec.spec.operations.len() > MAX_BLENDER_OPERATIONS {
-        return Err(format!(
-            "too many operations: {} (max {MAX_BLENDER_OPERATIONS})",
-            spec.spec.operations.len()
-        ));
-    }
-
-    for (index, operation) in spec.spec.operations.iter().enumerate() {
-        let label = format!("operation[{index}] ('{}')", operation.op);
-        if operation.op.trim().is_empty() {
-            return Err(format!(
-                "operation[{index}]: operation name must not be empty"
-            ));
-        }
-        if !SAFE_WORKER_OPS.contains(&operation.op.as_str()) {
-            return Err(format!("{label}: unsupported operation"));
-        }
-        validate_operation_path(operation, &label)?;
-        validate_operation_numbers(operation, &label)?;
-    }
-
-    Ok(())
-}
-
-fn validate_operation_path(operation: &BlenderOperation, label: &str) -> Result<(), String> {
-    match operation.op.as_str() {
-        "save_blend" | "export_glb" => match operation.path.as_deref() {
-            Some(path) if !path.trim().is_empty() => {
-                validate_workspace_relative_path(path).map_err(|e| format!("{label}: {e}"))
-            }
-            _ => Err(format!("{label}: missing or empty 'path'")),
-        },
-        "render_views" => match operation.path.as_deref() {
-            Some(path) => {
-                validate_workspace_relative_path(path).map_err(|e| format!("{label}: {e}"))
-            }
-            None => Ok(()),
-        },
-        _ => match operation.path.as_deref() {
-            Some(path) if !path.trim().is_empty() => {
-                validate_workspace_relative_path(path).map_err(|e| format!("{label}: {e}"))
-            }
-            _ => Ok(()),
-        },
-    }
-}
-
-fn validate_operation_numbers(operation: &BlenderOperation, label: &str) -> Result<(), String> {
-    if let Some(size) = &operation.size {
-        validate_numeric_vector(size, 3, "size", label)?;
-    }
-    if let Some(location) = &operation.location {
-        validate_numeric_vector(location, 3, "location", label)?;
-        if location.iter().any(|value| !value.is_finite()) {
-            return Err(format!("{label}: 'location' contains non-finite values"));
-        }
-    }
-    if let Some(color) = &operation.color {
-        if color.len() != 3 && color.len() != 4 {
-            return Err(format!("{label}: 'color' must have 3 or 4 components"));
-        }
-        if color.iter().any(|value| !value.is_finite()) {
-            return Err(format!("{label}: 'color' contains non-finite values"));
-        }
-    }
-    if let Some(views) = &operation.views {
-        if views.len() > MAX_VIEWS {
-            return Err(format!("{label}: too many 'views' (max {MAX_VIEWS})"));
-        }
-    }
-    Ok(())
-}
-
-fn validate_numeric_vector(
-    values: &[f64],
-    expected_len: usize,
-    field: &str,
-    label: &str,
-) -> Result<(), String> {
-    if values.len() != expected_len {
-        return Err(format!(
-            "{label}: '{field}' must have exactly {expected_len} components"
-        ));
-    }
-    if values.iter().any(|value| !value.is_finite()) {
-        return Err(format!("{label}: '{field}' contains non-finite values"));
-    }
-    Ok(())
-}
-
-fn validate_workspace_relative_path(path: &str) -> Result<(), String> {
-    if path.trim().is_empty() {
-        return Err("path must not be empty".to_string());
-    }
-    if path.chars().count() > MAX_SPEC_PATH_CHARS {
-        return Err(format!(
-            "path is too long (max {MAX_SPEC_PATH_CHARS} chars)"
-        ));
-    }
-    if path.contains('\0') {
-        return Err("path must not contain NUL".to_string());
-    }
-
-    let parsed = Path::new(path);
-    if parsed.is_absolute() {
-        return Err(format!("path must be workspace-relative: '{path}'"));
-    }
-    for component in parsed.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            _ => {
-                return Err(format!(
-                    "path must not contain parent or root components: '{path}'"
-                ));
-            }
-        }
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1523,11 +1379,28 @@ mod tests {
         create_project(&mut core, &project_dir, "invalid-spec");
 
         let invalid_specs = vec![
+            // Unknown/unsafe ops fail deserialization.
             json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "explode"}]}}),
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "execute_arbitrary_python"}]}}),
+            // Empty job type / missing required fields.
             json!({"job_type": "", "wait": true, "spec": {"operations": []}}),
-            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "save_blend", "path": "../evil.blend"}]}}),
             json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "save_blend"}]}}),
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "render_camera", "path": "out.png"}]}}),
+            // Unsafe / malformed paths.
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "save_blend", "path": "../evil.blend"}]}}),
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "render_camera", "camera": "c", "path": "../evil.png"}]}}),
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "export_glb", "path": "out.blend"}]}}),
+            // Numeric/range/name violations.
             json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "create_box", "size": [1.0, 2.0]}]}}),
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "create_box", "size": [1.0, 0.0, 1.0]}]}}),
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "create_cylinder", "vertices": 2}]}}),
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "set_render_settings", "resolution": [0, 512]}]}}),
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{"op": "create_component", "name": "bad/name"}]}}),
+            // Camera pose rules: rotation and look_at are mutually exclusive.
+            json!({"job_type": "x", "wait": true, "spec": {"operations": [{
+                "op": "create_ortho_camera", "name": "c", "location": [0.0, 0.0, 0.0],
+                "rotation_deg": [90.0, 0.0, 0.0], "look_at": [0.0, 0.0, 0.0]
+            }]}}),
         ];
 
         for params in invalid_specs {
@@ -1546,62 +1419,119 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_blender_spec_numeric_and_limits() {
-        let mut spec: BlenderJobSpec = serde_json::from_value(json!({
-            "job_type": "spec",
-            "wait": true,
-            "timeout_ms": 1000,
-            "spec": {
-                "operations": [{
-                    "op": "create_box",
-                    "name": "box",
-                    "size": [1.0, 2.0, 3.0],
-                    "location": [0.0, 0.0, 0.0]
-                }]
-            }
-        }))
-        .unwrap();
-        assert!(validate_blender_spec(&spec).is_ok());
+    fn test_handler_blender_invalid_spec_message_names_operation_index() {
+        let (mut core, rx) = CoreService::new();
+        let project_dir = TempDir::new().unwrap();
+        create_project(&mut core, &project_dir, "invalid-spec-index");
 
-        // Non-finite numeric parameters are rejected.
-        spec.spec.operations[0].size = Some(vec![1.0, f64::NAN, 3.0]);
-        assert!(validate_blender_spec(&spec)
-            .unwrap_err()
-            .contains("non-finite"));
-        spec.spec.operations[0].size = Some(vec![1.0, 2.0]);
-        assert!(validate_blender_spec(&spec)
-            .unwrap_err()
-            .contains("3 components"));
-        spec.spec.operations[0].size = Some(vec![1.0, 2.0, 3.0]);
+        let resp = run_blender_job(
+            &mut core,
+            json!({
+                "job_type": "x",
+                "wait": true,
+                "spec": {"operations": [
+                    {"op": "create_box", "name": "box"},
+                    {"op": "create_box", "name": "box"}
+                ]}
+            }),
+        );
+        let error = resp.error.expect("duplicate names must be rejected");
+        assert_eq!(error.code, ErrorCode::InvalidParams);
+        assert!(
+            error.message.contains("operation[1] ('create_box')"),
+            "message must name the operation index: {}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("duplicate created object/camera name 'box'"),
+            "unexpected message: {}",
+            error.message
+        );
+        assert_eq!(core.storage().unwrap().job_count().unwrap(), 0);
+        assert!(rx.try_iter().next().is_none());
+    }
 
-        // Too many operations.
-        let operation = spec.spec.operations[0].clone();
-        spec.spec.operations = vec![operation; MAX_BLENDER_OPERATIONS + 1];
-        assert!(validate_blender_spec(&spec)
-            .unwrap_err()
-            .contains("too many operations"));
+    #[test]
+    fn test_handler_blender_valid_new_op_spec_queues_and_runs() {
+        let (mut core, rx, _fake_dir) = fake_core("success");
+        let project_dir = TempDir::new().unwrap();
+        create_project(&mut core, &project_dir, "new-ops-spec");
 
-        // Long job type.
-        spec.spec.operations.clear();
-        spec.job_type = "x".repeat(MAX_JOB_TYPE_CHARS + 1);
-        assert!(validate_blender_spec(&spec)
-            .unwrap_err()
-            .contains("too long"));
+        let resp = run_blender_job(
+            &mut core,
+            json!({
+                "job_type": "blender_new_ops",
+                "wait": true,
+                "spec": {"operations": [
+                    {"op": "create_component", "name": "body"},
+                    {"op": "create_cylinder", "name": "cyl", "radius": 0.5, "depth": 1.0, "location": [0.0, 0.0, 0.5]},
+                    {"op": "create_ortho_camera", "name": "Cam_front", "location": [0.0, -10.0, 0.0], "look_at": [0.0, 0.0, 0.0], "ortho_scale": 4.0},
+                    {"op": "set_render_settings", "resolution": [512, 512], "resolution_percentage": 100},
+                    {"op": "render_camera", "camera": "Cam_front", "path": "blender/renders/front.png", "silhouette": true},
+                    {"op": "save_blend", "path": "blender/scenes/new_ops.blend"}
+                ]}
+            }),
+        );
+        assert!(resp.error.is_none(), "response: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["status"], "completed");
+        assert_eq!(result["job"]["job_type"], "blender_new_ops");
 
-        // Absolute and parent-traversal paths (platform-aware absolute path).
-        let absolute = std::env::current_dir().unwrap().join("evil.blend");
-        let mut path_spec: BlenderJobSpec = serde_json::from_value(json!({
-            "job_type": "spec",
-            "spec": {"operations": [{"op": "save_blend", "path": absolute.to_string_lossy()}]}
-        }))
-        .unwrap();
-        assert!(validate_blender_spec(&path_spec)
-            .unwrap_err()
-            .contains("workspace-relative"));
-        path_spec.spec.operations[0].path = Some("../evil.blend".into());
-        assert!(validate_blender_spec(&path_spec)
-            .unwrap_err()
-            .contains("parent or root"));
+        // Exactly one job record and one completed terminal event.
+        assert_eq!(core.storage().unwrap().job_count().unwrap(), 1);
+        let events: Vec<EventEnvelope> = rx.try_iter().collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event == "job.completed")
+                .count(),
+            1,
+            "events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn test_handler_blender_accepts_documented_phase2_side_view() {
+        // Regression: the Phase 2 documented example uses the `side` legacy
+        // view name. It is a back-compat alias of `left`, not an invalid spec,
+        // so it must be accepted and queued/run instead of returning -32602.
+        let (mut core, rx, _fake_dir) = fake_core("success");
+        let project_dir = TempDir::new().unwrap();
+        create_project(&mut core, &project_dir, "legacy-side-view");
+
+        let resp = run_blender_job(
+            &mut core,
+            json!({
+                "job_type": "blender_phase2_legacy_cameras",
+                "wait": true,
+                "spec": {"operations": [
+                    {"op": "set_camera_set", "views": ["front", "side", "top", "perspective"]},
+                    {"op": "save_blend", "path": "blender/scenes/legacy_cameras.blend"}
+                ]}
+            }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "documented Phase 2 side view must be accepted, got: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        assert_eq!(result["status"], "completed");
+        assert_eq!(result["job"]["job_type"], "blender_phase2_legacy_cameras");
+
+        assert_eq!(core.storage().unwrap().job_count().unwrap(), 1);
+        let events: Vec<EventEnvelope> = rx.try_iter().collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event == "job.completed")
+                .count(),
+            1,
+            "events: {events:?}"
+        );
+        assert!(events.iter().all(|event| event.event != "job.failed"));
     }
 
     #[test]
@@ -1843,10 +1773,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_workspace_relative_path_allows_dotdot_in_file_name() {
-        assert!(validate_workspace_relative_path("blender/scenes/model.v1..2.blend").is_ok());
-        assert!(validate_workspace_relative_path("../evil.blend").is_err());
-
+    fn test_validate_spec_allows_dotdot_inside_file_name() {
         let spec: BlenderJobSpec = serde_json::from_value(json!({
             "job_type": "spec",
             "spec": {"operations": [
@@ -1854,17 +1781,33 @@ mod tests {
             ]}
         }))
         .unwrap();
-        assert!(validate_blender_spec(&spec).is_ok());
+        assert!(spec.validate().is_ok());
+
+        let traversal: BlenderJobSpec = serde_json::from_value(json!({
+            "job_type": "spec",
+            "spec": {"operations": [{"op": "save_blend", "path": "../evil.blend"}]}
+        }))
+        .unwrap();
+        assert!(traversal
+            .validate()
+            .unwrap_err()
+            .contains("parent-traversal"));
     }
 
     #[cfg(windows)]
     #[test]
-    fn test_validate_workspace_relative_path_rejects_windows_forms() {
+    fn test_validate_spec_rejects_windows_path_forms() {
         // Drive-relative (`C:foo.blend`) and UNC (`\\server\share\...`).
         for path in [r"C:foo.blend", r"\\server\share\evil.blend"] {
+            let spec: BlenderJobSpec = serde_json::from_value(json!({
+                "job_type": "spec",
+                "spec": {"operations": [{"op": "save_blend", "path": path}]}
+            }))
+            .unwrap();
+            let error = spec.validate().unwrap_err();
             assert!(
-                validate_workspace_relative_path(path).is_err(),
-                "path {path:?} must be rejected"
+                error.contains("absolute") || error.contains("root/prefix"),
+                "path {path:?} must be rejected, got: {error}"
             );
         }
     }
