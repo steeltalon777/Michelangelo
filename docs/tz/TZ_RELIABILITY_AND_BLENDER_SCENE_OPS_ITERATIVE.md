@@ -393,7 +393,7 @@ and the TZ, and returns a verdict; verdict is recorded in section 8.
 | IT-2 attempt 2 | `2cf4961` | Same separate read-only context: **GREEN** | Containment-before-mutation for all output paths; safe derived render filenames/collision rejection; import name idempotency; crafted-glTF sentinel regression test (Lead-independent repro: sentinel SHA/size/mtime unchanged); positive render_views (4 unique PNGs), set_transform bbox, cross-platform Windows-path rejection, legacy JSON compat. 271 tests, Lead acceptance E2E 28/28 with calibrated 16384-px silhouette. Non-blocking P2 notes (case-insensitive/Windows reserved names, concurrent symlink TOCTOU) accepted and documented for IT-3. |
 | IT-3 attempt 1 | `9749b60` | Same separate read-only context: **GREEN** with six non-blocking P2 doc/assertion items | Cross-platform fake/real acceptance driver, examples, docs, CI. Reviewer P2s: tautological opaque-alpha framing check, wrong `job` response type in CORE_PROTOCOL, over-strong capabilities guarantee, non-reproducible worker example, missing event/response ordering + artifact-metadata checks, python3/`CARGO_TARGET_DIR` doc inconsistency. Rework ordered. |
 | IT-3 attempt 2 | `cbb146f` | Same separate read-only context: **GREEN** | All six P2s materially fixed: discriminating framing counterfactual (framed 26,142 px/0.0997 vs unframed 86 px/0.00033), raw storage `job` record documented, capabilities pass-through wording, reproducible example, event-before-response ordering + artifact metadata equality + invalid-spec `-32602` with no record, python3 default and `--cli`/`CARGO_TARGET_DIR` docs. |
-| IT-3 final accuracy | `e2da7fb` | Follow-up to reviewer's remaining P2 notes (final confirmation requested) | Corrected examples-README counterfactual (margin passes; coverage+span fail, ~91x) and documented thresholds (0.03..0.95, span ≥205 px, 8 px margin); gated vacuous invalid-request check; removed tautological opaque-alpha check. Final smoke counts: fake 113 checks/3 skips, real 119 checks/0 skips; 271 Rust tests unchanged. |
+| IT-3 final accuracy | `e2da7fb` | Same separate read-only context: **GREEN** (final confirmation) | Corrected examples-README counterfactual (margin passes; coverage+span fail, ~91x) and documented thresholds (0.03..0.95, span ≥205 px, 8 px margin); gated vacuous invalid-request check; removed tautological opaque-alpha check. Final smoke counts: fake 113 checks/3 skips, real 119 checks/0 skips; 271 Rust tests unchanged. |
 
 Reviewer-route note: on this Windows profile the `worker` agent preset shield allows the
 unavailable `bash` tool, and the `researcher`/`reviewer` shields reference MCP prefixes for
@@ -425,7 +425,7 @@ Acceptance criterion is met on the verified stand (Windows, Blender 5.2.3 LTS):
   0.0997 with a meaningful bbox (counterfactual without `frame_camera`: 86 px);
 - `.blend` (zstd) and `.glb` (glTF v2) saved and validated;
 - job state/artifacts/events persisted across a process boundary with `started_at`/`finished_at`;
-- invalid specs/worker failures/silhouette timeouts reported as structured job/protocol errors.
+- invalid specs/worker failures/job timeouts reported as structured job/protocol errors.
 
 Final commits on `dev` (not pushed): `95ebeed`, `8311ef7`, `7ffb232`, `59ca3c5`, `2cf4961`,
 `ff230ef`, `9749b60`, `cbb146f`, `e2da7fb` (+ this TZ record commit).
