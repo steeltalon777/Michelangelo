@@ -578,11 +578,14 @@ def parse_protocol(proc, label, expected_ids, checker, expected_error_ids=()):
             for response in responses
         )
     ]
-    checker.check(
-        f"{label}: intentionally invalid requests returned protocol errors",
-        not missing_expected_errors,
-        f"missing error envelopes: {missing_expected_errors}",
-    )
+    if expected_error_ids:
+        # Only meaningful when a negative request was actually sent; do not emit
+        # a vacuous PASS for ordinary request streams (e.g. the reopen process).
+        checker.check(
+            f"{label}: intentionally invalid requests returned protocol errors",
+            not missing_expected_errors,
+            f"missing error envelopes: {missing_expected_errors}",
+        )
     return messages, lines
 
 
@@ -756,15 +759,6 @@ def silhouette_stats(rows, width):
                         max_y = y
     bbox = None if min_x is None else (min_x, max_x, min_y, max_y)
     return count, bbox
-
-
-def alpha_coverage(rows, width):
-    covered = 0
-    for row in rows:
-        for x in range(width):
-            if row[x * 4 + 3] > 0:
-                covered += 1
-    return covered
 
 
 # ---------------------------------------------------------------------------
@@ -1044,18 +1038,9 @@ def check_artifact_files(checker, workspace, fake_mode):
                     f"bbox={bbox}",
                 )
         elif label == "scene.png":
-            if fake_mode:
-                checker.skip(
-                    "scene.png: non-zero alpha coverage",
-                    "fake mode renders no pixels",
-                )
-            else:
-                covered = alpha_coverage(rows, width)
-                checker.check(
-                    "scene.png: non-zero alpha coverage",
-                    covered > 0,
-                    f"covered={covered}",
-                )
+            # The normal Workbench render is opaque by definition; only its PNG
+            # header is validated above. Framing is proven by scene_silhouette.png.
+            pass
         else:
             if fake_mode:
                 checker.skip(

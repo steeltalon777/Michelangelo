@@ -82,7 +82,7 @@ recorded in the TZ review log).
   `python3` default with a Windows override), CI: Python worker checks + fake scene smoke on
   Ubuntu and a new `windows-latest` job (fmt/clippy/test/build + Python checks + fake scene
   smoke). Real Blender is not available on CI runners (documented blocker). Evidence:
-  `target/techlead/IT-3/` (gitignored) — real run 121 checks / fake run 114 checks (4 skips),
+  `target/techlead/IT-3/` (gitignored) — real run 119 checks / fake run 113 checks (3 skips),
   framed-vs-unframed counterfactual and a space-containing `TMP`/`TEMP` fake run.
 
 ## Not yet started

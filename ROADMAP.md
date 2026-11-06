@@ -43,10 +43,10 @@ review GREEN for IT-1 attempt 2, IT-2 attempt 2 and IT-3 (P2 rework applied)).
 **Verified on:** Blender **5.2.3 LTS** (Windows, headless `--background --factory-startup`),
 Rust 1.96.0, Python 3.13.
 **Test count:** **271 Rust tests** (12 real-Blender, auto-skip without Blender) + **30 Python**
-worker validation checks; acceptance driver: 121 checks on real Blender / 114 on fake (4 checks
-skipped in fake mode: real-version string and the three pixel assertions), including the calibrated
-front silhouette, the framed-scene silhouette coverage/margin assertion and invalid-spec rejection.
-Only
+worker validation checks; acceptance driver: 119 checks on real Blender / 113 on fake (3 checks
+skipped in fake mode: real-version string and the two silhouette pixel assertions), including the
+calibrated front silhouette, the framed-scene silhouette coverage/margin assertion and invalid-spec
+rejection. Only
 Blender 5.2.3 is verified; 4.2 is API-plausible but untested.
 
 ## 🔜 Phase 3 (Next) — Asset Pipeline

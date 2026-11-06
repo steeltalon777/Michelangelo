@@ -197,10 +197,11 @@ Fixture used by `examples/scene_ops/composite_scene_spec.json` and the acceptanc
 - `frame_camera` on the scene camera with `margin=1.1` must frame the whole scene. The acceptance
   scene deliberately creates `cam_scene` with `ortho_scale=100`, calls `frame_camera`, then
   renders `blender/renders/scene_silhouette.png` (`silhouette: true`). The smoke driver asserts
-  that this framed silhouette has an opaque alpha coverage fraction ≥ 0.03, a bbox span ≥ 40% of
-  the 512x512 frame in both axes, and an ≥ 8 px border margin. Measured on Blender 5.2.3: framed
-  coverage ≈ 0.0997 (bbox 424x253, margins ≥ 41 px); without `frame_camera` the scene collapses to
-  ≈ 0.00033 coverage (bbox 25x15) and fails the assertion.
+  that this framed silhouette has an opaque alpha coverage fraction in `0.03..0.95`, a bbox span
+  ≥ 205 px (40% of 512) on each axis, and an ≥ 8 px border margin. Measured on Blender 5.2.3:
+  framed coverage ≈ 0.0997 (bbox 424x253, margins ≥ 41 px); without `frame_camera` the scene
+  collapses to ≈ 0.00033 coverage and a 25x15 bbox — coverage and span fail (the small bbox still
+  sits inside the border margin, so the margin check alone would not catch that regression).
 
 `render_camera` normal (non-silhouette) renders are opaque Workbench renders; only the
 silhouette path enables a transparent film/alpha mask.

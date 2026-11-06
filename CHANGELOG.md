@@ -101,7 +101,7 @@ job-level behavior.
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace` — **271 tests** (12 real-Blender tests auto-skip without Blender).
 - `python -m py_compile ...` and `python scripts/test_worker_validation.py` — **30/30**.
-- `python scripts/smoke_blender_scene.py --fake` — PASS (114 checks, 4 checks skipped: three
-  pixel assertions + the real-Blender version string).
-- `python scripts/smoke_blender_scene.py` on Blender 5.2.3 — PASS (121 checks incl. calibrated
+- `python scripts/smoke_blender_scene.py --fake` — PASS (113 checks, 3 checks skipped: the two
+  silhouette pixel assertions + the real-Blender version string).
+- `python scripts/smoke_blender_scene.py` on Blender 5.2.3 — PASS (119 checks incl. calibrated
   front silhouette, framed-scene silhouette and reopen).

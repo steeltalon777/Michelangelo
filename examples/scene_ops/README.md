@@ -44,14 +44,21 @@ real Blender only; `--fake` mode checks protocol/artifact plumbing but skips pix
 the scene silhouette then fills most of the 512x512 frame with a visible border. The driver asserts
 (real Blender only):
 
-| Assertion | Framed (Blender 5.2.3) | Broken/missing `frame_camera` |
-|---|---|---|
-| opaque alpha coverage fraction | ≈ 0.0997 (26,142 px) | ≈ 0.00033 (86 px) |
-| alpha bbox span | 424 x 253 px | 25 x 15 px |
-| required threshold | coverage ≥ 0.03, span ≥ 205 px, border ≥ 8 px | fails all three |
+| Assertion | Threshold (real mode) | Framed (Blender 5.2.3) | Missing/broken `frame_camera` |
+|---|---|---|---|
+| opaque alpha coverage fraction | `0.03 ≤ f ≤ 0.95` | ≈ 0.0997 (26,142 px) | ≈ 0.00033 (86 px) → **FAIL** |
+| alpha bbox span (each axis) | ≥ 205 px (40% of 512) | 424 x 253 px | 25 x 15 px → **FAIL** |
+| border margin | ≥ 8 px on each side | ≥ 41 px | bbox `(243, 267, 246, 260)` → passes |
+| overall | all three must pass | PASS | **FAIL** (coverage + span only) |
+
+The 0.95 coverage upper bound rejects a degenerate fully-opaque frame. Coverage `0.03` is ~91x
+above the measured unframed value (0.03 / 0.00033 ≈ 91) and ~3.3x below the framed value; the span
+threshold 205 px is far above the unframed 25/15 px and below the framed 424/253 px. The
+missing-`frame_camera` bbox happens to sit inside the border area, so the border-margin check alone
+would not catch that regression — coverage and span do.
 
 This makes the framing check meaningful: if `frame_camera` is missing or broken, the acceptance
-smoke fails instead of merely observing "some non-zero alpha".
+smoke fails instead of merely observing a non-empty PNG.
 
 ## Run it
 
