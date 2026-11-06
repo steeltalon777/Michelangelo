@@ -267,7 +267,7 @@ impl HeadlessBlenderAdapter {
         serde_json::to_writer(&mut file, &worker_input)?;
         file.flush()?;
 
-        let mut cmd = Command::new(fake_blender);
+        let mut cmd = fake_executable_command(fake_blender);
         cmd.arg("--background")
             .arg("--python")
             .arg(&self.worker_script)
@@ -487,7 +487,12 @@ fn resolve_worker_script() -> PathBuf {
 // Fake Blender executable helpers
 // ---------------------------------------------------------------------------
 
-/// Создаёт временный shell-скрипт для детерминированного тестирования.
+/// Создаёт временный исполняемый файл для детерминированного тестирования.
+///
+/// Реализация платформенно-зависимая: на Unix это Bash-скрипт
+/// (`fake_blender.sh`), на Windows — пакетный файл (`fake_blender.cmd`),
+/// который адаптер запускает через `cmd /C call`. Так тесты не привязаны
+/// исключительно к Bash и работают на обеих платформах.
 ///
 /// Поддерживаемые режимы:
 /// - `"success"` — пишет валидный result.json
@@ -496,8 +501,60 @@ fn resolve_worker_script() -> PathBuf {
 /// - `"noresult"` — не пишет result.json
 /// - `"timeout"` — спит 2 секунды (достаточно для теста таймаута)
 pub fn create_fake_blender(dir: &Path, mode: &str) -> PathBuf {
+    #[cfg(unix)]
+    {
+        create_fake_blender_unix(dir, mode)
+    }
+    #[cfg(windows)]
+    {
+        create_fake_blender_windows(dir, mode)
+    }
+}
+
+/// Создаёт `Command` для запуска fake-исполняемого файла.
+///
+/// `Command::new` на Windows не умеет напрямую запускать `.cmd`/`.bat`
+/// (CreateProcess возвращает ошибку 193 «не является приложением Win32»),
+/// поэтому такие файлы запускаются через `cmd /C call`.
+fn fake_executable_command(fake_blender: &Path) -> Command {
+    #[cfg(windows)]
+    {
+        let is_batch_script = fake_blender
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
+        if is_batch_script {
+            let mut cmd = Command::new("cmd");
+            cmd.arg("/C").arg("call").arg(fake_blender);
+            return cmd;
+        }
+    }
+
+    Command::new(fake_blender)
+}
+
+/// Записывает fake-исполняемый файл с явным `sync`, чтобы избежать ETXTBUSY
+/// при параллельном запуске тестов.
+fn write_fake_executable(path: &Path, contents: &[u8]) {
     use std::io::Write;
 
+    {
+        let mut f = std::fs::File::create(path).expect("create fake blender script");
+        f.write_all(contents).expect("write fake blender script");
+        f.sync_all().expect("sync fake blender script");
+    }
+
+    // Also sync the parent directory so the new file is durable.
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+}
+
+/// Unix-вариант fake Blender: Bash-скрипт с shebang (`fake_blender.sh`).
+#[cfg(unix)]
+fn create_fake_blender_unix(dir: &Path, mode: &str) -> PathBuf {
     let script = dir.join("fake_blender.sh");
     let contents = match mode {
         "fail" => b"#!/bin/bash\necho 'Fake Blender: fail' >&2\nexit 1\n" as &[u8],
@@ -515,27 +572,48 @@ exit 0\n"
         }
     };
 
-    // Write with explicit sync to avoid ETXTBUSY in parallel runs
-    {
-        let mut f = std::fs::File::create(&script).expect("create fake blender script");
-        f.write_all(contents).expect("write fake blender script");
-        f.sync_all().expect("sync fake blender script");
-    }
+    write_fake_executable(&script, contents);
 
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
             .expect("make fake blender executable");
     }
 
-    // Also sync the parent directory so the new file is durable
-    if let Some(parent) = script.parent() {
-        if let Ok(f) = std::fs::File::open(parent) {
-            let _ = f.sync_all();
-        }
-    }
+    script
+}
 
+/// Windows-вариант fake Blender: пакетный файл (`fake_blender.cmd`).
+///
+/// Содержимое — ASCII + CRLF, поэтому пакетный файл корректен независимо от
+/// кодовой страницы консоли. Пути передаются аргументами (`%~5`, `%~6`), а не
+/// вписываются в текст скрипта, поэтому Unicode-пути (например, кириллица в
+/// `%TEMP%`) не искажаются: процесс создаётся через `CreateProcessW`.
+#[cfg(windows)]
+fn create_fake_blender_windows(dir: &Path, mode: &str) -> PathBuf {
+    let script = dir.join("fake_blender.cmd");
+    let contents: &[u8] = match mode {
+        "fail" => b"@echo off\r\necho Fake Blender: fail 1>&2\r\nexit /b 1\r\n",
+        "malformed" => {
+            b"@echo off\r\n\
+              set \"RESULT_JSON=%~6\"\r\n\
+              echo {this is garbage >\"%RESULT_JSON%\"\r\n\
+              exit /b 0\r\n"
+        }
+        "noresult" => b"@echo off\r\necho Fake Blender: no result 1>&2\r\nexit /b 0\r\n",
+        "timeout" => b"@echo off\r\necho Fake Blender: timeout 1>&2\r\nping -n 3 127.0.0.1 >nul\r\nexit /b 0\r\n",
+        _ => b"@echo off\r\n\
+              setlocal\r\n\
+              set \"JOB_JSON=%~5\"\r\n\
+              set \"RESULT_JSON=%~6\"\r\n\
+              set \"JOB_ID=\"\r\n\
+              for /f \"usebackq delims=\" %%a in (`powershell -NoProfile -NonInteractive -Command \"(ConvertFrom-Json -InputObject (Get-Content -Raw -LiteralPath $env:JOB_JSON)).job_id\"`) do set \"JOB_ID=%%a\"\r\n\
+              if not defined JOB_ID set \"JOB_ID=unknown\"\r\n\
+              echo {\"job_id\":\"%JOB_ID%\",\"status\":\"completed\",\"message\":\"Fake Blender success\",\"artifacts\":[{\"path\":\"blender/scenes/smoke.blend\",\"type\":\"blend\",\"size_bytes\":1024}],\"scene_summary\":{\"objects\":1,\"meshes\":1,\"triangles\":12,\"vertices\":24}} >\"%RESULT_JSON%\"\r\n\
+              exit /b 0\r\n",
+    };
+
+    write_fake_executable(&script, contents);
     script
 }
 
@@ -548,6 +626,22 @@ mod tests {
     use super::*;
     use michelangelo_protocol::{BlenderJobSpec, BlenderOperation, BlenderSpecBody};
     use tempfile::TempDir;
+
+    /// Возвращает абсолютный путь в синтаксисе текущей платформы.
+    ///
+    /// POSIX-путь используется как есть на Unix и получает префикс диска
+    /// (например, `C:/etc/passwd`) на Windows, чтобы `Path::is_absolute()`
+    /// оставался `true` на обеих платформах.
+    fn absolute_path(posix_path: &str) -> String {
+        #[cfg(windows)]
+        {
+            format!("C:{posix_path}")
+        }
+        #[cfg(unix)]
+        {
+            posix_path.to_string()
+        }
+    }
 
     fn sample_job_spec() -> BlenderJobSpec {
         BlenderJobSpec {
@@ -725,7 +819,7 @@ mod tests {
 
     #[test]
     fn test_path_validation_rejects_absolute() {
-        let err = validate_artifact_path("/absolute/path/file.blend").unwrap_err();
+        let err = validate_artifact_path(&absolute_path("/absolute/path/file.blend")).unwrap_err();
         match err {
             BlenderError::MalformedResult(msg) => {
                 assert!(msg.contains("Absolute"));
@@ -793,7 +887,7 @@ mod tests {
 
     #[test]
     fn test_validate_spec_path_absolute_rejected() {
-        let err = validate_spec_path("/etc/passwd").unwrap_err();
+        let err = validate_spec_path(&absolute_path("/etc/passwd")).unwrap_err();
         assert!(format!("{err}").contains("Absolute"));
     }
 
@@ -831,7 +925,8 @@ mod tests {
 
     #[test]
     fn test_validate_job_spec_rejects_absolute_path() {
-        let spec = spec_with_op("save_blend", Some("/absolute/path.blend"));
+        let absolute = absolute_path("/absolute/path.blend");
+        let spec = spec_with_op("save_blend", Some(&absolute));
         let err = validate_job_spec_paths(&spec).unwrap_err();
         assert!(format!("{err}").contains("Absolute"));
     }
@@ -857,7 +952,8 @@ mod tests {
 
     #[test]
     fn test_validate_job_spec_export_rejects_absolute() {
-        let spec = spec_with_op("export_glb", Some("/etc/out.glb"));
+        let absolute = absolute_path("/etc/out.glb");
+        let spec = spec_with_op("export_glb", Some(&absolute));
         let err = validate_job_spec_paths(&spec).unwrap_err();
         assert!(format!("{err}").contains("Absolute"));
     }
@@ -871,7 +967,7 @@ mod tests {
         let adapter =
             HeadlessBlenderAdapter::with_config("blender", PathBuf::from("blender/worker.py"));
 
-        let spec = spec_with_op("save_blend", Some("/etc/malicious.blend"));
+        let spec = spec_with_op("save_blend", Some(&absolute_path("/etc/malicious.blend")));
         let workspace = TempDir::new().unwrap();
         let output = TempDir::new().unwrap();
 

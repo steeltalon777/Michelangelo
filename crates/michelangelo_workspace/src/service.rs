@@ -149,7 +149,25 @@ fn load_meta_from_sqlite(
 ) -> Result<Option<ProjectMeta>, WorkspaceError> {
     let db_path = layout::db_path(root);
     let storage = Storage::open(&db_path)?;
-    storage.load_project_by_root(root_path)
+
+    // Fast path: exact match on the caller-provided path spelling.
+    if let Some(meta) = storage.load_project_by_root(root_path)? {
+        return Ok(Some(meta));
+    }
+
+    // Fallback: `create_project` stores the canonicalized path (on Windows it
+    // looks like `\\?\C:\Users\Name\...`), while callers may pass the same
+    // location spelled differently — an 8.3 short name, a trailing `.`, or a
+    // non-canonical casing. Compare canonical forms before giving up on SQLite
+    // and falling back to the JSON project file.
+    if let Ok(canonical) = root.canonicalize() {
+        let canonical_str = canonical.display().to_string();
+        if canonical_str != root_path {
+            return storage.load_project_by_root(&canonical_str);
+        }
+    }
+
+    Ok(None)
 }
 
 /// Load project metadata from the JSON project file (backward compat).
@@ -256,9 +274,11 @@ mod tests {
         let dto = svc.create_project(dir.path(), "test-project").unwrap();
         assert_eq!(dto.name, "test-project");
         assert_eq!(dto.id, "test-project");
-        assert!(dto
-            .root_path
-            .contains(dir.path().to_string_lossy().as_ref()));
+        // Compare canonical forms instead of substring matching: on Windows
+        // `tempfile` may hand out an 8.3 short path (C:\Users\4D88~1\...) while
+        // the workspace stores the canonical long path (\\?\C:\Users\Name\...).
+        let expected_root = dir.path().canonicalize().unwrap().display().to_string();
+        assert_eq!(dto.root_path, expected_root);
     }
 
     #[test]
@@ -391,6 +411,29 @@ mod tests {
         );
         let dto = result.unwrap();
         assert_eq!(dto.name, "sqlite-first");
+    }
+
+    #[test]
+    fn test_open_finds_sqlite_with_non_canonical_path_spelling() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WorkspaceService;
+        svc.create_project(dir.path(), "non-canonical").unwrap();
+
+        // Corrupt the JSON metadata so only SQLite can provide the record.
+        let meta_path = crate::layout::project_file_path(dir.path());
+        std::fs::write(&meta_path, r#"{garbage}"#).unwrap();
+
+        // Same directory, non-canonical spelling (trailing `.`). On Windows the
+        // temp dir itself may also be an 8.3 short path, which canonicalization
+        // expands; both platforms must still find the SQLite record.
+        let non_canonical = dir.path().join(".");
+        let result = svc.open_project(&non_canonical);
+        assert!(
+            result.is_ok(),
+            "should resolve metadata via SQLite: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().name, "non-canonical");
     }
 
     #[test]

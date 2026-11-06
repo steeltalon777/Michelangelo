@@ -117,6 +117,20 @@ mod tests {
         svc
     }
 
+    /// Build a JSON-RPC request line with proper JSON escaping.
+    ///
+    /// Tests must not interpolate values into raw JSON literals: on Windows a
+    /// path like `C:\Users\...` contains backslashes, which are invalid JSON
+    /// escapes and would make the request line fail to parse.
+    fn request_line(id: &str, method: &str, params: serde_json::Value) -> String {
+        serde_json::json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        })
+        .to_string()
+    }
+
     #[test]
     fn test_process_valid_ping() {
         let mut c = core();
@@ -161,9 +175,13 @@ mod tests {
         let mut c = core();
         let resp = process_line(
             &mut c,
-            &format!(
-                r#"{{"id":"c1","method":"project.create","params":{{"path":"{}","name":"smoke-test"}}}}"#,
-                dir.path().display()
+            &request_line(
+                "c1",
+                "project.create",
+                serde_json::json!({
+                    "path": dir.path().display().to_string(),
+                    "name": "smoke-test",
+                }),
             ),
         );
         assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
@@ -179,18 +197,25 @@ mod tests {
         // Create first
         let _ = process_line(
             &mut c,
-            &format!(
-                r#"{{"id":"c1","method":"project.create","params":{{"path":"{}","name":"open-test"}}}}"#,
-                dir.path().display()
+            &request_line(
+                "c1",
+                "project.create",
+                serde_json::json!({
+                    "path": dir.path().display().to_string(),
+                    "name": "open-test",
+                }),
             ),
         );
 
         // Then open
         let resp = process_line(
             &mut c,
-            &format!(
-                r#"{{"id":"c2","method":"project.open","params":{{"path":"{}"}}}}"#,
-                dir.path().display()
+            &request_line(
+                "c2",
+                "project.open",
+                serde_json::json!({
+                    "path": dir.path().display().to_string(),
+                }),
             ),
         );
         assert!(resp.error.is_none(), "open failed: {:?}", resp.error);
@@ -206,9 +231,13 @@ mod tests {
         // Create
         let _ = process_line(
             &mut c,
-            &format!(
-                r#"{{"id":"c1","method":"project.create","params":{{"path":"{}","name":"snap-test"}}}}"#,
-                dir.path().display()
+            &request_line(
+                "c1",
+                "project.create",
+                serde_json::json!({
+                    "path": dir.path().display().to_string(),
+                    "name": "snap-test",
+                }),
             ),
         );
 
@@ -248,9 +277,13 @@ mod tests {
         let mut c1 = core();
         let create_resp = process_line(
             &mut c1,
-            &format!(
-                r#"{{"id":"c1","method":"project.create","params":{{"path":"{}","name":"reopen-test"}}}}"#,
-                dir.path().display()
+            &request_line(
+                "c1",
+                "project.create",
+                serde_json::json!({
+                    "path": dir.path().display().to_string(),
+                    "name": "reopen-test",
+                }),
             ),
         );
         assert!(create_resp.error.is_none());
@@ -259,9 +292,12 @@ mod tests {
         let mut c2 = core();
         let open_resp = process_line(
             &mut c2,
-            &format!(
-                r#"{{"id":"o1","method":"project.open","params":{{"path":"{}"}}}}"#,
-                dir.path().display()
+            &request_line(
+                "o1",
+                "project.open",
+                serde_json::json!({
+                    "path": dir.path().display().to_string(),
+                }),
             ),
         );
         assert!(
@@ -342,9 +378,13 @@ mod tests {
         let mut c1 = core();
         let _ = process_line(
             &mut c1,
-            &format!(
-                r#"{{"id":"c1","method":"project.create","params":{{"path":"{}","name":"meta-survival"}}}}"#,
-                dir.path().display()
+            &request_line(
+                "c1",
+                "project.create",
+                serde_json::json!({
+                    "path": dir.path().display().to_string(),
+                    "name": "meta-survival",
+                }),
             ),
         );
 
@@ -352,9 +392,12 @@ mod tests {
         let mut c2 = core();
         let open_resp = process_line(
             &mut c2,
-            &format!(
-                r#"{{"id":"o1","method":"project.open","params":{{"path":"{}"}}}}"#,
-                dir.path().display()
+            &request_line(
+                "o1",
+                "project.open",
+                serde_json::json!({
+                    "path": dir.path().display().to_string(),
+                }),
             ),
         );
         assert!(open_resp.error.is_none());
