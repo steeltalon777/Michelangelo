@@ -94,26 +94,64 @@ pub struct BlenderArtifactDto {
 }
 
 /// Describes the capabilities of the configured Blender executable.
+///
+/// Wire compatibility: the Phase 2 fields keep their names and types. New
+/// fields are optional and omitted when unknown; `blender_version` is `null`
+/// when the binary/probe is unavailable (it used to be an empty string).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlenderCapabilitiesDto {
-    /// Blender version string (from `blender --version`).
-    pub blender_version: String,
+    /// Blender version string (e.g. `"Blender 5.2.3 LTS"`), `null` when unavailable.
+    #[serde(default)]
+    pub blender_version: Option<String>,
     /// Whether `bpy` is importable (i.e. headless background mode works).
     pub bpy_available: bool,
     /// List of safe worker operation names supported by the installed worker.
     pub supported_operations: Vec<String>,
     /// Whether the Blender binary was found at the configured path.
     pub binary_found: bool,
+    /// Python version bundled with Blender (from the worker capabilities probe).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_version: Option<String>,
+    /// Whether `bpy.ops.export_scene.gltf` is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gltf_export_available: Option<bool>,
+    /// Render engines actually available in the installed Blender.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_engines: Option<Vec<String>>,
+    /// Probe error text; only present when probing failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl BlenderCapabilitiesDto {
     /// Create an empty/unavailable capabilities descriptor.
     pub fn unavailable() -> Self {
         Self {
-            blender_version: String::new(),
+            blender_version: None,
             bpy_available: false,
             supported_operations: Vec::new(),
             binary_found: false,
+            python_version: None,
+            gltf_export_available: None,
+            render_engines: None,
+            error: None,
+        }
+    }
+
+    /// Create an unavailable descriptor that falls back to the static whitelist.
+    ///
+    /// Used when the binary or the capabilities probe is unavailable; the
+    /// static list keeps clients functional with a degraded capability set.
+    pub fn unavailable_with_static_fallback(binary_found: bool, error: impl Into<String>) -> Self {
+        Self {
+            blender_version: None,
+            bpy_available: false,
+            supported_operations: SAFE_WORKER_OPS.iter().map(|s| (*s).to_string()).collect(),
+            binary_found,
+            python_version: None,
+            gltf_export_available: None,
+            render_engines: None,
+            error: Some(error.into()),
         }
     }
 }
@@ -247,15 +285,39 @@ mod tests {
     #[test]
     fn test_blender_capabilities_serializes() {
         let caps = BlenderCapabilitiesDto {
-            blender_version: "4.0.2".into(),
+            blender_version: Some("Blender 5.2.3 LTS".into()),
             bpy_available: true,
             supported_operations: SAFE_WORKER_OPS.iter().map(|s| (*s).to_string()).collect(),
             binary_found: true,
+            python_version: Some("3.13.13".into()),
+            gltf_export_available: Some(true),
+            render_engines: Some(vec!["BLENDER_WORKBENCH".into()]),
+            error: None,
         };
         let json = serde_json::to_string(&caps).unwrap();
-        assert!(json.contains(r#""blender_version":"4.0.2""#));
+        assert!(json.contains(r#""blender_version":"Blender 5.2.3 LTS""#));
         assert!(json.contains(r#""bpy_available":true"#));
+        assert!(json.contains(r#""python_version":"3.13.13""#));
+        assert!(json.contains(r#""gltf_export_available":true"#));
+        assert!(json.contains(r#""render_engines":["BLENDER_WORKBENCH"]"#));
         assert!(json.contains(r#""create_box""#));
+        // `error` is omitted on success.
+        assert!(!json.contains(r#""error""#));
+    }
+
+    #[test]
+    fn test_blender_capabilities_unavailable_serializes_null_version() {
+        let caps = BlenderCapabilitiesDto::unavailable_with_static_fallback(false, "missing");
+        let json = serde_json::to_string(&caps).unwrap();
+        assert!(json.contains(r#""blender_version":null"#));
+        assert!(json.contains(r#""bpy_available":false"#));
+        assert!(json.contains(r#""binary_found":false"#));
+        assert!(json.contains(r#""error":"missing""#));
+        assert!(json.contains("create_box"));
+        // Optional probe-only fields are omitted rather than null.
+        assert!(!json.contains("python_version"));
+        assert!(!json.contains("gltf_export_available"));
+        assert!(!json.contains("render_engines"));
     }
 
     #[test]
@@ -263,8 +325,26 @@ mod tests {
         let caps = BlenderCapabilitiesDto::unavailable();
         assert!(!caps.binary_found);
         assert!(!caps.bpy_available);
-        assert!(caps.blender_version.is_empty());
+        assert!(caps.blender_version.is_none());
         assert!(caps.supported_operations.is_empty());
+        assert!(caps.error.is_none());
+    }
+
+    #[test]
+    fn test_blender_capabilities_backward_compatible_deserialization() {
+        // Phase 2 payload: no optional fields, string version.
+        let json = r#"{
+            "blender_version": "Blender 4.0.2",
+            "bpy_available": false,
+            "supported_operations": ["create_box"],
+            "binary_found": true
+        }"#;
+        let caps: BlenderCapabilitiesDto = serde_json::from_str(json).unwrap();
+        assert_eq!(caps.blender_version.as_deref(), Some("Blender 4.0.2"));
+        assert!(!caps.bpy_available);
+        assert!(caps.binary_found);
+        assert!(caps.python_version.is_none());
+        assert!(caps.error.is_none());
     }
 
     #[test]

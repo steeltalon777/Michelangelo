@@ -230,12 +230,8 @@ impl Scheduler {
         if !self.can_run() {
             return None;
         }
-        let mut job = self.queue.pop_front()?;
-        job.status = JobStatus::Running;
-        job.started_at = Some(now_iso8601());
-
-        let job_clone = job.clone();
-        self.running = Some(job);
+        let job = self.queue.pop_front()?;
+        let job_clone = self.mark_started(job);
 
         // Ignore send error — if the receiver is dropped we still move the job.
         let _ = self.event_tx.send(JobEvent::Started {
@@ -244,6 +240,46 @@ impl Scheduler {
         });
 
         Some(job_clone)
+    }
+
+    /// Start exactly the queued job with `job_id` (queued→running).
+    ///
+    /// Unlike the FIFO [`Self::dequeue`], this never starts a different job:
+    /// it fails if the id is not currently queued or if the single running slot
+    /// is occupied. Used by `blender.run_job(wait=true)` so a job can never be
+    /// hijacked by an earlier `wait=false` request.
+    pub fn dequeue_job(&mut self, job_id: &str) -> Result<JobState, String> {
+        if !self.can_run() {
+            return Err(format!(
+                "cannot start job {job_id}: another job is already running"
+            ));
+        }
+
+        let position = self
+            .queue
+            .iter()
+            .position(|job| job.id.0 == job_id)
+            .ok_or_else(|| format!("job {job_id} is not queued"))?;
+
+        // Emit the started event before mutating state so a closed event
+        // channel leaves the queue untouched.
+        let job_type = self.queue[position].job_type.clone();
+        self.send_event(JobEvent::Started {
+            job_id: job_id.to_string(),
+            job_type,
+        })?;
+
+        let job = self.queue.remove(position).expect("position checked");
+        Ok(self.mark_started(job))
+    }
+
+    /// Transition a popped job into the single running slot.
+    fn mark_started(&mut self, mut job: JobState) -> JobState {
+        job.status = JobStatus::Running;
+        job.started_at = Some(now_iso8601());
+        let snapshot = job.clone();
+        self.running = Some(job);
+        snapshot
     }
 
     /// Advance the running job to completed.
@@ -626,6 +662,100 @@ mod tests {
         // Second dequeue should return None (concurrency limit).
         assert!(scheduler.dequeue().is_none());
         assert_eq!(scheduler.queued_count(), 1);
+    }
+
+    // -- dequeue-by-id (job identity) --------------------------------------
+
+    #[test]
+    fn test_dequeue_job_starts_exact_job_not_fifo() {
+        let (mut scheduler, rx) = Scheduler::new();
+        let first = scheduler.enqueue("p1", "render").unwrap();
+        let second = scheduler.enqueue("p1", "export").unwrap();
+
+        let started = scheduler.dequeue_job(&second.0).unwrap();
+        assert_eq!(started.id.0, second.0);
+        assert_eq!(started.status, JobStatus::Running);
+        assert_eq!(scheduler.queued_count(), 1);
+        assert_eq!(
+            scheduler.get_job(&first.0).unwrap().status,
+            JobStatus::Queued
+        );
+        assert_eq!(
+            scheduler.get_job(&second.0).unwrap().status,
+            JobStatus::Running
+        );
+
+        let events: Vec<JobEvent> = rx.try_iter().collect();
+        let started_ids: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                JobEvent::Started { job_id, .. } => Some(job_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started_ids, vec![second.0.clone()]);
+    }
+
+    #[test]
+    fn test_dequeue_job_unknown_id_fails() {
+        let (mut scheduler, _rx) = Scheduler::new();
+        let error = scheduler.dequeue_job("missing-job").unwrap_err();
+        assert!(error.contains("not queued"));
+        assert!(scheduler.can_run());
+        assert_eq!(scheduler.queued_count(), 0);
+    }
+
+    #[test]
+    fn test_dequeue_job_fails_when_slot_busy() {
+        let (mut scheduler, _rx) = Scheduler::new();
+        let first = scheduler.enqueue("p1", "render").unwrap();
+        let second = scheduler.enqueue("p1", "export").unwrap();
+
+        scheduler.dequeue_job(&first.0).unwrap();
+        let error = scheduler.dequeue_job(&second.0).unwrap_err();
+        assert!(error.contains("already running"));
+        assert_eq!(
+            scheduler.get_job(&second.0).unwrap().status,
+            JobStatus::Queued
+        );
+        assert_eq!(
+            scheduler.get_job(&first.0).unwrap().status,
+            JobStatus::Running
+        );
+    }
+
+    #[test]
+    fn test_dequeue_job_does_not_hijack_earlier_queued_job() {
+        // Regression: a `wait=false` job A stays queued while a later
+        // `wait=true` job B starts, completes and emits its own identity.
+        let (mut scheduler, rx) = Scheduler::new();
+        let a = scheduler.enqueue_with_id("job_a", "p1", "type_a").unwrap();
+        let b = scheduler.enqueue_with_id("job_b", "p1", "type_b").unwrap();
+
+        scheduler.dequeue_job(&b.0).unwrap();
+        scheduler.complete(&b.0, vec![]).unwrap();
+
+        assert_eq!(scheduler.get_job(&a.0).unwrap().status, JobStatus::Queued);
+        assert_eq!(
+            scheduler.get_job(&b.0).unwrap().status,
+            JobStatus::Completed
+        );
+        assert!(scheduler.can_run());
+        assert_eq!(scheduler.queued_count(), 1);
+
+        let events: Vec<JobEvent> = rx.try_iter().collect();
+        let completed_ids: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                JobEvent::Completed { job_id, .. } => Some(job_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completed_ids, vec![b.0.clone()]);
+
+        // The earlier queued job can still be started FIFO afterwards.
+        let next = scheduler.dequeue().unwrap();
+        assert_eq!(next.id.0, a.0);
     }
 
     #[test]

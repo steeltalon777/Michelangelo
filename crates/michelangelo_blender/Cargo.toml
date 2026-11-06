@@ -10,5 +10,9 @@ serde_json = "1"
 michelangelo_protocol = { path = "../michelangelo_protocol" }
 michelangelo_workspace = { path = "../michelangelo_workspace" }
 
+# Unix-only: used to SIGKILL the whole Blender process tree on timeout.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"

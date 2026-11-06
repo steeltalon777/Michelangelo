@@ -3,10 +3,15 @@
 Michelangelo Blender Worker — safe operation executor.
 
 Invocation:
-    blender --background --python worker.py -- <job.json> <result.json>
+    blender --background --factory-startup --python worker.py -- <job.json> <result.json>
+    blender --background --factory-startup --python worker.py -- --capabilities
 
 Reads a strict JSON job spec, executes safe operations via bpy,
 and writes a JSON result file. All progress goes to stderr.
+
+`--capabilities` is a lightweight mode used by the Rust adapter to probe what
+the installed worker/Blender actually supports; it prints exactly one
+`MICHELANGELO_CAPABILITIES:<json>` line to stdout and exits 0.
 """
 
 import json
@@ -196,6 +201,19 @@ OPERATIONS = {
 
 SAFE_OPS = set(OPERATIONS.keys())
 
+# Marker line used by the Rust adapter capabilities probe.
+CAPABILITIES_MARKER = "MICHELANGELO_CAPABILITIES:"
+
+# Candidate render engines to probe, in reporting order. Only engines that the
+# installed Blender actually accepts are reported; BLENDER_WORKBENCH is the
+# supported engine for this project's TZ.
+RENDER_ENGINE_CANDIDATES = (
+    "BLENDER_WORKBENCH",
+    "BLENDER_EEVEE",
+    "BLENDER_EEVEE_NEXT",
+    "CYCLES",
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -244,6 +262,50 @@ def _ensure_workspace_dirs(workspace_root):
 
 
 # ---------------------------------------------------------------------------
+# Capabilities probe mode
+# ---------------------------------------------------------------------------
+
+def _detect_render_engines(bpy):
+    """Return the render engines accepted by the current Blender build.
+
+    Assigning `scene.render.engine` raises for engines that are not
+    registered; assigning is the only reliable cross-version probe.
+    """
+    scene = bpy.context.scene
+    previous = scene.render.engine
+    available = []
+    for engine in RENDER_ENGINE_CANDIDATES:
+        try:
+            scene.render.engine = engine
+        except Exception:  # noqa: BLE001 - invalid enum / missing engine
+            continue
+        if scene.render.engine == engine:
+            available.append(engine)
+    try:
+        scene.render.engine = previous
+    except Exception:  # noqa: BLE001 - best effort restore
+        pass
+    return available
+
+
+def _emit_capabilities():
+    """Print one machine-readable capabilities line to stdout and exit 0."""
+    import platform
+
+    import bpy
+
+    payload = {
+        "operations": sorted(OPERATIONS.keys()),
+        "blender_version": f"Blender {bpy.app.version_string}",
+        "python_version": platform.python_version(),
+        "gltf_export_available": hasattr(bpy.ops.export_scene, "gltf"),
+        "render_engines": _detect_render_engines(bpy),
+    }
+    sys.stdout.write(CAPABILITIES_MARKER + json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -255,6 +317,11 @@ def main():
     except ValueError:
         # No -- separator; fall back to last two args
         args = sys.argv[1:]
+
+    # Capabilities probe mode: must run before any job/result file handling.
+    if "--capabilities" in args:
+        _emit_capabilities()
+        return
 
     if len(args) < 2:
         _log("Usage: blender --background --python worker.py -- <job.json> <result.json>")
