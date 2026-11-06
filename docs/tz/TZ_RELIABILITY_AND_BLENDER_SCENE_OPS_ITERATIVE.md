@@ -388,6 +388,7 @@ and the TZ, and returns a verdict; verdict is recorded in section 8.
 | Iteration | Commit | Reviewer route/verdict | Notes |
 |---|---|---|---|
 | IT-1 attempt 1 | `95ebeed` | Separate read-only context (same model family — Windows reviewer route broken: missing `mcp__*_warehouse__` shields/strict `bash` allow-list): **YELLOW** | P1-1 unbounded `blender --version` in capabilities probe; P2: terminal event emitted before transition success, queued failure scheduler/storage split, adapter spec-path rule inconsistent, TZ hygiene. Rework ordered. |
+| IT-1 attempt 2 | `8311ef7` | Same separate read-only context: **GREEN** | P1-1 fixed (bounded `--version` with kill-tree); terminal events after successful transitions; queued→failed identity; spec-path rules aligned; missing tests added; `finished_at` lifecycle persistence added (Lead-found). Residual P2 (version parsed from output tail; `taskkill` unbounded in the timeout path) accepted as non-blocking and recorded in the review. |
 
 Reviewer-route note: on this Windows profile the `worker` agent preset shield allows the
 unavailable `bash` tool, and the `researcher`/`reviewer` shields reference MCP prefixes for
@@ -399,7 +400,7 @@ available model family, and this limitation is reported to the user.
 
 - [x] IT-1 implementation complete
 - [x] IT-1 verification ladder green (Windows) — Lead-run, see review evidence
-- [ ] IT-1 independent review green — rework after YELLOW
+- [x] IT-1 independent review green — attempt 2 (`8311ef7`) GREEN
 - [ ] IT-2 implementation complete
 - [ ] IT-2 verification ladder green + real Blender op smoke
 - [ ] IT-2 independent review green
