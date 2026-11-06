@@ -234,8 +234,11 @@ impl Storage {
 
     /// Update a job's status, and optionally its progress percentage and message.
     ///
-    /// If the new status is `"running"` and `started_at` is still NULL, it is set
-    /// to the current timestamp.
+    /// Lifecycle timestamps are managed here (single statement/transaction):
+    /// - `"running"`: sets `started_at` if still NULL (never overwrites it);
+    /// - `"completed"` / `"failed"` / `"cancelled"`: sets `finished_at` if still
+    ///   NULL (a later terminal update never overwrites the first finish time);
+    /// - `"queued"` leaves both timestamps NULL.
     pub fn update_job_status(
         &self,
         job_id: &str,
@@ -251,7 +254,8 @@ impl Storage {
                     status        = ?1,
                     progress_pct  = COALESCE(?2, progress_pct),
                     message       = COALESCE(?3, message),
-                    started_at    = CASE WHEN ?1 = 'running' AND started_at IS NULL THEN ?4 ELSE started_at END
+                    started_at    = CASE WHEN ?1 = 'running' AND started_at IS NULL THEN ?4 ELSE started_at END,
+                    finished_at   = CASE WHEN ?1 IN ('completed', 'failed', 'cancelled') AND finished_at IS NULL THEN ?4 ELSE finished_at END
                  WHERE id = ?5",
                 rusqlite::params![status, pct, message, now, job_id],
             )
@@ -534,21 +538,107 @@ mod tests {
 
         let job_id = storage.create_job("proj1", "render").unwrap();
 
-        // transition to running — sets started_at
-        storage
-            .update_job_status(&job_id, "running", None, None)
-            .unwrap();
+        // initial queued job has no lifecycle timestamps
         let job = storage.get_job(&job_id).unwrap().unwrap();
-        assert_eq!(job["status"].as_str().unwrap(), "running");
-        assert!(!job["started_at"].as_str().unwrap_or("").is_empty());
+        assert!(job["started_at"].is_null());
+        assert!(job["finished_at"].is_null());
 
-        // second running update — started_at stays set
+        // transition to running — sets started_at, leaves finished_at NULL
         storage
             .update_job_status(&job_id, "running", None, None)
             .unwrap();
         let job = storage.get_job(&job_id).unwrap().unwrap();
         assert_eq!(job["status"].as_str().unwrap(), "running");
         assert!(!job["started_at"].as_str().unwrap_or("").is_empty());
+        assert!(job["finished_at"].is_null());
+
+        // second running update — started_at stays set, finished_at stays NULL
+        storage
+            .update_job_status(&job_id, "running", None, None)
+            .unwrap();
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+        assert_eq!(job["status"].as_str().unwrap(), "running");
+        assert!(!job["started_at"].as_str().unwrap_or("").is_empty());
+        assert!(job["finished_at"].is_null());
+    }
+
+    #[test]
+    fn test_terminal_statuses_set_finished_at_once() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        for terminal in ["completed", "failed", "cancelled"] {
+            let job_id = storage.create_job("proj1", "render").unwrap();
+            storage
+                .update_job_status(&job_id, "running", None, None)
+                .unwrap();
+            storage
+                .update_job_status(&job_id, terminal, None, None)
+                .unwrap();
+
+            let job = storage.get_job(&job_id).unwrap().unwrap();
+            assert_eq!(job["status"].as_str().unwrap(), terminal);
+            let finished = job["finished_at"].as_str().unwrap_or_default().to_string();
+            assert!(!finished.is_empty(), "{terminal}: finished_at must be set");
+            assert!(
+                !job["started_at"].as_str().unwrap_or_default().is_empty(),
+                "{terminal}: started_at must stay set"
+            );
+
+            // get_job and list_jobs expose the same persisted finish time.
+            let jobs = storage.list_jobs("proj1").unwrap();
+            let listed = jobs
+                .iter()
+                .find(|job| job["id"].as_str() == Some(job_id.as_str()))
+                .expect("job in list");
+            assert_eq!(listed["finished_at"].as_str().unwrap_or_default(), finished);
+            assert_eq!(
+                listed["started_at"].as_str().unwrap_or_default(),
+                job["started_at"].as_str().unwrap_or_default()
+            );
+
+            // A later terminal update must not overwrite the first finish time.
+            storage
+                .conn
+                .execute(
+                    "UPDATE jobs SET finished_at = '2000-01-01T00:00:00Z' WHERE id = ?1",
+                    rusqlite::params![job_id],
+                )
+                .unwrap();
+            storage
+                .update_job_status(&job_id, "failed", None, None)
+                .unwrap();
+            let job = storage.get_job(&job_id).unwrap().unwrap();
+            assert_eq!(
+                job["finished_at"].as_str().unwrap(),
+                "2000-01-01T00:00:00Z",
+                "{terminal}: finished_at was overwritten by a later terminal update"
+            );
+        }
+    }
+
+    #[test]
+    fn test_queued_status_leaves_lifecycle_timestamps_null() {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::open(&dir.path().join("j.db")).unwrap();
+
+        let job_id = storage.create_job("proj1", "render").unwrap();
+        storage
+            .update_job_status(&job_id, "queued", None, None)
+            .unwrap();
+
+        let job = storage.get_job(&job_id).unwrap().unwrap();
+        assert_eq!(job["status"].as_str().unwrap(), "queued");
+        assert!(job["started_at"].is_null());
+        assert!(job["finished_at"].is_null());
+
+        let jobs = storage.list_jobs("proj1").unwrap();
+        let listed = jobs
+            .iter()
+            .find(|job| job["id"].as_str() == Some(job_id.as_str()))
+            .expect("job in list");
+        assert!(listed["started_at"].is_null());
+        assert!(listed["finished_at"].is_null());
     }
 
     #[test]

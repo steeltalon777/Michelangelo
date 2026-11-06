@@ -277,7 +277,7 @@ fn handle_blender_run_job(core: &mut CoreService, cmd: &CommandEnvelope) -> Resp
         .enqueue_with_id(&job_id, &project.id, &spec.job_type)
     {
         let message = format!("failed to enqueue job: {e}");
-        return persistence_error_response(core, cmd, &job_id, &message);
+        return persistence_error_response(core, cmd, &job_id, &spec.job_type, &message);
     }
 
     // Step 3: emit the queued event.
@@ -306,7 +306,7 @@ fn handle_blender_run_job(core: &mut CoreService, cmd: &CommandEnvelope) -> Resp
     // earlier wait=false job — TZ 5.2).
     if let Err(e) = core.scheduler_mut().dequeue_job(&job_id) {
         let message = format!("failed to start job: {e}");
-        return persistence_error_response(core, cmd, &job_id, &message);
+        return persistence_error_response(core, cmd, &job_id, &spec.job_type, &message);
     }
 
     core.emit_event(EventEnvelope::new(
@@ -324,7 +324,7 @@ fn handle_blender_run_job(core: &mut CoreService, cmd: &CommandEnvelope) -> Resp
         };
         if let Err(e) = storage.update_job_status(&job_id, "running", None, None) {
             let message = format!("failed to update job status: {e}");
-            return persistence_error_response(core, cmd, &job_id, &message);
+            return persistence_error_response(core, cmd, &job_id, &spec.job_type, &message);
         }
     }
 
@@ -354,15 +354,17 @@ fn handle_blender_run_job(core: &mut CoreService, cmd: &CommandEnvelope) -> Resp
 
 /// Persist a failure and return an `InternalError` response.
 ///
-/// Used when a scheduler/storage transition itself fails; the original error
-/// is preserved in the response text and the failure is persisted best effort.
+/// Used when a scheduler/storage transition itself fails; the failure state is
+/// persisted where legal and exactly one `job.failed` event is emitted for the
+/// same job id when persistence succeeds.
 fn persistence_error_response(
     core: &mut CoreService,
     cmd: &CommandEnvelope,
     job_id: &str,
+    job_type: &str,
     message: &str,
 ) -> ResponseEnvelope {
-    let transition_problems = persist_failure(core, job_id, message);
+    let transition_problems = persist_failure(core, job_id, job_type, message);
     if transition_problems.is_empty() {
         internal_error(cmd, message)
     } else {
@@ -376,27 +378,49 @@ fn persistence_error_response(
     }
 }
 
-/// Mark whatever scheduler/storage state exists for `job_id` as failed.
+/// Terminal-fail a job whose record exists but which never reached a normal
+/// terminal transition (enqueue/start/storage failure).
 ///
-/// Returns a list of transition errors (empty on success). Queued jobs are
-/// cancelled in the scheduler because a queued job cannot be failed in place.
-fn persist_failure(core: &mut CoreService, job_id: &str, message: &str) -> Vec<String> {
-    let mut problems = Vec::new();
-    let status = core.scheduler().get_job(job_id).map(|job| job.status);
-    match status {
-        Some(JobStatus::Running) => {
-            if let Err(e) = core.scheduler_mut().fail(job_id, message) {
-                problems.push(format!("scheduler.fail: {e}"));
+/// Order is storage first, then scheduler (`running → failed`, or
+/// `queued → failed` via `Scheduler::fail_queued`), then exactly one core
+/// `job.failed` event — only if both transitions succeeded. Terminal identity is
+/// therefore identical in scheduler, storage and events (`failed`, same id).
+/// Returns transition errors (empty on success).
+fn persist_failure(
+    core: &mut CoreService,
+    job_id: &str,
+    job_type: &str,
+    message: &str,
+) -> Vec<String> {
+    let mut problems = mark_storage_failed(core, job_id, message, None);
+    if problems.is_empty() {
+        match core.scheduler().get_job(job_id).map(|job| job.status) {
+            Some(JobStatus::Running) => {
+                if let Err(e) = core.scheduler_mut().fail(job_id, message) {
+                    problems.push(format!("scheduler.fail: {e}"));
+                }
             }
-        }
-        Some(JobStatus::Queued) => {
-            if let Err(e) = core.scheduler_mut().cancel(job_id) {
-                problems.push(format!("scheduler.cancel: {e}"));
+            Some(JobStatus::Queued) => {
+                if let Err(e) = core.scheduler_mut().fail_queued(job_id, message) {
+                    problems.push(format!("scheduler.fail_queued: {e}"));
+                }
             }
+            _ => {}
         }
-        _ => {}
     }
-    problems.extend(mark_storage_failed(core, job_id, message, None));
+
+    if problems.is_empty() {
+        core.emit_event(EventEnvelope::new(
+            JOB_FAILED,
+            serde_json::json!({
+                "job_id": job_id,
+                "job_type": job_type,
+                "status": "failed",
+                "error": message,
+            }),
+        ));
+    }
+
     problems
 }
 
@@ -445,22 +469,28 @@ fn finalize_completed(
         })
         .collect();
 
-    let mut problems = Vec::new();
-    if let Err(e) = core.scheduler_mut().complete(job_id, artifacts.clone()) {
-        problems.push(format!("scheduler.complete: {e}"));
-    }
-    match core.storage_mut() {
-        Some(storage) => {
-            if let Err(e) =
-                storage.update_job_status(job_id, "completed", Some(100), Some("job completed"))
-            {
-                problems.push(format!("storage.status: {e}"));
-            }
-            if let Err(e) = storage.update_job_output(job_id, output_json.as_deref(), None, None) {
-                problems.push(format!("storage.output: {e}"));
-            }
+    // P2-1: persist storage first, then the scheduler transition; the terminal
+    // protocol event is emitted only when both transitions succeeded.
+    let storage_problems = persist_terminal_storage(
+        core,
+        job_id,
+        "completed",
+        Some(100),
+        Some("job completed"),
+        output_json.as_deref(),
+        None,
+    );
+    let problems = if storage_problems.is_empty() {
+        match core.scheduler_mut().complete(job_id, artifacts.clone()) {
+            Ok(()) => Vec::new(),
+            Err(e) => vec![format!("scheduler.complete: {e}")],
         }
-        None => problems.push("storage not initialized".to_string()),
+    } else {
+        storage_problems
+    };
+
+    if !problems.is_empty() {
+        return terminal_transition_error(core, cmd, job_id, "completed", &problems);
     }
 
     core.emit_event(EventEnvelope::new(
@@ -473,31 +503,15 @@ fn finalize_completed(
         }),
     ));
 
-    if problems.is_empty() {
-        let final_job = core
-            .storage()
-            .and_then(|storage| storage.get_job(job_id).ok().flatten());
-        return ResponseEnvelope::success(
-            &cmd.id,
-            serde_json::json!({
-                "job": final_job,
-                "status": "completed",
-            }),
-        );
-    }
-
-    let message = format!(
-        "job completed but terminal state could not be persisted consistently: {}",
-        problems.join("; ")
-    );
-    let mut persist_problems = mark_storage_failed(core, job_id, &message, None);
-    persist_problems.extend(problems);
-    internal_error(
-        cmd,
-        &format!(
-            "{message}; transition errors: {}",
-            persist_problems.join("; ")
-        ),
+    let final_job = core
+        .storage()
+        .and_then(|storage| storage.get_job(job_id).ok().flatten());
+    ResponseEnvelope::success(
+        &cmd.id,
+        serde_json::json!({
+            "job": final_job,
+            "status": "completed",
+        }),
     )
 }
 
@@ -509,16 +523,28 @@ fn finalize_failed(
     error_message: &str,
     output_json: Option<String>,
 ) -> ResponseEnvelope {
-    let mut problems = Vec::new();
-    if let Err(e) = core.scheduler_mut().fail(job_id, error_message) {
-        problems.push(format!("scheduler.fail: {e}"));
-    }
-    problems.extend(mark_storage_failed(
+    // P2-1: storage first, scheduler second, event only if both succeeded.
+    let storage_problems = persist_terminal_storage(
         core,
         job_id,
-        error_message,
+        "failed",
+        None,
+        Some(error_message),
         output_json.as_deref(),
-    ));
+        Some(error_message),
+    );
+    let problems = if storage_problems.is_empty() {
+        match core.scheduler_mut().fail(job_id, error_message) {
+            Ok(()) => Vec::new(),
+            Err(e) => vec![format!("scheduler.fail: {e}")],
+        }
+    } else {
+        storage_problems
+    };
+
+    if !problems.is_empty() {
+        return terminal_transition_error(core, cmd, job_id, "failed", &problems);
+    }
 
     core.emit_event(EventEnvelope::new(
         JOB_FAILED,
@@ -533,25 +559,14 @@ fn finalize_failed(
     let final_job = core
         .storage()
         .and_then(|storage| storage.get_job(job_id).ok().flatten());
-
-    if problems.is_empty() {
-        ResponseEnvelope::success(
-            &cmd.id,
-            serde_json::json!({
-                "job": final_job,
-                "status": "failed",
-                "error": error_message,
-            }),
-        )
-    } else {
-        internal_error(
-            cmd,
-            &format!(
-                "job failed ({error_message}) but state could not be persisted consistently: {}",
-                problems.join("; ")
-            ),
-        )
-    }
+    ResponseEnvelope::success(
+        &cmd.id,
+        serde_json::json!({
+            "job": final_job,
+            "status": "failed",
+            "error": error_message,
+        }),
+    )
 }
 
 fn finalize_cancelled(
@@ -561,22 +576,27 @@ fn finalize_cancelled(
     job_id: &str,
     output_json: Option<String>,
 ) -> ResponseEnvelope {
-    let mut problems = Vec::new();
-    if let Err(e) = core.scheduler_mut().cancel(job_id) {
-        problems.push(format!("scheduler.cancel: {e}"));
-    }
-    match core.storage_mut() {
-        Some(storage) => {
-            if let Err(e) =
-                storage.update_job_status(job_id, "cancelled", None, Some("job cancelled"))
-            {
-                problems.push(format!("storage.status: {e}"));
-            }
-            if let Err(e) = storage.update_job_output(job_id, output_json.as_deref(), None, None) {
-                problems.push(format!("storage.output: {e}"));
-            }
+    // P2-1: storage first, scheduler second, event only if both succeeded.
+    let storage_problems = persist_terminal_storage(
+        core,
+        job_id,
+        "cancelled",
+        None,
+        Some("job cancelled"),
+        output_json.as_deref(),
+        None,
+    );
+    let problems = if storage_problems.is_empty() {
+        match core.scheduler_mut().cancel(job_id) {
+            Ok(()) => Vec::new(),
+            Err(e) => vec![format!("scheduler.cancel: {e}")],
         }
-        None => problems.push("storage not initialized".to_string()),
+    } else {
+        storage_problems
+    };
+
+    if !problems.is_empty() {
+        return terminal_transition_error(core, cmd, job_id, "cancelled", &problems);
     }
 
     core.emit_event(EventEnvelope::new(
@@ -590,24 +610,13 @@ fn finalize_cancelled(
     let final_job = core
         .storage()
         .and_then(|storage| storage.get_job(job_id).ok().flatten());
-
-    if problems.is_empty() {
-        ResponseEnvelope::success(
-            &cmd.id,
-            serde_json::json!({
-                "job": final_job,
-                "status": "cancelled",
-            }),
-        )
-    } else {
-        internal_error(
-            cmd,
-            &format!(
-                "job cancelled but state could not be persisted consistently: {}",
-                problems.join("; ")
-            ),
-        )
-    }
+    ResponseEnvelope::success(
+        &cmd.id,
+        serde_json::json!({
+            "job": final_job,
+            "status": "cancelled",
+        }),
+    )
 }
 
 fn finalize_adapter_error(
@@ -617,11 +626,28 @@ fn finalize_adapter_error(
     job_id: &str,
     error_message: &str,
 ) -> ResponseEnvelope {
-    let mut problems = Vec::new();
-    if let Err(e) = core.scheduler_mut().fail(job_id, error_message) {
-        problems.push(format!("scheduler.fail: {e}"));
+    // P2-1: storage first, scheduler second, event only if both succeeded.
+    let storage_problems = persist_terminal_storage(
+        core,
+        job_id,
+        "failed",
+        None,
+        Some(error_message),
+        None,
+        Some(error_message),
+    );
+    let problems = if storage_problems.is_empty() {
+        match core.scheduler_mut().fail(job_id, error_message) {
+            Ok(()) => Vec::new(),
+            Err(e) => vec![format!("scheduler.fail: {e}")],
+        }
+    } else {
+        storage_problems
+    };
+
+    if !problems.is_empty() {
+        return terminal_transition_error(core, cmd, job_id, "failed", &problems);
     }
-    problems.extend(mark_storage_failed(core, job_id, error_message, None));
 
     core.emit_event(EventEnvelope::new(
         JOB_FAILED,
@@ -636,23 +662,83 @@ fn finalize_adapter_error(
     let final_job = core
         .storage()
         .and_then(|storage| storage.get_job(job_id).ok().flatten());
+    ResponseEnvelope::success(
+        &cmd.id,
+        serde_json::json!({
+            "job": final_job,
+            "status": "failed",
+            "error": error_message,
+        }),
+    )
+}
 
-    if problems.is_empty() {
-        ResponseEnvelope::success(
-            &cmd.id,
-            serde_json::json!({
-                "job": final_job,
-                "status": "failed",
-                "error": error_message,
-            }),
-        )
+/// Persist a terminal status (and optional output JSON / error) in storage.
+///
+/// Returns transition errors; the caller only performs the scheduler transition
+/// and emits the terminal event when this is empty.
+fn persist_terminal_storage(
+    core: &mut CoreService,
+    job_id: &str,
+    status: &str,
+    progress_pct: Option<u8>,
+    message: Option<&str>,
+    output_json: Option<&str>,
+    error: Option<&str>,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    match core.storage_mut() {
+        Some(storage) => {
+            if let Err(e) = storage.update_job_status(job_id, status, progress_pct, message) {
+                problems.push(format!("storage.status: {e}"));
+            }
+            if let Err(e) = storage.update_job_output(job_id, output_json, error, None) {
+                problems.push(format!("storage.output: {e}"));
+            }
+        }
+        None => problems.push("storage not initialized".to_string()),
+    }
+    problems
+}
+
+/// Handle a failed terminal transition.
+///
+/// Recovers to `failed` where legal (scheduler running/queued job, storage),
+/// emits **no** terminal protocol event that could contradict the persisted
+/// state, and returns `InternalError` naming the inconsistency.
+fn terminal_transition_error(
+    core: &mut CoreService,
+    cmd: &CommandEnvelope,
+    job_id: &str,
+    intended_status: &str,
+    problems: &[String],
+) -> ResponseEnvelope {
+    let message = format!(
+        "could not persist terminal state '{intended_status}' for job {job_id}: {}",
+        problems.join("; ")
+    );
+
+    let mut recovery = Vec::new();
+    match core.scheduler().get_job(job_id).map(|job| job.status) {
+        Some(JobStatus::Running) => {
+            if let Err(e) = core.scheduler_mut().fail(job_id, &message) {
+                recovery.push(format!("scheduler.fail: {e}"));
+            }
+        }
+        Some(JobStatus::Queued) => {
+            if let Err(e) = core.scheduler_mut().fail_queued(job_id, &message) {
+                recovery.push(format!("scheduler.fail_queued: {e}"));
+            }
+        }
+        _ => {}
+    }
+    recovery.extend(mark_storage_failed(core, job_id, &message, None));
+
+    if recovery.is_empty() {
+        internal_error(cmd, &message)
     } else {
         internal_error(
             cmd,
-            &format!(
-                "adapter error ({error_message}) but state could not be persisted consistently: {}",
-                problems.join("; ")
-            ),
+            &format!("{message}; recovery errors: {}", recovery.join("; ")),
         )
     }
 }
@@ -941,20 +1027,10 @@ fn map_workspace_error(err: &WorkspaceError) -> (ErrorCode, String) {
 mod tests {
     use super::*;
     use crate::service::CoreService;
+    use michelangelo_blender::HeadlessBlenderAdapter;
     use serde_json::json;
     use std::sync::mpsc::Receiver;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-
-    /// Serializes tests that mutate process-wide environment variables
-    /// (`BLENDER_BIN`) so the adapter is deterministically configured.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     fn handler_for(router: &Router, method: &str) -> Option<Handler> {
         router.find(method)
@@ -965,20 +1041,25 @@ mod tests {
         svc
     }
 
-    /// Build a CoreService whose Blender adapter points at a deterministic
-    /// fake executable. The fake script's TempDir is returned because it must
-    /// stay alive while jobs run.
-    fn fake_core(mode: &str) -> (CoreService, Receiver<EventEnvelope>, TempDir) {
-        let _guard = env_guard();
+    /// Install a deterministic fake Blender adapter through the test seam
+    /// (no process-wide `BLENDER_BIN` mutation). The fake script's TempDir is
+    /// returned because it must stay alive while jobs run.
+    fn install_fake_adapter(core: &mut CoreService, mode: &str) -> TempDir {
         let fake_dir = TempDir::new().unwrap();
         let fake = michelangelo_blender::create_fake_blender(fake_dir.path(), mode);
-        let previous = std::env::var("BLENDER_BIN").ok();
-        std::env::set_var("BLENDER_BIN", &fake);
-        let (core, rx) = CoreService::new();
-        match previous {
-            Some(value) => std::env::set_var("BLENDER_BIN", value),
-            None => std::env::remove_var("BLENDER_BIN"),
-        }
+        let worker = HeadlessBlenderAdapter::new().worker_script().to_path_buf();
+        core.set_blender_adapter(HeadlessBlenderAdapter::with_config(
+            fake.to_string_lossy().to_string(),
+            worker,
+        ));
+        fake_dir
+    }
+
+    /// Build a CoreService whose Blender adapter points at a deterministic
+    /// fake executable via the test seam.
+    fn fake_core(mode: &str) -> (CoreService, Receiver<EventEnvelope>, TempDir) {
+        let (mut core, rx) = CoreService::new();
+        let fake_dir = install_fake_adapter(&mut core, mode);
         (core, rx, fake_dir)
     }
 
@@ -1127,7 +1208,8 @@ mod tests {
 
     #[test]
     fn test_handler_blender_capabilities() {
-        let mut core = core();
+        // Deterministic adapter via the test seam (no process-wide BLENDER_BIN).
+        let (mut core, _rx, _fake_dir) = fake_core("success");
         let resp = core.handle_command(&CommandEnvelope {
             id: "b1".into(),
             method: method::BLENDER_GET_CAPABILITIES.into(),
@@ -1140,33 +1222,24 @@ mod tests {
         );
 
         let caps = resp.result.unwrap();
+        assert_eq!(caps["binary_found"], json!(true));
+        assert_eq!(caps["bpy_available"], json!(true));
+        assert_eq!(caps["blender_version"], json!("Blender fake 0.0.0"));
+        assert_eq!(caps["python_version"], json!("3.13.0"));
+        assert_eq!(caps["gltf_export_available"], json!(true));
+        assert!(
+            caps["render_engines"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("BLENDER_WORKBENCH")),
+            "render_engines: {}",
+            caps["render_engines"]
+        );
         let ops = caps["supported_operations"]
             .as_array()
             .expect("supported_operations must be an array");
-        assert!(
-            !ops.is_empty(),
-            "static fallback must list at least create_box"
-        );
         assert!(ops.iter().any(|op| op == "create_box"));
-        assert!(caps["binary_found"].is_boolean());
-        assert!(caps["bpy_available"].is_boolean());
-        assert!(
-            caps.get("blender_version").is_some(),
-            "blender_version must be present (null when unavailable)"
-        );
-
-        if caps["bpy_available"] == json!(false) {
-            // Degraded path: either the binary is missing or the probe failed.
-            assert!(
-                caps["error"].is_string(),
-                "unavailable capabilities must report an error"
-            );
-        } else {
-            assert_eq!(caps["binary_found"], json!(true));
-            assert!(caps.get("error").is_none());
-            assert!(caps["python_version"].is_string());
-            assert!(caps["render_engines"].is_array());
-        }
+        assert!(caps.get("error").is_none());
     }
 
     #[test]
@@ -1533,14 +1606,12 @@ mod tests {
 
     #[test]
     fn test_handler_blender_capabilities_missing_binary_does_not_hang() {
-        let _guard = env_guard();
-        let previous = std::env::var("BLENDER_BIN").ok();
-        std::env::set_var("BLENDER_BIN", "nonexistent_blender_it1_xyzzy");
+        let worker = HeadlessBlenderAdapter::new().worker_script().to_path_buf();
         let (mut core, _rx) = CoreService::new();
-        match previous {
-            Some(value) => std::env::set_var("BLENDER_BIN", value),
-            None => std::env::remove_var("BLENDER_BIN"),
-        }
+        core.set_blender_adapter(HeadlessBlenderAdapter::with_config(
+            "nonexistent_blender_it1_xyzzy",
+            worker,
+        ));
 
         let started = std::time::Instant::now();
         let resp = core.handle_command(&CommandEnvelope {
@@ -1563,5 +1634,411 @@ mod tests {
             caps["supported_operations"].as_array().unwrap().len(),
             michelangelo_protocol::SAFE_WORKER_OPS.len()
         );
+    }
+
+    #[test]
+    fn test_handler_blender_capabilities_version_hang_is_bounded() {
+        let fake_dir = TempDir::new().unwrap();
+        let fake = michelangelo_blender::create_fake_blender(fake_dir.path(), "version_hang");
+        let worker = HeadlessBlenderAdapter::new().worker_script().to_path_buf();
+        let (mut core, _rx) = CoreService::new();
+        core.set_blender_adapter(
+            HeadlessBlenderAdapter::with_config(fake.to_string_lossy().to_string(), worker)
+                .with_version_timeout(200),
+        );
+
+        let started = std::time::Instant::now();
+        let resp = core.handle_command(&CommandEnvelope {
+            id: "caps-version-hang".into(),
+            method: method::BLENDER_GET_CAPABILITIES.into(),
+            params: json!({}),
+        });
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "version-hang capabilities request must be bounded, took {elapsed:?}"
+        );
+        assert!(resp.error.is_none(), "response: {:?}", resp.error);
+
+        let caps = resp.result.unwrap();
+        // The binary exists (it just hung); the probe reports degraded caps.
+        assert_eq!(caps["binary_found"], json!(true));
+        assert_eq!(caps["bpy_available"], json!(false));
+        assert!(caps["error"].is_string());
+        assert_eq!(
+            caps["supported_operations"].as_array().unwrap().len(),
+            michelangelo_protocol::SAFE_WORKER_OPS.len()
+        );
+    }
+
+    // -- IT-1 rework: internal failure identity + adapter-error mapping -------
+
+    #[test]
+    fn test_handler_queued_job_failure_keeps_terminal_identity() {
+        let (mut core, rx, _fake_dir) = fake_core("success");
+        let project_dir = TempDir::new().unwrap();
+        create_project(&mut core, &project_dir, "queued-failure-identity");
+        let project_id = core.current_project().unwrap().id.clone();
+
+        // Occupy the single running slot with a foreign job type.
+        core.scheduler_mut()
+            .enqueue_with_id("blocker-job", &project_id, "blocker_type")
+            .unwrap();
+        core.scheduler_mut().dequeue_job("blocker-job").unwrap();
+
+        // wait=true job of a different type: enqueue succeeds, dequeue fails
+        // because the slot is busy -> internal queued-failure path.
+        let resp = run_blender_job(
+            &mut core,
+            json!({
+                "job_type": "victim_type",
+                "wait": true,
+                "spec": {"operations": [{"op": "create_box", "name": "x", "size": [1.0, 1.0, 1.0]}]}
+            }),
+        );
+        let error = resp
+            .error
+            .expect("busy slot must yield an InternalError response");
+        assert_eq!(error.code, ErrorCode::InternalError);
+        assert!(
+            error.message.contains("another job is already running"),
+            "unexpected error: {}",
+            error.message
+        );
+
+        // Storage and scheduler terminal status must both be `failed` for the
+        // same job id (never scheduler=cancelled vs storage=failed).
+        let failed_job = {
+            let jobs = core.storage().unwrap().list_jobs(&project_id).unwrap();
+            jobs.into_iter()
+                .find(|job| job["status"] == json!("failed"))
+                .expect("storage must persist the failed job")
+        };
+        let failed_id = failed_job["id"]
+            .as_str()
+            .expect("failed job id")
+            .to_string();
+        assert!(
+            failed_job["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("another job is already running"),
+            "storage error: {}",
+            failed_job["error"]
+        );
+        let scheduler_job = core
+            .scheduler()
+            .get_job(&failed_id)
+            .expect("scheduler must track the failed job");
+        assert_eq!(
+            scheduler_job.status,
+            JobStatus::Failed,
+            "queued job must terminal-fail, not cancel"
+        );
+        assert_eq!(core.scheduler().queued_count(), 0);
+
+        // Exactly one terminal event, for the failed job id, status failed.
+        let events: Vec<EventEnvelope> = rx.try_iter().collect();
+        let terminal: Vec<&EventEnvelope> = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event.as_str(),
+                    "job.failed" | "job.completed" | "job.cancelled"
+                )
+            })
+            .collect();
+        assert_eq!(terminal.len(), 1, "terminal events: {terminal:?}");
+        assert_eq!(terminal[0].event, "job.failed");
+        assert_eq!(terminal[0].data["job_id"], failed_id);
+        assert_eq!(terminal[0].data["status"], "failed");
+    }
+
+    #[test]
+    fn test_handler_adapter_timeout_maps_to_failed_job() {
+        let (mut core, rx, _fake_dir) = fake_core("timeout");
+        let project_dir = TempDir::new().unwrap();
+        create_project(&mut core, &project_dir, "adapter-timeout");
+
+        let resp = run_blender_job(
+            &mut core,
+            json!({
+                "job_type": "timeout_job",
+                "wait": true,
+                "timeout_ms": 500,
+                "spec": {"operations": [{"op": "create_box", "name": "x", "size": [1.0, 1.0, 1.0]}]}
+            }),
+        );
+        let result = resp
+            .result
+            .expect("adapter errors map to a job-failure response, not a protocol error");
+        assert_eq!(result["status"], "failed");
+        let message = result["error"].as_str().expect("error text");
+        assert!(
+            message.contains("timed out after 500 ms"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(result["job"]["status"], "failed");
+
+        let job_id = result["job"]["id"].as_str().unwrap().to_string();
+        assert!(core.scheduler().can_run(), "scheduler slot must be free");
+        assert_eq!(core.scheduler().queued_count(), 0);
+        assert_eq!(
+            core.scheduler().get_job(&job_id).unwrap().status,
+            JobStatus::Failed
+        );
+
+        let events: Vec<EventEnvelope> = rx.try_iter().collect();
+        let failed: Vec<&EventEnvelope> = events
+            .iter()
+            .filter(|event| event.event == "job.failed")
+            .collect();
+        assert_eq!(failed.len(), 1, "events: {events:?}");
+        assert_eq!(failed[0].data["job_id"], job_id);
+        assert!(events
+            .iter()
+            .all(|event| { !matches!(event.event.as_str(), "job.completed" | "job.cancelled") }));
+    }
+
+    #[test]
+    fn test_handler_adapter_wrong_job_id_maps_to_failed_job() {
+        let (mut core, rx, _fake_dir) = fake_core("wrong_job_id");
+        let project_dir = TempDir::new().unwrap();
+        create_project(&mut core, &project_dir, "adapter-wrong-id");
+
+        let resp = run_blender_job(
+            &mut core,
+            json!({
+                "job_type": "wrong_id_job",
+                "wait": true,
+                "spec": {"operations": [{"op": "create_box", "name": "x", "size": [1.0, 1.0, 1.0]}]}
+            }),
+        );
+        let result = resp
+            .result
+            .expect("adapter errors map to a job-failure response");
+        assert_eq!(result["status"], "failed");
+        let message = result["error"].as_str().expect("error text");
+        assert!(
+            message.contains("job_id mismatch"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(result["job"]["status"], "failed");
+
+        let job_id = result["job"]["id"].as_str().unwrap().to_string();
+        assert!(core.scheduler().can_run());
+        assert_eq!(
+            core.scheduler().get_job(&job_id).unwrap().status,
+            JobStatus::Failed
+        );
+        let events: Vec<EventEnvelope> = rx.try_iter().collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event == "job.failed")
+                .count(),
+            1,
+            "events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_workspace_relative_path_allows_dotdot_in_file_name() {
+        assert!(validate_workspace_relative_path("blender/scenes/model.v1..2.blend").is_ok());
+        assert!(validate_workspace_relative_path("../evil.blend").is_err());
+
+        let spec: BlenderJobSpec = serde_json::from_value(json!({
+            "job_type": "spec",
+            "spec": {"operations": [
+                {"op": "save_blend", "path": "blender/scenes/model.v1..2.blend"}
+            ]}
+        }))
+        .unwrap();
+        assert!(validate_blender_spec(&spec).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_validate_workspace_relative_path_rejects_windows_forms() {
+        // Drive-relative (`C:foo.blend`) and UNC (`\\server\share\...`).
+        for path in [r"C:foo.blend", r"\\server\share\evil.blend"] {
+            assert!(
+                validate_workspace_relative_path(path).is_err(),
+                "path {path:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_terminal_transition_failure_emits_no_contradicting_event() {
+        let (mut core, rx, _fake_dir) = fake_core("success");
+        let project_dir = TempDir::new().unwrap();
+        create_project(&mut core, &project_dir, "terminal-transition-failure");
+        let project_id = core.current_project().unwrap().id.clone();
+
+        // A foreign job occupies the single running slot.
+        core.scheduler_mut()
+            .enqueue_with_id("blocker-job", &project_id, "blocker_type")
+            .unwrap();
+        core.scheduler_mut().dequeue_job("blocker-job").unwrap();
+
+        // Queued job B: storage is persisted `completed` first, then the
+        // scheduler transition must fail because the slot is busy.
+        let job_b = "job-terminal-transition".to_string();
+        core.storage_mut()
+            .unwrap()
+            .create_job_with_id(&job_b, &project_id, "target_type")
+            .unwrap();
+        core.scheduler_mut()
+            .enqueue_with_id(&job_b, &project_id, "target_type")
+            .unwrap();
+
+        let spec: BlenderJobSpec = serde_json::from_value(json!({
+            "job_type": "target_type",
+            "spec": {"operations": [{"op": "create_box", "name": "x", "size": [1.0, 1.0, 1.0]}]}
+        }))
+        .unwrap();
+        let result = BlenderJobResult {
+            job_id: job_b.clone(),
+            status: "completed".into(),
+            message: None,
+            artifacts: None,
+            scene_summary: None,
+            error: None,
+        };
+        let cmd = CommandEnvelope {
+            id: "finalize".into(),
+            method: method::BLENDER_RUN_JOB.into(),
+            params: json!({}),
+        };
+
+        let resp = finalize_completed(&mut core, &cmd, &spec, &job_b, &result, None);
+        let error = resp
+            .error
+            .expect("inconsistent transitions must return InternalError");
+        assert_eq!(error.code, ErrorCode::InternalError);
+        assert!(
+            error.message.contains("could not persist terminal state"),
+            "unexpected error: {}",
+            error.message
+        );
+
+        // No terminal event may contradict the persisted failed state.
+        let events: Vec<EventEnvelope> = rx.try_iter().collect();
+        assert!(
+            events.is_empty(),
+            "transition failure must not emit any job event: {events:?}"
+        );
+
+        // Recovery: scheduler and storage both `failed` for the same id.
+        assert_eq!(
+            core.scheduler().get_job(&job_b).unwrap().status,
+            JobStatus::Failed
+        );
+        let stored = core
+            .storage()
+            .unwrap()
+            .get_job(&job_b)
+            .unwrap()
+            .expect("stored job");
+        assert_eq!(stored["status"], json!("failed"));
+        // The blocker is untouched and still running.
+        assert_eq!(
+            core.scheduler().get_job("blocker-job").unwrap().status,
+            JobStatus::Running
+        );
+    }
+
+    #[test]
+    fn test_handler_terminal_jobs_persist_finished_at() {
+        let (mut core, _rx, _fake_dir) = fake_core("success");
+        let project_dir = TempDir::new().unwrap();
+        create_project(&mut core, &project_dir, "finished-at");
+
+        // Completed job: response and job.get expose non-null finished_at.
+        let completed = run_blender_job(
+            &mut core,
+            json!({
+                "job_type": "completed_job",
+                "wait": true,
+                "spec": {"operations": [{"op": "create_box", "name": "x", "size": [1.0, 1.0, 1.0]}]}
+            }),
+        )
+        .result
+        .unwrap();
+        assert_eq!(completed["status"], "completed");
+        let completed_id = completed["job"]["id"].as_str().unwrap().to_string();
+        let completed_finished = completed["job"]["finished_at"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            !completed_finished.is_empty(),
+            "completed job must persist finished_at: {completed}"
+        );
+        let get_completed = core.handle_command(&CommandEnvelope {
+            id: "g-completed".into(),
+            method: method::JOB_GET.into(),
+            params: json!({"job_id": &completed_id}),
+        });
+        assert_eq!(
+            get_completed.result.unwrap()["finished_at"].as_str(),
+            Some(completed_finished.as_str())
+        );
+
+        // Failed job (worker failed status) also persists finished_at.
+        let _failed_fake = install_fake_adapter(&mut core, "failed_result");
+        let failed = run_blender_job(
+            &mut core,
+            json!({
+                "job_type": "failed_job",
+                "wait": true,
+                "spec": {"operations": [{"op": "create_box", "name": "x", "size": [1.0, 1.0, 1.0]}]}
+            }),
+        )
+        .result
+        .unwrap();
+        assert_eq!(failed["status"], "failed");
+        let failed_id = failed["job"]["id"].as_str().unwrap().to_string();
+        let failed_finished = failed["job"]["finished_at"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            !failed_finished.is_empty(),
+            "failed job must persist finished_at: {failed}"
+        );
+        let get_failed = core.handle_command(&CommandEnvelope {
+            id: "g-failed".into(),
+            method: method::JOB_GET.into(),
+            params: json!({"job_id": &failed_id}),
+        });
+        assert_eq!(
+            get_failed.result.unwrap()["finished_at"].as_str(),
+            Some(failed_finished.as_str())
+        );
+
+        // job.list exposes the same terminal finish times.
+        let list = core.handle_command(&CommandEnvelope {
+            id: "l1".into(),
+            method: method::JOB_LIST.into(),
+            params: json!({}),
+        });
+        let list = list.result.unwrap();
+        let jobs = list["jobs"].as_array().unwrap();
+        for (id, finished) in [
+            (&completed_id, &completed_finished),
+            (&failed_id, &failed_finished),
+        ] {
+            let job = jobs
+                .iter()
+                .find(|job| job["id"].as_str() == Some(id.as_str()))
+                .expect("terminal job in job.list");
+            assert_eq!(
+                job["finished_at"].as_str(),
+                Some(finished.as_str()),
+                "job.list finished_at for {id}"
+            );
+        }
     }
 }

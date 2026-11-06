@@ -104,6 +104,15 @@ impl CoreService {
         &self.blender
     }
 
+    /// Replace the Blender adapter.
+    ///
+    /// Primarily a deterministic test seam (tests configure fake executables
+    /// without process-wide `BLENDER_BIN` mutations); embedders may also use it
+    /// to inject a preconfigured adapter.
+    pub fn set_blender_adapter(&mut self, adapter: HeadlessBlenderAdapter) {
+        self.blender = adapter;
+    }
+
     /// Send a protocol event through the event channel.
     pub fn emit_event(&self, event: EventEnvelope) {
         let _ = self.event_tx.send(event);

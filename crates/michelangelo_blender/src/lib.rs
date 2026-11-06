@@ -23,6 +23,14 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 300_000;
 /// Bounded timeout for the lightweight capabilities probe.
 pub const CAPABILITIES_TIMEOUT_MS: u64 = 30_000;
 
+/// Bounded timeout for the `blender --version` probe.
+///
+/// A wedged binary must never block the single-threaded core.
+pub const VERSION_TIMEOUT_MS: u64 = 10_000;
+
+/// Maximum bytes of `--version` stdout parsed for the version string.
+const VERSION_OUTPUT_MAX_BYTES: usize = 64 * 1024;
+
 /// Environment variable overriding the default job timeout.
 pub const TIMEOUT_ENV_VAR: &str = "MICHELANGELO_BLENDER_TIMEOUT_MS";
 
@@ -155,6 +163,8 @@ pub struct HeadlessBlenderAdapter {
     worker_script: PathBuf,
     /// Default timeout used when neither an explicit arg nor the env var is set.
     default_timeout_ms: u64,
+    /// Bounded timeout for the `--version` probe.
+    version_timeout_ms: u64,
 }
 
 impl HeadlessBlenderAdapter {
@@ -169,6 +179,7 @@ impl HeadlessBlenderAdapter {
             blender_bin,
             worker_script,
             default_timeout_ms: DEFAULT_TIMEOUT_MS,
+            version_timeout_ms: VERSION_TIMEOUT_MS,
         }
     }
 
@@ -178,12 +189,19 @@ impl HeadlessBlenderAdapter {
             blender_bin: blender_bin.into(),
             worker_script: worker_script.into(),
             default_timeout_ms: DEFAULT_TIMEOUT_MS,
+            version_timeout_ms: VERSION_TIMEOUT_MS,
         }
     }
 
     /// Override the built-in default timeout (used by tests and embedders).
     pub fn with_default_timeout(mut self, timeout_ms: u64) -> Self {
         self.default_timeout_ms = timeout_ms.max(1);
+        self
+    }
+
+    /// Override the bounded `--version` probe timeout (used by tests/embedders).
+    pub fn with_version_timeout(mut self, timeout_ms: u64) -> Self {
+        self.version_timeout_ms = timeout_ms.max(1);
         self
     }
 
@@ -199,39 +217,64 @@ impl HeadlessBlenderAdapter {
 
     /// Resolve the effective timeout: explicit arg > env var > built-in default.
     pub fn effective_timeout_ms(&self, explicit_ms: Option<u64>) -> u64 {
-        explicit_ms
-            .filter(|ms| *ms > 0)
-            .or_else(|| {
-                std::env::var(TIMEOUT_ENV_VAR)
-                    .ok()
-                    .and_then(|value| value.trim().parse::<u64>().ok())
-                    .filter(|ms| *ms > 0)
-            })
-            .unwrap_or(self.default_timeout_ms)
-            .max(1)
+        let env_value = std::env::var(TIMEOUT_ENV_VAR).ok();
+        resolve_timeout_ms(explicit_ms, env_value.as_deref(), self.default_timeout_ms)
     }
 
     /// Check whether the Blender binary exists and is executable.
     ///
-    /// On Windows, `.cmd`/`.bat` programs are launched through `cmd /C call`,
-    /// so batch-based fake Blender executables work in production code paths.
+    /// The probe is bounded ([`VERSION_TIMEOUT_MS`]) and uses the same
+    /// spawn/wait/kill-tree/log-file machinery as the capabilities probe, so a
+    /// wedged binary cannot block the core. On Windows, `.cmd`/`.bat` programs
+    /// are launched through `cmd /C call`, so batch-based fake executables work
+    /// in production code paths.
     pub fn check_binary(&self) -> Result<String, BlenderError> {
+        let temp_dir = unique_temp_dir("michelangelo-version");
+        std::fs::create_dir_all(&temp_dir)?;
+        let stdout_path = temp_dir.join("stdout.log");
+        let stderr_path = temp_dir.join("stderr.log");
+        let result = self.execute_version_probe(&stdout_path, &stderr_path);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        result
+    }
+
+    fn execute_version_probe(
+        &self,
+        stdout_path: &Path,
+        stderr_path: &Path,
+    ) -> Result<String, BlenderError> {
         let mut cmd = program_command(Path::new(&self.blender_bin));
         cmd.arg("--version")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(Stdio::from(std::fs::File::create(stdout_path)?))
+            .stderr(Stdio::from(std::fs::File::create(stderr_path)?));
 
-        let output = cmd
-            .output()
-            .map_err(|_| BlenderError::BinaryNotFound(self.blender_bin.clone()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
 
-        if !output.status.success() {
+        let mut child = spawn_with_retry(&mut cmd, 3, Duration::from_millis(20)).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                BlenderError::BinaryNotFound(self.blender_bin.clone())
+            } else {
+                BlenderError::Io(e)
+            }
+        })?;
+
+        let status = wait_with_timeout(
+            &mut child,
+            Duration::from_millis(self.version_timeout_ms),
+            stderr_path,
+        )?;
+
+        if !status.success() {
             return Err(BlenderError::BinaryNotFound(self.blender_bin.clone()));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let version = stdout
+        let stdout_text = read_tail(stdout_path, VERSION_OUTPUT_MAX_BYTES);
+        let version = stdout_text
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())
@@ -299,11 +342,25 @@ impl HeadlessBlenderAdapter {
     pub fn probe_capabilities(&self) -> BlenderCapabilitiesDto {
         let version = match self.check_binary() {
             Ok(version) => version,
-            Err(error) => {
+            Err(error @ BlenderError::BinaryNotFound(_)) => {
                 return BlenderCapabilitiesDto::unavailable_with_static_fallback(
                     false,
                     format!("{error}"),
                 );
+            }
+            Err(error) => {
+                // The binary exists but the bounded version probe failed
+                // (e.g. hung and was killed). Report a degraded capability set.
+                return BlenderCapabilitiesDto {
+                    blender_version: None,
+                    bpy_available: false,
+                    supported_operations: static_operation_list(),
+                    binary_found: true,
+                    python_version: None,
+                    gltf_export_available: None,
+                    render_engines: None,
+                    error: Some(format!("{error}")),
+                };
             }
         };
 
@@ -670,6 +727,22 @@ fn static_operation_list() -> Vec<String> {
     SAFE_WORKER_OPS.iter().map(|op| (*op).to_string()).collect()
 }
 
+/// Pure timeout resolution: explicit arg > env value > built-in default.
+///
+/// Values of `0` and unparsable env values are ignored (a bounded positive
+/// timeout is always returned; the result is clamped to at least 1 ms).
+fn resolve_timeout_ms(explicit_ms: Option<u64>, env_value: Option<&str>, default_ms: u64) -> u64 {
+    explicit_ms
+        .filter(|ms| *ms > 0)
+        .or_else(|| {
+            env_value
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .filter(|ms| *ms > 0)
+        })
+        .unwrap_or(default_ms)
+        .max(1)
+}
+
 /// Wait for the child, polling `try_wait`; on timeout kill the whole tree and
 /// wait for it to be reaped, then return a `Timeout` error with a stderr tail.
 fn wait_with_timeout(
@@ -928,17 +1001,32 @@ fn validate_job_spec_paths(spec: &BlenderJobSpec) -> Result<(), BlenderError> {
     Ok(())
 }
 
-/// Validate a single spec path (must be relative, no parent-traversal).
+/// Validate a single spec path (must be relative, no parent/root components).
+///
+/// Component-based (aligned with the router rule): a `..` *inside a file name*
+/// (e.g. `model.v1..2.blend`) is a normal component and is accepted, while
+/// `..`, root and prefix components are rejected.
 fn validate_spec_path(path: &str) -> Result<(), BlenderError> {
-    if Path::new(path).is_absolute() {
+    let parsed = Path::new(path);
+    if parsed.is_absolute() {
         return Err(BlenderError::MalformedResult(format!(
             "Absolute path in job spec rejected: '{path}'"
         )));
     }
-    if path.contains("..") {
-        return Err(BlenderError::MalformedResult(format!(
-            "Parent-traversal path in job spec rejected: '{path}'"
-        )));
+    for component in parsed.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(BlenderError::MalformedResult(format!(
+                    "Parent-traversal path in job spec rejected: '{path}'"
+                )));
+            }
+            _ => {
+                return Err(BlenderError::MalformedResult(format!(
+                    "Root/prefix path component in job spec rejected: '{path}'"
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -1017,11 +1105,13 @@ fn resolve_worker_script() -> PathBuf {
 /// - `"bad_type"` — completed result with an unknown artifact type
 /// - `"artifact_outside"` — completed result listing `../evil.blend`
 /// - `"completed_nonzero"` — valid completed result but exit code 1
+/// - `"malformed_nonzero"` — malformed result JSON and exit code 1
 /// - `"huge_output"` — writes >2 MiB to both stdout and stderr, then succeeds
 /// - `"fail_long_stderr"` — exits 1 with an 8 KiB stderr
 /// - `"timeout"` — sleeps 10 s (used with a short timeout)
-/// - `"timeout_tree"` — spawns a descendant and sleeps (tree-kill test)
+/// - `"timeout_tree"` — spawns a descendant (PID recorded in `<result>.childpid`) and sleeps
 /// - `"capfail"` — fails the capabilities probe (but `--version` works)
+/// - `"version_hang"` — hangs on `--version` (bounded version-probe test)
 pub fn create_fake_blender(dir: &Path, mode: &str) -> PathBuf {
     #[cfg(unix)]
     {
@@ -1088,6 +1178,11 @@ job_json="${@: -2:1}"
 result_json="${@: -1}"
 
 if [ "$result_json" = "--version" ]; then
+    if [ "$MODE" = "version_hang" ]; then
+        echo 'Fake Blender: version hang' >&2
+        sleep 30
+        exit 0
+    fi
     echo 'Blender fake 0.0.0'
     exit 0
 fi
@@ -1188,6 +1283,10 @@ case "$MODE" in
         printf '{this is not json' > "$result_json"
         exit 0
         ;;
+    malformed_nonzero)
+        printf '{this is not json' > "$result_json"
+        exit 1
+        ;;
     noresult)
         echo 'Fake Blender: no result' >&2
         exit 0
@@ -1209,6 +1308,7 @@ case "$MODE" in
     timeout_tree)
         echo 'Fake Blender: timeout tree' >&2
         ( sleep 30 ) &
+        echo "$!" > "${result_json}.childpid"
         sleep 30
         exit 0
         ;;
@@ -1249,6 +1349,11 @@ $Mode = '__MODE__'
 $CapabilitiesJson = '{"operations":["create_box","export_glb","get_scene_summary","render_views","save_blend","set_camera_set","set_material"],"blender_version":"Blender fake 0.0.0","python_version":"3.13.0","gltf_export_available":true,"render_engines":["BLENDER_WORKBENCH"]}'
 $lastArgument = [string]$env:RESULT_JSON
 if ($lastArgument -eq '--version') {
+    if ($Mode -eq 'version_hang') {
+        [Console]::Error.WriteLine('Fake Blender: version hang')
+        Start-Sleep -Milliseconds 30000
+        exit 0
+    }
     [Console]::Out.WriteLine('Blender fake 0.0.0')
     exit 0
 }
@@ -1349,6 +1454,7 @@ switch ($Mode) {
         exit 1
     }
     'malformed' { Write-Raw '{this is not json'; exit 0 }
+    'malformed_nonzero' { Write-Raw '{this is not json'; exit 1 }
     'noresult' { [Console]::Error.WriteLine('Fake Blender: no result'); exit 0 }
     'fail' { [Console]::Error.WriteLine('Fake Blender: fail'); exit 1 }
     'fail_long_stderr' {
@@ -1362,7 +1468,10 @@ switch ($Mode) {
     }
     'timeout_tree' {
         [Console]::Error.WriteLine('Fake Blender: timeout tree')
-        try { Start-Process -FilePath 'ping.exe' -ArgumentList '-n','20','127.0.0.1' -WindowStyle Hidden } catch { }
+        try {
+            $child = Start-Process -FilePath 'ping.exe' -ArgumentList '-n','20','127.0.0.1' -WindowStyle Hidden -PassThru
+            [IO.File]::WriteAllText($env:RESULT_JSON + '.childpid', [string]$child.Id)
+        } catch { }
         Start-Sleep -Milliseconds 10000
         exit 0
     }
@@ -1484,6 +1593,74 @@ mod tests {
         }
     }
 
+    fn read_fake_child_pid(path: &Path, timeout: Duration) -> Option<u32> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(pid) = text.trim().parse::<u32>() {
+                    return Some(pid);
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn wait_until_process_gone(pid: u32, timeout: Duration) -> Option<bool> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match process_is_alive(pid) {
+                Some(false) => return Some(true),
+                None => return None,
+                Some(true) if Instant::now() >= deadline => return Some(false),
+                Some(true) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_is_alive(pid: u32) -> Option<bool> {
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if result == 0 {
+            return Some(true);
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => Some(false),
+            Some(libc::EPERM) => Some(true),
+            _ => None,
+        }
+    }
+
+    #[cfg(windows)]
+    fn process_is_alive(pid: u32) -> Option<bool> {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        Some(text.contains(&pid.to_string()))
+    }
+
+    fn completed_result_with_artifact(path: &str, artifact_type: &str) -> BlenderJobResult {
+        BlenderJobResult {
+            job_id: "artifact_job".into(),
+            status: "completed".into(),
+            message: None,
+            artifacts: Some(vec![BlenderArtifactDto {
+                path: path.to_string(),
+                artifact_type: artifact_type.to_string(),
+                size_bytes: None,
+            }]),
+            scene_summary: None,
+            error: None,
+        }
+    }
+
     #[test]
     fn test_adapter_defaults_to_blender() {
         let _guard = env_guard();
@@ -1518,27 +1695,20 @@ mod tests {
     }
 
     #[test]
-    fn test_effective_timeout_precedence() {
-        let _guard = env_guard();
-        let previous = std::env::var(TIMEOUT_ENV_VAR).ok();
-        std::env::remove_var(TIMEOUT_ENV_VAR);
+    fn test_resolve_timeout_precedence_is_pure() {
+        // explicit > env > default, without touching process-wide env.
+        assert_eq!(resolve_timeout_ms(Some(77), Some("4321"), 1_234), 77);
+        assert_eq!(resolve_timeout_ms(None, Some("4321"), 1_234), 4_321);
+        assert_eq!(resolve_timeout_ms(None, None, 1_234), 1_234);
+        assert_eq!(resolve_timeout_ms(None, Some("not-a-number"), 1_234), 1_234);
+        assert_eq!(resolve_timeout_ms(None, Some("0"), 1_234), 1_234);
+        assert_eq!(resolve_timeout_ms(Some(0), Some("4321"), 1_234), 4_321);
+        assert_eq!(resolve_timeout_ms(Some(0), Some("-1"), 0), 1);
+        assert_eq!(resolve_timeout_ms(None, None, 0), 1);
 
+        // The adapter delegates to the same helper (explicit path is env-free).
         let adapter = test_adapter().with_default_timeout(1_234);
-        assert_eq!(adapter.effective_timeout_ms(None), 1_234);
         assert_eq!(adapter.effective_timeout_ms(Some(77)), 77);
-
-        std::env::set_var(TIMEOUT_ENV_VAR, "4321");
-        assert_eq!(adapter.effective_timeout_ms(None), 4_321);
-        assert_eq!(adapter.effective_timeout_ms(Some(77)), 77);
-
-        // Invalid env values fall through to the built-in default.
-        std::env::set_var(TIMEOUT_ENV_VAR, "not-a-number");
-        assert_eq!(adapter.effective_timeout_ms(None), 1_234);
-
-        match previous {
-            Some(value) => std::env::set_var(TIMEOUT_ENV_VAR, value),
-            None => std::env::remove_var(TIMEOUT_ENV_VAR),
-        }
     }
 
     #[test]
@@ -1737,9 +1907,12 @@ mod tests {
 
     #[test]
     fn test_fake_default_timeout_is_bounded() {
-        let _guard = env_guard();
-        let previous = std::env::var(TIMEOUT_ENV_VAR).ok();
-        std::env::remove_var(TIMEOUT_ENV_VAR);
+        // A user-set env timeout would override the builder default; skip
+        // rather than mutate process-wide env in a parallel test run.
+        if std::env::var(TIMEOUT_ENV_VAR).is_ok() {
+            eprintln!("[skip] test_fake_default_timeout_is_bounded: {TIMEOUT_ENV_VAR} is set");
+            return;
+        }
 
         let fake_dir = TempDir::new().unwrap();
         let fake = create_fake_blender(fake_dir.path(), "timeout");
@@ -1756,11 +1929,6 @@ mod tests {
             None,
         );
 
-        match previous {
-            Some(value) => std::env::set_var(TIMEOUT_ENV_VAR, value),
-            None => std::env::remove_var(TIMEOUT_ENV_VAR),
-        }
-
         match result.unwrap_err() {
             BlenderError::Timeout { timeout_ms, .. } => assert_eq!(timeout_ms, 300),
             other => panic!("Expected Timeout, got {other:?}"),
@@ -1768,13 +1936,13 @@ mod tests {
     }
 
     #[test]
-    fn test_fake_timeout_kills_process_tree() {
+    fn test_fake_timeout_kills_process_tree_descendant() {
         let start = Instant::now();
         let run = run_fake_job(
             "timeout_tree",
             "test_job_timeout_tree",
             &sample_job_spec(),
-            Some(500),
+            Some(1_500),
         );
         let elapsed = start.elapsed();
         match run.result.unwrap_err() {
@@ -1785,6 +1953,81 @@ mod tests {
             elapsed < Duration::from_secs(15),
             "timeout must return promptly even with a descendant, took {elapsed:?}"
         );
+
+        // The fake records its descendant PID before sleeping. If the fake was
+        // killed before it could write the file, skip the liveness check.
+        let pid_file = run
+            .output
+            .path()
+            .join("test_job_timeout_tree")
+            .join("result.json.childpid");
+        let Some(pid) = read_fake_child_pid(&pid_file, Duration::from_secs(5)) else {
+            eprintln!("[skip] descendant PID was not recorded by the fake");
+            return;
+        };
+
+        match wait_until_process_gone(pid, Duration::from_secs(10)) {
+            Some(true) => {}
+            Some(false) => panic!("descendant pid {pid} is still alive after timeout tree-kill"),
+            None => eprintln!("[skip] process liveness check is unavailable on this host"),
+        }
+    }
+
+    #[test]
+    fn test_fake_version_hang_is_bounded() {
+        let fake_dir = TempDir::new().unwrap();
+        let fake = create_fake_blender(fake_dir.path(), "version_hang");
+        let adapter = HeadlessBlenderAdapter::with_config(
+            fake.to_string_lossy().to_string(),
+            resolve_worker_script(),
+        )
+        .with_version_timeout(200);
+
+        let start = Instant::now();
+        let result = adapter.check_binary();
+        let elapsed = start.elapsed();
+
+        match result.unwrap_err() {
+            BlenderError::Timeout { timeout_ms, stderr } => {
+                assert_eq!(timeout_ms, 200);
+                assert!(
+                    stderr.contains("version hang"),
+                    "timeout must carry a stderr tail, got {stderr:?}"
+                );
+            }
+            other => panic!("Expected Timeout, got {other:?}"),
+        }
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "bounded version probe took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn test_fake_capabilities_version_hang_is_bounded() {
+        let fake_dir = TempDir::new().unwrap();
+        let fake = create_fake_blender(fake_dir.path(), "version_hang");
+        let adapter = HeadlessBlenderAdapter::with_config(
+            fake.to_string_lossy().to_string(),
+            resolve_worker_script(),
+        )
+        .with_version_timeout(200);
+
+        let start = Instant::now();
+        let caps = adapter.probe_capabilities();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "capabilities probe must be bounded, took {elapsed:?}"
+        );
+        assert!(
+            caps.binary_found,
+            "binary exists even though the version probe timed out"
+        );
+        assert!(!caps.bpy_available);
+        assert!(caps.error.is_some());
+        assert_eq!(caps.supported_operations.len(), SAFE_WORKER_OPS.len());
     }
 
     #[test]
@@ -1798,6 +2041,22 @@ mod tests {
         match run.result.unwrap_err() {
             BlenderError::MalformedResult(_) => {}
             other => panic!("Expected MalformedResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_fake_malformed_result_with_nonzero_exit_is_non_zero_exit() {
+        let run = run_fake_job(
+            "malformed_nonzero",
+            "test_job_malformed_nonzero",
+            &sample_job_spec(),
+            Some(30_000),
+        );
+        match run.result.unwrap_err() {
+            BlenderError::NonZeroExit { exit_code, .. } => {
+                assert_eq!(exit_code, Some(1));
+            }
+            other => panic!("Expected NonZeroExit, got {other:?}"),
         }
     }
 
@@ -1975,6 +2234,67 @@ mod tests {
     }
 
     #[test]
+    fn test_completed_artifact_directory_is_rejected() {
+        let workspace = TempDir::new().unwrap();
+        let dir_path = workspace.path().join("blender/scenes/not_a_file.blend");
+        std::fs::create_dir_all(&dir_path).unwrap();
+
+        let result = completed_result_with_artifact("blender/scenes/not_a_file.blend", "blend");
+        match validate_completed_artifacts(&result, workspace.path()).unwrap_err() {
+            BlenderError::InvalidArtifact(message) => {
+                assert!(message.contains("not a regular file"));
+            }
+            other => panic!("Expected InvalidArtifact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_completed_artifact_type_extension_mismatch_is_rejected() {
+        let workspace = TempDir::new().unwrap();
+        let path = workspace.path().join("blender/scenes/mismatch.glb");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"data").unwrap();
+
+        let result = completed_result_with_artifact("blender/scenes/mismatch.glb", "blend");
+        match validate_completed_artifacts(&result, workspace.path()).unwrap_err() {
+            BlenderError::InvalidArtifact(message) => {
+                assert!(message.contains("does not match"));
+            }
+            other => panic!("Expected InvalidArtifact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_completed_artifact_symlink_escape_is_rejected() {
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("outside.blend");
+        std::fs::write(&outside_file, b"outside-data").unwrap();
+        let link = workspace.path().join("link.blend");
+
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside_file, &link);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(&outside_file, &link);
+
+        if let Err(error) = link_result {
+            eprintln!("[skip] symlink creation denied or unavailable: {error}");
+            return;
+        }
+
+        let result = completed_result_with_artifact("link.blend", "blend");
+        match validate_completed_artifacts(&result, workspace.path()).unwrap_err() {
+            BlenderError::InvalidArtifact(message) => {
+                assert!(
+                    message.contains("outside the workspace"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("Expected InvalidArtifact for symlink escape, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_fake_completed_with_nonzero_exit_is_rejected() {
         let run = run_fake_job(
             "completed_nonzero",
@@ -2121,6 +2441,32 @@ mod tests {
     fn test_validate_spec_path_relative_accepted() {
         assert!(validate_spec_path("blender/scenes/test.blend").is_ok());
         assert!(validate_spec_path("jobs/job_001/output.glb").is_ok());
+    }
+
+    #[test]
+    fn test_spec_path_allows_dotdot_inside_file_name() {
+        // `..` inside a file-name component is not traversal (P2-3).
+        assert!(validate_spec_path("blender/scenes/model.v1..2.blend").is_ok());
+        let spec = spec_with_op("save_blend", Some("blender/scenes/model.v1..2.blend"));
+        assert!(validate_job_spec_paths(&spec).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_drive_relative_and_unc_paths_rejected() {
+        for path in ["C:foo.blend", r"\\server\share\evil.blend"] {
+            let artifact_error = validate_artifact_path(path).unwrap_err();
+            assert!(
+                matches!(artifact_error, BlenderError::InvalidArtifact(_)),
+                "artifact path {path:?} must be rejected"
+            );
+            let spec_error = validate_spec_path(path).unwrap_err();
+            assert!(
+                format!("{spec_error}").contains("Absolute")
+                    || format!("{spec_error}").contains("Root/prefix"),
+                "spec path {path:?} must be rejected, got: {spec_error}"
+            );
+        }
     }
 
     #[test]

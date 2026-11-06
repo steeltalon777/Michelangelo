@@ -332,6 +332,36 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Terminal-fail a queued job (`queued → failed`), emitting its own
+    /// [`JobEvent::Failed`] event.
+    ///
+    /// Used by the core for internal failures that happen after a job record
+    /// exists but before execution, so the scheduler terminal status, storage
+    /// status and emitted event all report the same job id and `failed` state.
+    /// Fails if the id is not currently queued.
+    pub fn fail_queued(&mut self, job_id: &str, error: &str) -> Result<(), String> {
+        let position = self
+            .queue
+            .iter()
+            .position(|job| job.id.0 == job_id)
+            .ok_or_else(|| format!("job {job_id} is not queued"))?;
+
+        // Emit before mutating so a closed event channel leaves the queue intact.
+        let job_type = self.queue[position].job_type.clone();
+        self.send_event(JobEvent::Failed {
+            job_id: job_id.to_string(),
+            job_type,
+            error: error.to_string(),
+        })?;
+
+        let mut job = self.queue.remove(position).expect("position checked");
+        job.status = JobStatus::Failed;
+        job.error = Some(error.to_string());
+        job.finished_at = Some(now_iso8601());
+        self.completed.push(job);
+        Ok(())
+    }
+
     /// Cancel a job (queued immediately, running best-effort).
     pub fn cancel(&mut self, job_id: &str) -> Result<(), String> {
         // Check queued.
@@ -756,6 +786,61 @@ mod tests {
         // The earlier queued job can still be started FIFO afterwards.
         let next = scheduler.dequeue().unwrap();
         assert_eq!(next.id.0, a.0);
+    }
+
+    #[test]
+    fn test_fail_queued_transitions_to_failed_and_emits_failed_event() {
+        let (mut scheduler, rx) = Scheduler::new();
+        let job_id = scheduler.enqueue("p1", "render").unwrap();
+
+        scheduler
+            .fail_queued(&job_id.0, "internal failure")
+            .unwrap();
+
+        assert_eq!(scheduler.queued_count(), 0);
+        assert!(scheduler.can_run());
+        let job = scheduler.get_job(&job_id.0).unwrap();
+        assert_eq!(job.status, JobStatus::Failed);
+        assert_eq!(job.error.as_deref(), Some("internal failure"));
+        assert!(job.finished_at.is_some());
+
+        let events: Vec<JobEvent> = rx.try_iter().collect();
+        let failed: Vec<&JobEvent> = events
+            .iter()
+            .filter(|event| matches!(event, JobEvent::Failed { .. }))
+            .collect();
+        assert_eq!(failed.len(), 1);
+        match failed[0] {
+            JobEvent::Failed {
+                job_id: failed_id,
+                error,
+                ..
+            } => {
+                assert_eq!(failed_id, &job_id.0);
+                assert_eq!(error, "internal failure");
+            }
+            other => panic!("Expected JobEvent::Failed, got {other:?}"),
+        }
+        // Terminal identity stays `failed`: no cancelled event is emitted.
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, JobEvent::Cancelled { .. })));
+    }
+
+    #[test]
+    fn test_fail_queued_rejects_running_or_unknown_job() {
+        let (mut scheduler, _rx) = Scheduler::new();
+        assert!(scheduler.fail_queued("missing-job", "error").is_err());
+
+        let job_id = scheduler.enqueue("p1", "render").unwrap();
+        scheduler.dequeue_job(&job_id.0).unwrap();
+        let error = scheduler.fail_queued(&job_id.0, "error").unwrap_err();
+        assert!(error.contains("not queued"));
+        // The running job is not touched by a queued-fail attempt.
+        assert_eq!(
+            scheduler.get_job(&job_id.0).unwrap().status,
+            JobStatus::Running
+        );
     }
 
     #[test]

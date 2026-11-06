@@ -13,8 +13,9 @@ untracked `docs/research/` left untouched):
   `michelangelo_blender`, `michelangelo_core`, `michelangelo_cli`.
 - Phase 1 (JSONL core) and Phase 2 (Blender subprocess/jobs) are implemented.
 - `cargo test --workspace` is green on the baseline.
-- Local stand: Windows, Rust 1.96.0, Blender 5.2.3 LTS (`I:\Tools\Blender\blender.exe`, on PATH),
-  Python 3.13/3.14, Git Bash available. `just` is NOT installed in this environment: recipe
+- Local stand: Windows, Rust 1.96.0, Blender 5.2.3 LTS on `PATH` (resolved via `BLENDER_BIN`
+  or the default executable name), Python 3.13/3.14, Git Bash available. `just` is NOT installed
+  in this environment: recipe
   bodies are executed via equivalent direct commands until IT-3 adds cross-platform drivers.
   WSL exists only as a docker-desktop distro; no Linux Blender stand is available locally.
 
@@ -94,6 +95,8 @@ Write scopes:
 - `crates/michelangelo_jobs/src/lib.rs` (targeted dequeue/identity API + tests)
 - `crates/michelangelo_core/src/router.rs` (job/Blender handlers + tests)
 - `blender/worker.py` (capability-probe entry mode only; handlers unchanged)
+- `scripts/create_fake_blender.sh` (approved in rework: fake must echo the job id and create
+  the artifact it reports so the strict adapter validation can be exercised end-to-end)
 - `scripts/validate_blender_smoke.py` only if the smoke contract requires it
 
 Acceptance:
@@ -201,6 +204,8 @@ Acceptance:
   <result.json>`; stdout -> `stdout.log`, stderr -> `stderr.log` in the job dir.
   `--factory-startup` keeps user add-ons/startup files out of the deterministic batch run.
 - Timeout resolution: explicit arg > env `MICHELANGELO_BLENDER_TIMEOUT_MS` > 300_000 ms.
+  Both the job run and the `blender --version` / worker-capabilities probes are bounded; no
+  subprocess wait may block the single-threaded core indefinitely.
 - On timeout: platform kill-tree (Windows `taskkill /T /F`, Unix process group SIGKILL), then
   `wait()`; error text includes timeout ms and stderr tail.
 - Error variants/taxonomy: `BinaryNotFound`, `NonZeroExit` (with stderr tail), `Timeout`,
@@ -222,9 +227,16 @@ Acceptance:
 - `wait=false` keeps the job in the queued state and returns `{"id","job_type","status":
   "queued"}`; queued jobs are visible to `job.list`/`job.get` and cancellable.
 - Terminal transitions use the same job id for scheduler, storage and events.
-- Transition errors are handled: if scheduler state is inconsistent, respond with
-  `InternalError` after persisting the failure; never ignore.
-- Job statuses persisted: `queued > running > completed|failed|cancelled`.
+- Terminal protocol events (`job.completed` / `job.failed` / `job.cancelled`) are emitted only
+  after the corresponding scheduler and storage transitions succeeded. If an internal
+  transition fails, the job is marked failed where legal, no contradictory terminal event is
+  emitted, and the request returns `InternalError` describing the inconsistency.
+- A job that fails internally after its record exists but before execution
+  (enqueue/start/storage transition failure) is terminal-failed consistently as
+  `queued→failed`: scheduler terminal status, storage status and the emitted terminal event all
+  report the same job id and failure reason.
+- Job statuses persisted: `queued > running > completed|failed|cancelled`, plus the internal
+  `queued→failed` path above.
 
 ### 5.3 Capabilities contract
 
@@ -375,12 +387,19 @@ and the TZ, and returns a verdict; verdict is recorded in section 8.
 
 | Iteration | Commit | Reviewer route/verdict | Notes |
 |---|---|---|---|
+| IT-1 attempt 1 | `95ebeed` | Separate read-only context (same model family — Windows reviewer route broken: missing `mcp__*_warehouse__` shields/strict `bash` allow-list): **YELLOW** | P1-1 unbounded `blender --version` in capabilities probe; P2: terminal event emitted before transition success, queued failure scheduler/storage split, adapter spec-path rule inconsistent, TZ hygiene. Rework ordered. |
+
+Reviewer-route note: on this Windows profile the `worker` agent preset shield allows the
+unavailable `bash` tool, and the `researcher`/`reviewer` shields reference MCP prefixes for
+servers that are not registered. These are harness-configuration issues, not repository code;
+until they are fixed the independent review runs in a separate read-only context on the same
+available model family, and this limitation is reported to the user.
 
 ## 9. Execution Checklist
 
-- [ ] IT-1 implementation complete
-- [ ] IT-1 verification ladder green (Windows)
-- [ ] IT-1 independent review green
+- [x] IT-1 implementation complete
+- [x] IT-1 verification ladder green (Windows) — Lead-run, see review evidence
+- [ ] IT-1 independent review green — rework after YELLOW
 - [ ] IT-2 implementation complete
 - [ ] IT-2 verification ladder green + real Blender op smoke
 - [ ] IT-2 independent review green
