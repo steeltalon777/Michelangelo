@@ -64,20 +64,26 @@ recorded in the TZ review log).
   containment-before-mutation for all output paths, `render_views` safe unique filenames. Evidence:
   271 Rust tests (12 real-Blender), 30/30 Python worker checks, Lead acceptance E2E with
   16,384-px calibrated silhouette (`target/techlead/lead-verify/IT-2/`).
-- [x] T-0303 Contracts and documentation sync (IT-3, 2026-11-07) — `docs/specs/BLENDER_WORKER.md`
-  (18-op contract, projection fixture, Workbench restriction), `docs/specs/CORE_PROTOCOL.md`
-  (capabilities, `blender.run_job` semantics, events, persistence), `docs/specs/MVP_SPEC.md`
+- [x] T-0303 Contracts and documentation sync (IT-3, 2026-11-07; P2 rework applied) —
+  `docs/specs/BLENDER_WORKER.md`
+  (18-op contract, projection fixture, framed-scene acceptance note, reproducible worker
+  example, Workbench restriction), `docs/specs/CORE_PROTOCOL.md`
+  (capabilities pass-through vs `SAFE_WORKER_OPS` execution, raw persisted `job` record type,
+  `blender.run_job` semantics, events, persistence), `docs/specs/MVP_SPEC.md`
   §10 aligned with the implemented safe set, README status/quick start, `docs/ai/*`,
-  `docs/dev/DEVSTAND_{WINDOWS,LINUX}.md`, historical note in
+  `docs/dev/DEVSTAND_{WINDOWS,LINUX}.md` (python3 default/overrides), historical note in
   `docs/archive/TZ_PHASE_2_ACCEPTANCE_HARDENING.md`, `examples/scene_ops/`.
-- [x] T-0304 Cross-platform acceptance driver + CI (IT-3, 2026-11-07) —
-  `scripts/smoke_blender_scene.py` (real Blender + `--fake`, JSONL/event/identity/artifact/
-  reopen validation, calibrated silhouette alpha assertions), `justfile` recipes
-  (`smoke-blender-scene`, `smoke-blender-scene-fake`, `smoke-blender-scene-required`,
-  `test-worker-python`), CI: Python worker checks + fake scene smoke on Ubuntu and a new
-  `windows-latest` job (fmt/clippy/test/build + Python checks + fake scene smoke). Real Blender
-  is not available on CI runners (documented blocker). Evidence: `target/techlead/IT-3/`
-  (gitignored) — real run 104 checks / fake run 100 checks.
+- [x] T-0304 Cross-platform acceptance driver + CI (IT-3, 2026-11-07; P2 rework applied) —
+  `scripts/smoke_blender_scene.py` (real Blender + `--fake`: 5 artifacts, JSONL event
+  identity/ordering, invalid-spec `-32602` without a job record/events, artifact metadata
+  cross-checks, calibrated front silhouette alpha, assertable framed-scene silhouette
+  coverage/bbox/margin, reopen validation), `justfile` recipes (`smoke-blender-scene`,
+  `smoke-blender-scene-fake`, `smoke-blender-scene-required`, `test-worker-python`; Python
+  `python3` default with a Windows override), CI: Python worker checks + fake scene smoke on
+  Ubuntu and a new `windows-latest` job (fmt/clippy/test/build + Python checks + fake scene
+  smoke). Real Blender is not available on CI runners (documented blocker). Evidence:
+  `target/techlead/IT-3/` (gitignored) — real run 121 checks / fake run 114 checks (4 skips),
+  framed-vs-unframed counterfactual and a space-containing `TMP`/`TEMP` fake run.
 
 ## Not yet started
 

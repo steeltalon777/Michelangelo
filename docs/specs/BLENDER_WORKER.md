@@ -53,7 +53,9 @@ Written by the adapter into `<workspace>/jobs/<job_id>/job.json`:
   "job_id": "job_1790000000000000000",
   "spec": {
     "operations": [
-      {"op": "create_box", "name": "body", "size": [2.0, 1.0, 0.5]},
+      {"op": "create_component", "name": "body"},
+      {"op": "create_box", "name": "body", "size": [2.0, 1.0, 0.5], "component": "body"},
+      {"op": "get_scene_summary"},
       {"op": "save_blend", "path": "blender/scenes/smoke.blend"}
     ]
   },
@@ -74,7 +76,7 @@ with partial artifacts preserved.
 {
   "job_id": "job_1790000000000000000",
   "status": "completed",
-  "message": "Executed 2 operation(s)",
+  "message": "Executed 4 operation(s)",
   "artifacts": [
     {"path": "blender/scenes/smoke.blend", "type": "blend", "size_bytes": 113054}
   ],
@@ -192,8 +194,13 @@ Fixture used by `examples/scene_ops/composite_scene_spec.json` and the acceptanc
   `silhouette: true`;
 - result: exactly **16,384** pixels with alpha > 127, bbox `x 128..383`, `y 224..287`
   (256 x 64 px); other scene objects are outside the front view;
-- `frame_camera` on the scene camera with `margin=1.1` must frame the whole scene (non-zero
-  alpha coverage).
+- `frame_camera` on the scene camera with `margin=1.1` must frame the whole scene. The acceptance
+  scene deliberately creates `cam_scene` with `ortho_scale=100`, calls `frame_camera`, then
+  renders `blender/renders/scene_silhouette.png` (`silhouette: true`). The smoke driver asserts
+  that this framed silhouette has an opaque alpha coverage fraction ≥ 0.03, a bbox span ≥ 40% of
+  the 512x512 frame in both axes, and an ≥ 8 px border margin. Measured on Blender 5.2.3: framed
+  coverage ≈ 0.0997 (bbox 424x253, margins ≥ 41 px); without `frame_camera` the scene collapses to
+  ≈ 0.00033 coverage (bbox 25x15) and fails the assertion.
 
 `render_camera` normal (non-silhouette) renders are opaque Workbench renders; only the
 silhouette path enables a transparent film/alpha mask.

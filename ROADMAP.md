@@ -24,7 +24,7 @@ workspace create/open, snapshot recovery, verification commands, and CI.
 Iteration TZ:
 [`docs/tz/TZ_RELIABILITY_AND_BLENDER_SCENE_OPS_ITERATIVE.md`](docs/tz/TZ_RELIABILITY_AND_BLENDER_SCENE_OPS_ITERATIVE.md)
 (IT-1 reliability, IT-2 safe scene operations, IT-3 contracts/docs/CI/acceptance; independent
-review GREEN for IT-1 attempt 2 and IT-2 attempt 2, IT-3 under final review).
+review GREEN for IT-1 attempt 2, IT-2 attempt 2 and IT-3 (P2 rework applied)).
 
 - Bounded, non-deadlocking Blender subprocess execution with per-job log files and process-tree
   timeout; strict `result.json` identity/status/artifact validation; correct
@@ -33,7 +33,9 @@ review GREEN for IT-1 attempt 2 and IT-2 attempt 2, IT-3 under final review).
   materials, 5 import formats, named components, orthographic cameras (look-at, shift, clip),
   camera framing, calibrated Workbench silhouettes, renders, `.blend`/`.glb` export.
 - Cross-platform acceptance E2E (`scripts/smoke_blender_scene.py`) with JSONL event/identity/
-  artifact/reopen validation and a calibrated 16,384-px silhouette; deterministic `--fake` mode.
+  ordering, invalid-spec rejection, artifact/reopen validation, a calibrated 16,384-px front
+  silhouette and an assertable framed-scene silhouette (coverage/bbox/margin); deterministic
+  `--fake` mode.
 - Docs/contracts synced (`BLENDER_WORKER.md`, `CORE_PROTOCOL.md`, `MVP_SPEC.md` §10); CI now runs
   Rust + Python checks and the fake acceptance smoke on Ubuntu and Windows. Real Blender smoke is
   local/manual (GitHub runners lack Blender 5.2 — documented blocker).
@@ -41,7 +43,10 @@ review GREEN for IT-1 attempt 2 and IT-2 attempt 2, IT-3 under final review).
 **Verified on:** Blender **5.2.3 LTS** (Windows, headless `--background --factory-startup`),
 Rust 1.96.0, Python 3.13.
 **Test count:** **271 Rust tests** (12 real-Blender, auto-skip without Blender) + **30 Python**
-worker validation checks; acceptance driver: 104 checks on real Blender / 100 on fake. Only
+worker validation checks; acceptance driver: 121 checks on real Blender / 114 on fake (4 checks
+skipped in fake mode: real-version string and the three pixel assertions), including the calibrated
+front silhouette, the framed-scene silhouette coverage/margin assertion and invalid-spec rejection.
+Only
 Blender 5.2.3 is verified; 4.2 is API-plausible but untested.
 
 ## 🔜 Phase 3 (Next) — Asset Pipeline

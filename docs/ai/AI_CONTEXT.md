@@ -59,7 +59,8 @@ cargo test --workspace
 python -m py_compile blender/worker.py scripts/test_worker_validation.py scripts/smoke_blender_scene.py
 python scripts/test_worker_validation.py
 
-# Acceptance E2E: composite scene, JSONL events/identity, artifacts, calibrated silhouette, reopen
+# Acceptance E2E: composite scene (5 artifacts), JSONL events/identity/ordering,
+# invalid-spec rejection, calibrated front silhouette, framed-scene silhouette, reopen
 python scripts/smoke_blender_scene.py --fake    # deterministic, no Blender required
 python scripts/smoke_blender_scene.py           # real Blender (SKIP/exit 0 when absent)
 python scripts/smoke_blender_scene.py --require-blender   # exit 2 when Blender is absent
@@ -68,8 +69,9 @@ python scripts/smoke_blender_scene.py --require-blender   # exit 2 when Blender 
 `just` recipes wrap the same commands: `verify`, `test-worker-python`, `smoke-blender-scene`,
 `smoke-blender-scene-fake`, `smoke-blender-scene-required`, plus the legacy POSIX smokes
 (`smoke-jsonl`, `smoke-reopen`, `smoke-e2e`, `smoke-blender-fake`, `smoke-blender-real`,
-`smoke-blender-real-glb`). Recipes need `just` + `sh`; on Windows use Git Bash/WSL or the direct
-commands (`just` is not installed on the current Windows stand).
+`smoke-blender-real-glb`). Recipes need `just` + `sh` and default to `python3`; on Windows use
+Git Bash/WSL with `just python_bin=python ...` or the direct commands (`just` is not installed on
+the current Windows stand).
 
 ## Environment Variables
 
@@ -77,8 +79,9 @@ commands (`just` is not installed on the current Windows stand).
   programs are launched through `cmd /C call` on Windows)
 - `MICHELANGELO_BLENDER_TIMEOUT_MS` — default Blender job timeout (explicit `timeout_ms` wins;
   built-in default `300_000` ms)
-- `CARGO_TARGET_DIR` — optional Cargo target directory override (the smoke driver defaults to
-  `target/debug/michelangelo[.exe]`)
+- `CARGO_TARGET_DIR` — optional Cargo target directory override for `cargo` commands. The
+  acceptance driver does **not** read it: it resolves `<repo>/target/debug/michelangelo[.exe]` or
+  accepts an explicit `--cli PATH`.
 
 ## Version Pins
 

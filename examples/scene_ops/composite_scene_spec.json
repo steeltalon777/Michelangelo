@@ -1,6 +1,6 @@
 {
   "job_type": "blender_acceptance_scene",
-  "description": "Composite acceptance scene used by scripts/smoke_blender_scene.py (real and --fake) and the documentation. The calibrated front silhouette depends on the 2x1x0.5 box at the origin, the orthographic front camera at (0,-10,0) with ortho_scale 4 and a 512x512 render.",
+  "description": "Composite acceptance scene used by scripts/smoke_blender_scene.py (real and --fake) and the documentation. The calibrated front silhouette depends on the 2x1x0.5 box at the origin, the orthographic front camera at (0,-10,0) with ortho_scale 4 and a 512x512 render. The scene camera deliberately starts at ortho_scale 100: frame_camera(1.1) must fix it, and the framed scene_silhouette.png must fill a meaningful fraction of the frame with a visible margin. A missing or broken frame_camera would leave the scene tiny in a 100-unit-wide view and fail the acceptance assertion.",
   "operations": [
     {
       "op": "create_component",
@@ -45,7 +45,7 @@
       "name": "cam_scene",
       "location": [7.0, -7.0, 5.0],
       "look_at": [0.0, 0.0, 0.0],
-      "ortho_scale": 8.0
+      "ortho_scale": 100.0
     },
     {
       "op": "set_render_settings",
@@ -66,6 +66,12 @@
       "op": "render_camera",
       "camera": "cam_scene",
       "path": "blender/renders/scene.png"
+    },
+    {
+      "op": "render_camera",
+      "camera": "cam_scene",
+      "path": "blender/renders/scene_silhouette.png",
+      "silhouette": true
     },
     {
       "op": "get_scene_summary"

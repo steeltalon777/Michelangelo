@@ -23,21 +23,29 @@ job-level behavior.
   shift, clip planes; `render_camera` with `silhouette: true` produces a transparent-film RGBA
   PNG whose alpha channel is the silhouette mask. The documented fixture (2x1x0.5 box, front
   camera, ortho_scale 4, 512x512) yields exactly 16,384 opaque pixels, bbox `x 128..383`,
-  `y 224..287`.
+  `y 224..287`. Assertable camera framing: the acceptance scene creates the scene camera with
+  `ortho_scale=100` and requires `frame_camera` to reframe it; a framed scene silhouette must
+  reach ≥ 0.03 opaque coverage, a bbox span ≥ 40% of the frame and an ≥ 8 px border margin (a
+  broken framing step fails the smoke).
 - **Named components.** `create_component` creates `Component_<name>` collections; primitives and
   imports can join a component; `get_scene_summary` reports components and scene bounds.
 - **Capabilities probing.** `blender.get_capabilities` now probes the configured binary and
-  `blender/worker.py` (bounded 30 s) and reports the actual operation list, Blender/Python
-  version, glTF availability and render engines; a missing binary is a normal response with a
-  static fallback and `error` instead of a hang.
+  `blender/worker.py` (bounded 30 s) and reports the worker-reported operation list,
+  Blender/Python version, glTF availability and render engines; a missing binary is a normal
+  response with a static fallback and `error` instead of a hang. The adapter passes the
+  worker-reported operation list through; execution remains restricted to the `SAFE_WORKER_OPS`
+  whitelist.
 - **Cross-platform acceptance driver** `scripts/smoke_blender_scene.py`: real-Blender and
-  `--fake` modes, composite JSONL scenario from `examples/scene_ops/composite_scene_spec.json`,
-  event order/identity, persisted job, artifact headers, calibrated PNG alpha assertions, reopen
-  across a process boundary. Exit codes 0/1/2 with an explicit SKIP when Blender is absent.
+  `--fake` modes, composite JSONL scenario from `examples/scene_ops/composite_scene_spec.json`
+  (5 artifacts), event order/identity/ordering relative to the response, invalid-spec `-32602`
+  with no job record/event, terminal-event vs response artifact metadata agreement, persisted job,
+  artifact headers, calibrated front silhouette alpha, framed-scene silhouette coverage/margin,
+  reopen across a process boundary. Exit codes 0/1/2 with an explicit SKIP when Blender is absent.
 - **Recipes and CI.** `just` recipes `smoke-blender-scene`, `smoke-blender-scene-fake`,
-  `smoke-blender-scene-required`, `test-worker-python`; CI now runs Python worker checks and the
-  fake acceptance smoke and has a `windows-latest` job (fmt/clippy/test/build + Python checks +
-  fake smoke). Real Blender is not installed on CI runners (documented blocker).
+  `smoke-blender-scene-required`, `test-worker-python` (Python defaults to `python3`, override
+  `python_bin=python` on Windows); CI now runs Python worker checks and the fake acceptance smoke
+  and has a `windows-latest` job (fmt/clippy/test/build + Python checks + fake smoke). Real
+  Blender is not installed on CI runners (documented blocker).
 - **Documentation.** Rewritten `docs/specs/BLENDER_WORKER.md` and `docs/specs/CORE_PROTOCOL.md`,
   aligned `docs/specs/MVP_SPEC.md` §10, updated README/ROADMAP/TASKS and dev-stand docs, added
   `examples/scene_ops/`, and a historical note for the archived Phase 2 TZ.
@@ -93,6 +101,7 @@ job-level behavior.
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace` — **271 tests** (12 real-Blender tests auto-skip without Blender).
 - `python -m py_compile ...` and `python scripts/test_worker_validation.py` — **30/30**.
-- `python scripts/smoke_blender_scene.py --fake` — PASS (100 checks).
-- `python scripts/smoke_blender_scene.py` on Blender 5.2.3 — PASS (104 checks incl. calibrated
-  silhouette and reopen).
+- `python scripts/smoke_blender_scene.py --fake` — PASS (114 checks, 4 checks skipped: three
+  pixel assertions + the real-Blender version string).
+- `python scripts/smoke_blender_scene.py` on Blender 5.2.3 — PASS (121 checks incl. calibrated
+  front silhouette, framed-scene silhouette and reopen).

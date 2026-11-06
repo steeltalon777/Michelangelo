@@ -19,14 +19,19 @@ What is validated (single CLI process, then a second process for reopen):
 * one response per request id, no protocol error envelopes;
 * `project.create` workspace, `blender.get_capabilities` (binary/bpy/18 ops);
 * job lifecycle events: exactly `job.queued` -> `job.started` -> one terminal
-  `job.completed`, all for the same job id, with no `job.failed`/`job.cancelled`;
+  `job.completed`, all for the same job id, with no `job.failed`/`job.cancelled`,
+  and each event written before the `blender.run_job` response;
+* an invalid-spec request returning `-32602` with no job record/events;
 * `blender.run_job` response status, persisted job identity and timestamps;
-* artifact metadata (four expected paths, types, sizes) and artifact files:
+* artifact metadata (five expected paths, types, sizes) and artifact files:
   `.blend` header (`BLENDER` or zstd), `.glb` magic/version/length, PNG
   dimensions/bit depth/color type;
-* the calibrated orthographic silhouette (real Blender only): exactly 16384
+* the calibrated orthographic front silhouette (real Blender only): exactly 16384
   pixels with alpha > 127 and bbox x 128..383, y 224..287 for the documented
   512x512 fixture;
+* the framed scene silhouette (real Blender only): `cam_scene` starts at
+  `ortho_scale=100`, so a working `frame_camera` is required for meaningful alpha
+  coverage; the driver asserts coverage fraction, bbox span and a border margin;
 * scene summary structure (3 meshes, 2 cameras, named components, 1 material);
 * `job.list` persistence and `project.get_snapshot` agreement;
 * a second CLI process (`project.open` + `job.list` + `project.get_snapshot`)
@@ -67,6 +72,7 @@ BUILD_HINT = "cargo build -p michelangelo_cli"
 EXPECTED_ARTIFACTS = {
     "blender/renders/front_silhouette.png": "png",
     "blender/renders/scene.png": "png",
+    "blender/renders/scene_silhouette.png": "png",
     "blender/scenes/scene.blend": "blend",
     "blender/exports/scene.glb": "glb",
 }
@@ -75,6 +81,22 @@ EXPECTED_PNG = (512, 512, 8, 6)  # width, height, bit depth, color type (RGBA)
 SILHOUETTE_ALPHA_THRESHOLD = 127
 SILHOUETTE_COUNT = 16384
 SILHOUETTE_BBOX = (128, 383, 224, 287)  # min_x, max_x, min_y, max_y
+
+# Framed-scene silhouette assertions (real Blender only).
+#
+# The acceptance scene deliberately creates `cam_scene` with `ortho_scale=100`
+# and then calls `frame_camera cam_scene margin=1.1`. A correct frame_camera
+# rewrites ortho_scale to roughly the scene extent times 1.1, so the scene
+# silhouette fills most of the 512x512 frame (~83% x 49% bbox, measured ~10%
+# opaque pixels; the scene is three separated objects, so the opaque area is
+# smaller than its bounding box). If frame_camera were missing or broken,
+# `ortho_scale=100` would make the whole scene a few dozen pixels wide: the
+# measured counterfactual (same scene without frame_camera) collapses to ~0.03%
+# coverage and a 25x15 px bbox, which these assertions must reject.
+FRAMING_COVERAGE_MIN_FRACTION = 0.03  # measured ~0.10 framed, ~0.0003 unframed
+FRAMING_COVERAGE_MAX_FRACTION = 0.95
+FRAMING_MIN_SPAN_FRACTION = 0.40  # measured ~83%/49% framed, ~5% unframed
+FRAMING_EDGE_MARGIN_PX = 8  # content must not touch the frame border
 
 EXPECTED_WORKER_OPS = [
     "create_box",
@@ -483,8 +505,13 @@ def run_cli(cli, requests, env, timeout_s):
     )
 
 
-def parse_protocol(proc, label, expected_ids, checker):
-    """Validate JSONL structure/responses and return (messages, raw lines)."""
+def parse_protocol(proc, label, expected_ids, checker, expected_error_ids=()):
+    """Validate JSONL structure/responses and return (messages, raw lines).
+
+    `expected_error_ids` names requests that are intentionally invalid and must
+    receive a JSON-RPC error envelope instead of a result (used for the negative
+    invalid-spec check); every other response must be a success envelope.
+    """
     raw = proc.stdout.decode("utf-8", errors="replace")
     lines = [line for line in raw.splitlines() if line.strip()]
     messages = []
@@ -532,24 +559,49 @@ def parse_protocol(proc, label, expected_ids, checker):
         len(response_ids) == len(set(response_ids)),
         str(response_ids),
     )
-    protocol_errors = [
+    expected_error_ids = set(expected_error_ids)
+    unexpected_errors = [
         {"id": response.get("id"), "error": response.get("error")}
         for response in responses
-        if "error" in response
+        if "error" in response and response.get("id") not in expected_error_ids
     ]
     checker.check(
-        f"{label}: no protocol error responses",
-        not protocol_errors,
-        _short(protocol_errors),
+        f"{label}: no unexpected protocol error responses",
+        not unexpected_errors,
+        _short(unexpected_errors),
+    )
+    missing_expected_errors = [
+        request_id
+        for request_id in expected_error_ids
+        if not any(
+            response.get("id") == request_id and "error" in response
+            for response in responses
+        )
+    ]
+    checker.check(
+        f"{label}: intentionally invalid requests returned protocol errors",
+        not missing_expected_errors,
+        f"missing error envelopes: {missing_expected_errors}",
     )
     return messages, lines
 
 
-def response_result(messages, request_id):
+def response_envelope(messages, request_id):
     for message in messages:
         if message.get("id") == request_id:
-            return message.get("result")
-    return None
+            return message
+    return {}
+
+
+def response_result(messages, request_id):
+    return response_envelope(messages, request_id).get("result")
+
+
+def message_index(messages, predicate):
+    for index, message in enumerate(messages):
+        if predicate(message):
+            return index
+    return -1
 
 
 def artifact_map(artifacts):
@@ -793,7 +845,7 @@ def load_acceptance_spec():
     return job_type, operations
 
 
-def validate_job_events(checker, messages, job_id, job_type):
+def validate_job_events(checker, messages, job_id, job_type, response_artifacts, response_id="job"):
     events = [message for message in messages if "event" in message]
     checker.check(
         "job: all lifecycle events carry a job id",
@@ -842,6 +894,38 @@ def validate_job_events(checker, messages, job_id, job_type):
                 data.get("job_type") == job_type,
                 f"job_type={data.get('job_type')!r}",
             )
+
+    # Terminal events must be emitted before the blender.run_job response and the
+    # events must precede the response of the request that produced them.
+    queued_index = message_index(
+        messages,
+        lambda message: message.get("event") == "job.queued"
+        and _dict(message.get("data")).get("job_id") == job_id,
+    )
+    started_index = message_index(
+        messages,
+        lambda message: message.get("event") == "job.started"
+        and _dict(message.get("data")).get("job_id") == job_id,
+    )
+    terminal_index = message_index(
+        messages,
+        lambda message: message.get("event") in ("job.completed", "job.failed", "job.cancelled")
+        and _dict(message.get("data")).get("job_id") == job_id,
+    )
+    response_index = message_index(messages, lambda message: message.get("id") == response_id)
+    ordering_ok = (
+        queued_index >= 0
+        and started_index > queued_index
+        and terminal_index > started_index
+        and response_index > terminal_index
+    )
+    checker.check(
+        "job: events are ordered before the blender.run_job response",
+        ordering_ok,
+        f"queued={queued_index}, started={started_index}, "
+        f"terminal={terminal_index}, response={response_index}",
+    )
+
     completed_events = [m for m in events if m.get("event") == "job.completed"]
     if completed_events:
         event_artifacts = artifact_map(_dict(completed_events[0].get("data")).get("artifacts"))
@@ -849,6 +933,19 @@ def validate_job_events(checker, messages, job_id, job_type):
             "job: job.completed event lists the expected artifacts",
             set(event_artifacts) == set(EXPECTED_ARTIFACTS),
             f"got {sorted(event_artifacts)}",
+        )
+        event_metadata = {
+            path: (artifact.get("type"), artifact.get("size_bytes"))
+            for path, artifact in event_artifacts.items()
+        }
+        response_metadata = {
+            path: (artifact.get("type"), artifact.get("size_bytes"))
+            for path, artifact in artifact_map(response_artifacts).items()
+        }
+        checker.check(
+            "job: terminal event artifact metadata matches the response output_json",
+            event_metadata == response_metadata,
+            f"event={_short(event_metadata)}, response={_short(response_metadata)}",
         )
 
 
@@ -888,6 +985,7 @@ def check_artifact_files(checker, workspace, fake_mode):
     glb_path = workspace / "blender/exports/scene.glb"
     silhouette_path = workspace / "blender/renders/front_silhouette.png"
     scene_path = workspace / "blender/renders/scene.png"
+    scene_silhouette_path = workspace / "blender/renders/scene_silhouette.png"
 
     blend = blend_path.read_bytes() if blend_path.is_file() else b""
     checker.check(
@@ -911,7 +1009,11 @@ def check_artifact_files(checker, workspace, fake_mode):
         f"declared {declared_length}, actual {len(glb)}",
     )
 
-    for label, path in (("front_silhouette.png", silhouette_path), ("scene.png", scene_path)):
+    for label, path in (
+        ("front_silhouette.png", silhouette_path),
+        ("scene.png", scene_path),
+        ("scene_silhouette.png", scene_silhouette_path),
+    ):
         data = path.read_bytes() if path.is_file() else b""
         try:
             width, height, bit_depth, color_type, rows = decode_png(data)
@@ -941,7 +1043,7 @@ def check_artifact_files(checker, workspace, fake_mode):
                     bbox == SILHOUETTE_BBOX,
                     f"bbox={bbox}",
                 )
-        else:
+        elif label == "scene.png":
             if fake_mode:
                 checker.skip(
                     "scene.png: non-zero alpha coverage",
@@ -954,6 +1056,48 @@ def check_artifact_files(checker, workspace, fake_mode):
                     covered > 0,
                     f"covered={covered}",
                 )
+        else:
+            if fake_mode:
+                checker.skip(
+                    "scene_silhouette.png: framed-scene alpha assertions",
+                    "fake mode renders no pixels",
+                )
+            else:
+                # `cam_scene` starts at ortho_scale=100; these assertions only
+                # pass when `frame_camera` actually reframed the camera. A
+                # broken frame_camera leaves the scene tiny (near-zero coverage).
+                count, bbox = silhouette_stats(rows, width)
+                total_pixels = width * height
+                fraction = count / total_pixels if total_pixels else 0.0
+                checker.check(
+                    "scene_silhouette.png: alpha coverage fraction is within "
+                    f"{FRAMING_COVERAGE_MIN_FRACTION:.2f}..{FRAMING_COVERAGE_MAX_FRACTION:.2f}",
+                    FRAMING_COVERAGE_MIN_FRACTION <= fraction <= FRAMING_COVERAGE_MAX_FRACTION,
+                    f"fraction={fraction:.4f} ({count} px)",
+                )
+                if bbox is None:
+                    checker.fail(
+                        "scene_silhouette.png: alpha bbox exists (frame_camera did not produce content)"
+                    )
+                else:
+                    min_x, max_x, min_y, max_y = bbox
+                    span_x = max_x - min_x + 1
+                    span_y = max_y - min_y + 1
+                    checker.check(
+                        "scene_silhouette.png: alpha bbox spans a meaningful part of the frame",
+                        span_x >= FRAMING_MIN_SPAN_FRACTION * width
+                        and span_y >= FRAMING_MIN_SPAN_FRACTION * height,
+                        f"span={span_x}x{span_y} (min "
+                        f"{FRAMING_MIN_SPAN_FRACTION * width:.0f}px)",
+                    )
+                    checker.check(
+                        "scene_silhouette.png: alpha bbox stays inside the frame margin",
+                        min_x >= FRAMING_EDGE_MARGIN_PX
+                        and min_y >= FRAMING_EDGE_MARGIN_PX
+                        and max_x <= width - 1 - FRAMING_EDGE_MARGIN_PX
+                        and max_y <= height - 1 - FRAMING_EDGE_MARGIN_PX,
+                        f"bbox={bbox}, margin={FRAMING_EDGE_MARGIN_PX}px",
+                    )
 
 
 def validate_list_and_snapshot(checker, label, list_result, snapshot_result, expected_job_id):
@@ -1187,6 +1331,21 @@ def main(argv=None):
                 "params": {"path": str(workspace), "name": "acceptance-scene"},
             },
             {"id": "caps", "method": "blender.get_capabilities", "params": {}},
+            # Negative protocol check: an invalid spec must be rejected with
+            # -32602 before any job record/event exists (no orphan job).
+            {
+                "id": "bad",
+                "method": "blender.run_job",
+                "params": {
+                    "job_type": "invalid_acceptance_spec",
+                    "wait": True,
+                    "spec": {
+                        "operations": [
+                            {"op": "create_box", "name": "bad_box", "size": [1.0, 2.0]}
+                        ]
+                    },
+                },
+            },
             {
                 "id": "job",
                 "method": "blender.run_job",
@@ -1210,7 +1369,11 @@ def main(argv=None):
             return 1
 
         messages, process_one_lines = parse_protocol(
-            proc_one, "run", ["create", "caps", "job", "jobs", "snapshot"], checker
+            proc_one,
+            "run",
+            ["create", "caps", "bad", "job", "jobs", "snapshot"],
+            checker,
+            expected_error_ids=["bad"],
         )
 
         # -- project.create ---------------------------------------------------
@@ -1263,6 +1426,34 @@ def main(argv=None):
             f"missing={missing_operations}, got {len(supported_operations)}",
         )
 
+        # -- negative protocol request: invalid spec must not create a job -----
+        bad_response = response_envelope(messages, "bad")
+        bad_error = _dict(bad_response.get("error"))
+        bad_message = bad_error.get("message") or ""
+        checker.check(
+            "invalid spec: returns -32602",
+            bad_error.get("code") == -32602,
+            _short(bad_response),
+        )
+        checker.check(
+            "invalid spec: response carries no result",
+            "result" not in bad_response,
+            _short(bad_response),
+        )
+        checker.check(
+            "invalid spec: error names the offending operation",
+            "operation[0]" in bad_message and "create_box" in bad_message,
+            _short(bad_message),
+        )
+        first_event_index = message_index(messages, lambda message: "event" in message)
+        bad_response_index = message_index(messages, lambda message: message.get("id") == "bad")
+        checker.check(
+            "invalid spec: no lifecycle event was emitted for the rejected request",
+            bad_response_index >= 0
+            and (first_event_index == -1 or bad_response_index < first_event_index),
+            f"bad_response={bad_response_index}, first_event={first_event_index}",
+        )
+
         # -- blender.run_job response ----------------------------------------
         job_result = _dict(response_result(messages, "job"))
         checker.check(
@@ -1311,7 +1502,13 @@ def main(argv=None):
         validate_summary(checker, "run", output.get("scene_summary"), args.fake)
 
         if isinstance(job_id, str) and job_id:
-            validate_job_events(checker, messages, job_id, job_type)
+            validate_job_events(
+                checker,
+                messages,
+                job_id,
+                job_type,
+                output.get("artifacts"),
+            )
         else:
             checker.fail("job: lifecycle events can be related to the job id", "no job id")
 

@@ -18,11 +18,12 @@ the IT-3 acceptance smoke:
 | Sphere `ball` | radius `0.5`, at `[-3, 0, 0.5]`, in `Component_extra` |
 | Material | `body_box` base color `[0.2, 0.4, 0.8, 1.0]` |
 | Front camera `cam_front` | orthographic, `(0, -10, 0)` looking at the origin, `ortho_scale=4` |
-| Scene camera `cam_scene` | orthographic, `(7, -7, 5)` looking at the origin, framed with margin `1.1` |
-| Render | 512x512, Workbench, PNG RGBA |
-| Outputs | silhouette + scene PNG, `.blend`, `.glb` |
+| Scene camera `cam_scene` | orthographic, `(7, -7, 5)` looking at the origin, `ortho_scale=100` |
+| Framing | `frame_camera cam_scene margin=1.1` must reframe the deliberately far/wide camera |
+| Renders | 512x512, Workbench, PNG RGBA: front silhouette, framed scene, framed scene silhouette |
+| Outputs | 5 artifacts: 3 PNGs + `.blend` + `.glb` |
 
-## Calibrated silhouette
+## Calibrated front silhouette
 
 The first render is a calibrated silhouette:
 
@@ -35,6 +36,22 @@ The first render is a calibrated silhouette:
 
 The smoke driver asserts these values with a pure-Python PNG decoder (`zlib` + `struct`) on
 real Blender only; `--fake` mode checks protocol/artifact plumbing but skips pixel assertions.
+
+## Framed-scene silhouette (assertable framing check)
+
+`cam_scene` is created with `ortho_scale=100` on purpose. A correct
+`frame_camera cam_scene margin=1.1` rewrites `ortho_scale` to the scene extent times the margin;
+the scene silhouette then fills most of the 512x512 frame with a visible border. The driver asserts
+(real Blender only):
+
+| Assertion | Framed (Blender 5.2.3) | Broken/missing `frame_camera` |
+|---|---|---|
+| opaque alpha coverage fraction | ≈ 0.0997 (26,142 px) | ≈ 0.00033 (86 px) |
+| alpha bbox span | 424 x 253 px | 25 x 15 px |
+| required threshold | coverage ≥ 0.03, span ≥ 205 px, border ≥ 8 px | fails all three |
+
+This makes the framing check meaningful: if `frame_camera` is missing or broken, the acceptance
+smoke fails instead of merely observing "some non-zero alpha".
 
 ## Run it
 

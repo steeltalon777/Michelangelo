@@ -13,10 +13,11 @@ diagnostics. Blender runs as a bounded external batch subprocess driven by the s
   IT-3 acceptance automation/docs) — done: bounded subprocess execution with per-job logs, strict
   `result.json`/artifact validation, correct job identity and terminal-state ordering,
   deterministic empty scenes, 18 typed safe operations, calibrated orthographic silhouettes,
-  Workbench-only rendering.
+  assertable camera framing, Workbench-only rendering.
 - Verification at the IT-2/IT-3 baseline: **271 Rust tests**, **30 Python worker validation
-  checks**, and the cross-platform acceptance E2E (`scripts/smoke_blender_scene.py`) with a
-  calibrated **16,384 px** silhouette (real Blender) plus a deterministic `--fake` mode.
+  checks**, and the cross-platform acceptance E2E (`scripts/smoke_blender_scene.py`: 121 checks on
+  real Blender, 114 on `--fake`) with a calibrated **16,384 px** silhouette and a framed-scene
+  silhouette coverage/margin assertion (real Blender).
 - Next: Phase 3 (asset pipeline) — see [ROADMAP.md](ROADMAP.md). Visual Hull, Parametric
   Solver, LLM integration, Asset Graph and Unreal import are **not implemented**.
 
@@ -43,8 +44,8 @@ On Windows use `target\debug\michelangelo.exe` and build JSON with a real serial
 
 The acceptance scenario creates a composite scene through `blender.run_job(wait=true)`:
 components, a box/cylinder/sphere with a material, two orthographic cameras, a calibrated
-silhouette render, a framed scene render, `get_scene_summary`, `save_blend` and `export_glb`.
-The exact operations array is in
+front silhouette, a framed scene render, a framed scene silhouette, `get_scene_summary`,
+`save_blend` and `export_glb` (5 artifacts). The exact operations array is in
 [examples/scene_ops/composite_scene_spec.json](examples/scene_ops/composite_scene_spec.json)
 (see [examples/scene_ops/README.md](examples/scene_ops/README.md)).
 
@@ -62,10 +63,13 @@ python scripts/smoke_blender_scene.py --require-blender
 
 The driver runs the scenario through the CLI (`project.create` -> `blender.get_capabilities` ->
 `blender.run_job` -> `job.list` -> `project.get_snapshot`), validates JSONL event order/identity,
-job status and persistence, `.blend`/`.glb`/PNG headers, the calibrated silhouette alpha
-(exactly 16,384 opaque pixels, bbox `x 128..383`, `y 224..287`), reopens the project in a second
-process and exits non-zero on any failure. `--fake` checks protocol plumbing and the artifact
-contract but skips pixel assertions.
+job status and persistence, `.blend`/`.glb`/PNG headers, the calibrated front silhouette alpha
+(exactly 16,384 opaque pixels, bbox `x 128..383`, `y 224..287`), and the framed-scene silhouette
+(`cam_scene` starts at `ortho_scale=100`; `frame_camera` must produce ≥ 0.03 opaque coverage, a
+bbox span ≥ 40% of the frame and an ≥ 8 px border margin — a broken framing step fails). It also
+checks that an invalid spec returns `-32602` without creating a job. Then it reopens the project
+in a second process and exits non-zero on any failure. `--fake` checks protocol plumbing and the
+artifact contract but skips pixel assertions.
 
 Direct JSONL form of the same job (paths are workspace-relative):
 
@@ -98,7 +102,9 @@ python scripts/smoke_blender_scene.py
 `just` recipes wrap the same commands (`smoke-blender-scene`, `smoke-blender-scene-fake`,
 `smoke-blender-scene-required`, `test-worker-python`, plus the existing `verify`/`smoke-*`).
 The recipes are POSIX shell scripts, so they require `just` and `sh` (Git Bash/WSL on Windows);
-`just` is not installed on the current Windows stand — run the direct commands instead.
+the Python interpreter defaults to `python3` — on a Windows host where only `python` exists run
+e.g. `just python_bin=python smoke-blender-scene-fake`. `just` is not installed on the current
+Windows stand — run the direct commands instead.
 
 ## Architecture
 

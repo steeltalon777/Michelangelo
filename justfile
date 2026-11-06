@@ -5,9 +5,10 @@
 # docs/dev/DEVSTAND_WINDOWS.md). The acceptance recipes below are thin wrappers
 # around the cross-platform Python driver scripts/smoke_blender_scene.py.
 
-# Python interpreter for the Python-based recipes; override on hosts where only
-# `python3` is on PATH: `just python_bin=python3 smoke-blender-scene-fake`.
-python_bin := "python"
+# Python interpreter for the Python-based recipes. The POSIX default is `python3`
+# (Linux/macOS); on a Windows host where only `python` exists, override it:
+# `just python_bin=python smoke-blender-scene-fake`.
+python_bin := "python3"
 
 _default:
     just --list

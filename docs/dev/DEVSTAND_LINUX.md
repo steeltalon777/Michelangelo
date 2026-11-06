@@ -31,7 +31,9 @@ python3 -m py_compile blender/worker.py scripts/test_worker_validation.py script
 python3 scripts/test_worker_validation.py
 ```
 
-`just` is optional; the recipes are POSIX shell scripts and work on Linux:
+`just` is optional; the recipes are POSIX shell scripts and work on Linux. The Python recipes
+default to `python3` (Linux/macOS convention); override with `just python_bin=python ...` on hosts
+where only `python` exists:
 `just verify`, `just test-worker-python`, `just smoke-blender-scene-fake`,
 `just smoke-blender-scene`, `just smoke-blender-scene-required`, plus the legacy smokes.
 
@@ -48,9 +50,12 @@ python3 scripts/smoke_blender_scene.py --require-blender
 ```
 
 Both modes run the composite scene from `examples/scene_ops/composite_scene_spec.json` through the
-CLI, validate JSONL event order/identity, artifact metadata and headers, and reopen the project in
-a second process. The calibrated silhouette alpha assertions run in real mode only. Temporary
-directories are removed unless `--keep` is passed.
+CLI (5 artifacts), validate JSONL event ordering/identity, invalid-spec rejection, artifact
+metadata and headers, and reopen the project in a second process. Real mode additionally asserts
+the calibrated front silhouette alpha and the framed-scene silhouette coverage/bbox/margin
+(`cam_scene` starts at `ortho_scale=100`, so a broken `frame_camera` fails). Temporary directories
+are removed unless `--keep` is passed; the driver resolves `<repo>/target/debug/michelangelo` or
+`--cli PATH` and does not read `CARGO_TARGET_DIR`.
 
 Fake mode uses `fake_blender.sh` (shebang + executable bit) plus the shared `fake_impl.py`, so it
 also exercises the Unix direct-exec launch path. On Windows the same driver generates

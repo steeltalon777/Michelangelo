@@ -62,7 +62,8 @@ python scripts/smoke_blender_scene.py          # real Blender; prints SKIP + exi
 
 Equivalent `just` recipes (POSIX, need `just` + `sh`): `just verify`, `just test-worker-python`,
 `just smoke-blender-scene`, `just smoke-blender-scene-fake`, `just smoke-blender-scene-required`,
-plus the legacy smokes. Without `just`, run the exact commands above.
+plus the legacy smokes. The recipes default to `python3`; on this Windows stand override it with
+`just python_bin=python ...` if `just` is installed. Without `just`, run the exact commands above.
 
 ## Acceptance smoke driver
 
@@ -80,9 +81,13 @@ python scripts/smoke_blender_scene.py [--fake] [--blender-bin PATH] [--cli PATH]
 - `--fake` generates `fake_blender.cmd` + a shared `fake_impl.py` in a temp directory and sets
   `BLENDER_BIN` for the CLI — the **production** adapter launches `.cmd` through `cmd /C call`, so
   the fake exercises the real Windows spawn path;
-- it runs the composite scene from `examples/scene_ops/composite_scene_spec.json` through the CLI,
-  validates JSONL events/identity, artifact metadata and headers, the calibrated silhouette alpha
-  (real mode), then reopens the project in a second process;
+- it runs the composite scene from `examples/scene_ops/composite_scene_spec.json` through the CLI
+  (5 artifacts), validates JSONL events/identity/ordering, invalid-spec rejection, artifact
+  metadata and headers, the calibrated front silhouette alpha, the framed-scene silhouette
+  coverage/bbox/margin (real mode; `cam_scene` starts at `ortho_scale=100`, so a broken
+  `frame_camera` fails), then reopens the project in a second process;
+- the driver does not use `CARGO_TARGET_DIR`: it resolves `<repo>/target/debug/michelangelo.exe`
+  or accepts `--cli PATH`;
 - the temporary workspace and fake directory are removed unless `--keep` is passed; exit codes:
   `0` pass/SKIP, `1` validation failure, `2` setup error.
 
@@ -132,7 +137,8 @@ $env:BLENDER_BIN = "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 
 1. `justfile` recipes are POSIX shell scripts (`#!/bin/bash` or shell lines). On Windows use Git
    Bash/WSL, or run the equivalent `cargo`/`python` commands directly; `just` is not installed on
-   this stand.
+   this stand. The recipes default to `python3`, so a Windows `just` run needs
+   `just python_bin=python ...`.
 2. CI runs Rust/Python checks and the fake acceptance smoke on `windows-latest`, but **no real
    Blender** — real-Blender tests auto-skip there. Real Blender acceptance remains a local gate.
 3. `Path::is_absolute()` on Windows requires a drive prefix: a rooted path without a drive (for

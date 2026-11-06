@@ -111,8 +111,10 @@ are omitted when unknown; `error` is present only when probing failed (the paylo
 successful-probe shape).
 
 - `supported_operations` is the operation list actually reported by `blender/worker.py`
-  (`--capabilities`), in stable order. The static whitelist is used as a fallback when probing
-  fails; unknown/extra operations are never advertised as available.
+  (`--capabilities`), in stable order. The adapter passes the worker-reported list through
+  unchanged, so a modified worker could advertise extra names; **execution** is still restricted
+  to the `SAFE_WORKER_OPS` whitelist — `blender.run_job` rejects unknown ops with `-32602` before
+  creating a job. The static whitelist is used as a fallback when probing fails.
 - Missing binary: normal response with `binary_found=false`, `bpy_available=false`,
   `blender_version=null`, static whitelist in `supported_operations`, `error` set.
 - Binary present but the worker probe failed: `binary_found=true`, `bpy_available=false`, `error`
@@ -173,11 +175,15 @@ Responses (all are successful JSON-RPC envelopes; failures are **job-level**, no
 
 | Terminal outcome | Response `result` |
 |---|---|
-| completed | `{"job": <JobDto or null>, "status": "completed"}` |
-| failed | `{"job": <JobDto or null>, "status": "failed", "error": "<message>"}` |
-| cancelled | `{"job": <JobDto or null>, "status": "cancelled"}` |
+| completed | `{"job": <persisted job record or null>, "status": "completed"}` |
+| failed | `{"job": <persisted job record or null>, "status": "failed", "error": "<message>"}` |
+| cancelled | `{"job": <persisted job record or null>, "status": "cancelled"}` |
 
-The returned `job` is re-read from storage after the transition, so `status`, `started_at`,
+The `job` value is the **raw persisted storage record**, not the typed `JobDto` used by snapshots:
+an object with `id`, `project_id`, `job_type`, `status`, `progress_pct`, `message`, `input_json`,
+`output_json`, `error`, `logs`, `created_at`, `started_at`, `finished_at` (fields are nullable
+where applicable; `output_json` is the JSON-encoded worker result, including artifacts and
+`scene_summary`). It is re-read from storage after the transition, so `status`, `started_at`,
 `finished_at`, `error` and `output_json` reflect persisted state; every event for the job carries
 the same job id.
 

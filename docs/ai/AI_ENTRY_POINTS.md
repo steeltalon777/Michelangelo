@@ -28,7 +28,7 @@
 | `crates/michelangelo_cli/src/stdio.rs` | JSONL stdin/stdout loop with event channel |
 | `blender/worker.py` | Blender Python worker — 18 safe operations, deterministic scene init, validation, `--capabilities` |
 | `blender/smoke_create_cube.py` | Standalone Blender smoke helper |
-| `scripts/smoke_blender_scene.py` | Cross-platform acceptance E2E driver (real Blender + `--fake`, PNG alpha validation) |
+| `scripts/smoke_blender_scene.py` | Cross-platform acceptance E2E driver (real Blender + `--fake`; JSONL event ordering/identity, invalid-spec rejection, artifact headers, calibrated front silhouette and framed-scene silhouette alpha, reopen) |
 | `scripts/test_worker_validation.py` | Python worker validation checks (no `bpy`) |
 | `scripts/validate_blender_smoke.py` | JSONL smoke output structural validator (legacy recipes) |
 | `scripts/create_fake_blender.sh` | POSIX fake Blender generator for the legacy smoke recipe |
@@ -67,7 +67,8 @@
 - Workspace tests: `crates/michelangelo_workspace/src/*.rs`
 - CLI tests: `crates/michelangelo_cli/src/stdio.rs` and `main.rs`
 - Python worker tests: `scripts/test_worker_validation.py` (no `bpy`, 30 checks)
-- Acceptance E2E: `scripts/smoke_blender_scene.py` (`--fake` and real)
+- Acceptance E2E: `scripts/smoke_blender_scene.py` (`--fake` and real; composite scene, 5
+  artifacts, event ordering, invalid-spec rejection, calibrated + framed-scene silhouettes)
 - Legacy smokes: `just smoke-jsonl`, `just smoke-reopen`, `just smoke-e2e`,
   `just smoke-blender-fake`, `just smoke-blender-real`, `just smoke-blender-real-glb`
 
