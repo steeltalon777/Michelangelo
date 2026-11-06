@@ -391,6 +391,9 @@ and the TZ, and returns a verdict; verdict is recorded in section 8.
 | IT-1 attempt 2 | `8311ef7` | Same separate read-only context: **GREEN** | P1-1 fixed (bounded `--version` with kill-tree); terminal events after successful transitions; queued→failed identity; spec-path rules aligned; missing tests added; `finished_at` lifecycle persistence added (Lead-found). Residual P2 (version parsed from output tail; `taskkill` unbounded in the timeout path) accepted as non-blocking and recorded in the review. |
 | IT-2 attempt 1 | `59ca3c5` | Same separate read-only context: **YELLOW** | P1: `render_views` derived filenames from imported camera names could unlink/write PNGs outside the workspace before artifact rejection (Blender imports glTF node names verbatim; reproduced by the Lead with a crafted glTF). P2: FS mutation before containment, import name idempotency, missing outside-import/render_views tests. Rework ordered. |
 | IT-2 attempt 2 | `2cf4961` | Same separate read-only context: **GREEN** | Containment-before-mutation for all output paths; safe derived render filenames/collision rejection; import name idempotency; crafted-glTF sentinel regression test (Lead-independent repro: sentinel SHA/size/mtime unchanged); positive render_views (4 unique PNGs), set_transform bbox, cross-platform Windows-path rejection, legacy JSON compat. 271 tests, Lead acceptance E2E 28/28 with calibrated 16384-px silhouette. Non-blocking P2 notes (case-insensitive/Windows reserved names, concurrent symlink TOCTOU) accepted and documented for IT-3. |
+| IT-3 attempt 1 | `9749b60` | Same separate read-only context: **GREEN** with six non-blocking P2 doc/assertion items | Cross-platform fake/real acceptance driver, examples, docs, CI. Reviewer P2s: tautological opaque-alpha framing check, wrong `job` response type in CORE_PROTOCOL, over-strong capabilities guarantee, non-reproducible worker example, missing event/response ordering + artifact-metadata checks, python3/`CARGO_TARGET_DIR` doc inconsistency. Rework ordered. |
+| IT-3 attempt 2 | `cbb146f` | Same separate read-only context: **GREEN** | All six P2s materially fixed: discriminating framing counterfactual (framed 26,142 px/0.0997 vs unframed 86 px/0.00033), raw storage `job` record documented, capabilities pass-through wording, reproducible example, event-before-response ordering + artifact metadata equality + invalid-spec `-32602` with no record, python3 default and `--cli`/`CARGO_TARGET_DIR` docs. |
+| IT-3 final accuracy | `e2da7fb` | Follow-up to reviewer's remaining P2 notes (final confirmation requested) | Corrected examples-README counterfactual (margin passes; coverage+span fail, ~91x) and documented thresholds (0.03..0.95, span ≥205 px, 8 px margin); gated vacuous invalid-request check; removed tautological opaque-alpha check. Final smoke counts: fake 113 checks/3 skips, real 119 checks/0 skips; 271 Rust tests unchanged. |
 
 Reviewer-route note: on this Windows profile the `worker` agent preset shield allows the
 unavailable `bash` tool, and the `researcher`/`reviewer` shields reference MCP prefixes for
@@ -406,7 +409,28 @@ available model family, and this limitation is reported to the user.
 - [x] IT-2 implementation complete
 - [x] IT-2 verification ladder green + real Blender op smoke — 271 tests, Lead acceptance E2E 28/28
 - [x] IT-2 independent review green — attempt 2 (`2cf4961`) GREEN
-- [ ] IT-3 E2E acceptance scenario + docs/CI complete
-- [ ] IT-3 full regression + real Blender smoke green
-- [ ] IT-3 independent review green
-- [ ] Final report (Russian): changed files, tests, limitations, JSONL example
+- [x] IT-3 E2E acceptance scenario + docs/CI complete
+- [x] IT-3 full regression + real Blender smoke green — 271 Rust tests, fake 113 checks, real 119 checks (Blender 5.2.3)
+- [x] IT-3 independent review green — attempt 1 GREEN with P2s, attempt 2 GREEN after fixes; final accuracy pass `e2da7fb`
+- [ ] Final report (Russian): changed files, tests, limitations, JSONL example — produced in the chat after the final review confirmation
+
+## 10. Final Result
+
+Acceptance criterion is met on the verified stand (Windows, Blender 5.2.3 LTS):
+
+- composite scene with named components, box/cylinder/sphere, material and exact transforms;
+- calibrated orthographic cameras (`look_at`, ortho scale, pose/settings/framing, resolution);
+- silhouette/alpha render of a selected camera: exactly **16,384** pixels α>127, bbox
+  **(128,383,224,287)** for the documented fixture; framed scene silhouette coverage
+  0.0997 with a meaningful bbox (counterfactual without `frame_camera`: 86 px);
+- `.blend` (zstd) and `.glb` (glTF v2) saved and validated;
+- job state/artifacts/events persisted across a process boundary with `started_at`/`finished_at`;
+- invalid specs/worker failures/silhouette timeouts reported as structured job/protocol errors.
+
+Final commits on `dev` (not pushed): `95ebeed`, `8311ef7`, `7ffb232`, `59ca3c5`, `2cf4961`,
+`ff230ef`, `9749b60`, `cbb146f`, `e2da7fb` (+ this TZ record commit).
+
+Residual limitations: Linux real-Blender stand unavailable locally (CI runs Rust/Python/fake
+only); Workbench-only rendering; LLM/Visual Hull/Parametric Solver/Asset Graph/Unreal out of
+scope; same-model-family reviewer context used because the Windows reviewer preset is
+misconfigured; `just` is not installed on this stand (Python driver and direct commands used).
