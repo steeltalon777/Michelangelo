@@ -846,6 +846,17 @@ fn validate_optional_name(name: Option<&str>, field: &str, label: &str) -> Resul
     Ok(())
 }
 
+/// True for Windows drive/UNC path forms that must be rejected on every host.
+///
+/// `Path::is_absolute`/component parsing is platform-dependent, so a Linux host
+/// would otherwise accept `C:foo.blend` or `\\server\share\x`. The Python
+/// worker rejects them portably; Rust validation matches that behavior.
+fn has_windows_style_path_form(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let drive_prefixed = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    drive_prefixed || path.starts_with("\\\\") || path.starts_with("//")
+}
+
 fn validate_relative_path(path: &str, field: &str, label: &str) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err(format!("{label}: '{field}' must not be empty"));
@@ -857,6 +868,15 @@ fn validate_relative_path(path: &str, field: &str, label: &str) -> Result<(), St
     }
     if path.contains('\0') {
         return Err(format!("{label}: '{field}' must not contain NUL"));
+    }
+    // Windows drive (`C:foo`, `C:\x`), UNC (`\\server\share`) and `//` network
+    // forms are rejected on EVERY platform (matching the Python worker), not
+    // only when running on Windows.
+    if has_windows_style_path_form(path) {
+        return Err(format!(
+            "{label}: '{field}' must not contain root/prefix components \
+             (Windows drive/UNC forms are rejected): '{path}'"
+        ));
     }
     let parsed = Path::new(path);
     if parsed.is_absolute() {
@@ -1638,10 +1658,7 @@ mod tests {
 
         for (op, needle) in [
             (json!({"op": "save_blend", "path": ""}), "must not be empty"),
-            (
-                json!({"op": "save_blend", "path": absolute}),
-                "workspace-relative",
-            ),
+            (json!({"op": "save_blend", "path": absolute}), "rejected"),
             (
                 json!({"op": "save_blend", "path": "../evil.blend"}),
                 "parent-traversal",
@@ -1657,19 +1674,83 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
-    fn test_windows_drive_relative_and_unc_spec_paths_rejected() {
-        for path in [r"C:foo.blend", r"\\server\share\evil.blend"] {
+    fn test_windows_style_paths_rejected_on_every_platform() {
+        // Drive-relative / drive-absolute / UNC / `//` forms must be rejected
+        // identically on Windows and Unix (matching the Python worker).
+        let windows_forms = [
+            r"C:foo.blend",
+            r"C:\tmp\evil.blend",
+            r"C:/tmp/evil.blend",
+            r"\\server\share\evil.blend",
+            r"//server/share/evil.blend",
+        ];
+        for path in windows_forms {
             let error = validate_value(json!({"op": "save_blend", "path": path}))
                 .expect_err("windows path form must be rejected");
             assert!(
-                error.contains("absolute")
-                    || error.contains("root/prefix")
-                    || error.contains("root/prefix"),
+                error.contains("root/prefix"),
                 "unexpected error for {path:?}: {error}"
             );
+            // Import paths use the same validator.
+            let error = validate_value(json!({"op": "import_mesh", "path": path}))
+                .expect_err("windows import path form must be rejected");
+            assert!(
+                error.contains("root/prefix"),
+                "unexpected import error for {path:?}: {error}"
+            );
         }
+        // A normal relative path with a drive-letter-like file name component is
+        // unaffected (`..`-inside-name rule) — only the leading drive form matters.
+        assert!(
+            validate_value(json!({"op": "save_blend", "path": "scenes/C_notes.blend"})).is_ok()
+        );
+    }
+
+    #[test]
+    fn test_legacy_flat_json_with_extra_fields_and_null_optionals_parses() {
+        // Phase 2 flat DTO tolerated arbitrary extra keys and explicit nulls for
+        // all optional fields; the typed enum must keep parsing such payloads.
+        let legacy = json!({
+            "job_type": "legacy_flat",
+            "wait": true,
+            "timeout_ms": null,
+            "spec": {"operations": [
+                {
+                    "op": "create_box",
+                    "name": "body",
+                    "size": [2.0, 1.0, 0.5],
+                    "location": [0.0, 0.0, 0.0],
+                    "rotation_deg": null,
+                    "component": null,
+                    // Fields the old flat DTO accepted on every operation.
+                    "color": [1.0, 0.0, 0.0, 1.0],
+                    "object": "ignored",
+                    "views": ["front"],
+                    "path": "ignored.blend",
+                    "legacy_extra": {"nested": true}
+                },
+                {
+                    "op": "save_blend",
+                    "path": "blender/scenes/legacy.blend",
+                    "name": null,
+                    "size": null,
+                    "location": null,
+                    "color": null,
+                    "object": null,
+                    "views": null,
+                    "unknown_extra": 42
+                },
+                {"op": "set_camera_set", "views": null},
+                {"op": "render_views", "path": null},
+                {"op": "get_scene_summary", "extra": null}
+            ]}
+        });
+        let spec = parse_spec(legacy);
+        assert_eq!(spec.spec.operations.len(), 5);
+        assert_eq!(spec.spec.operations[0].op_name(), "create_box");
+        assert_eq!(spec.spec.operations[1].op_name(), "save_blend");
+        assert!(spec.validate().is_ok());
     }
 
     #[test]

@@ -928,6 +928,13 @@ fn sanitize_partial_artifacts(result: &mut BlenderJobResult, workspace_root: &Pa
     result.artifacts = if safe.is_empty() { None } else { Some(safe) };
 }
 
+/// True for Windows drive/UNC path forms that must be rejected on every host.
+fn has_windows_style_path_form(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let drive_prefixed = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    drive_prefixed || path.starts_with("\\\\") || path.starts_with("//")
+}
+
 /// Validate that an artifact path is workspace-relative and traversal-free.
 fn validate_artifact_path(path: &str) -> Result<(), BlenderError> {
     if path.is_empty() {
@@ -938,6 +945,11 @@ fn validate_artifact_path(path: &str) -> Result<(), BlenderError> {
     if path.contains('\0') {
         return Err(BlenderError::InvalidArtifact(format!(
             "artifact path contains NUL: '{path}'"
+        )));
+    }
+    if has_windows_style_path_form(path) {
+        return Err(BlenderError::InvalidArtifact(format!(
+            "Windows drive/UNC artifact path rejected: '{path}'"
         )));
     }
 
@@ -2385,7 +2397,10 @@ mod tests {
         let err = validate_artifact_path(&absolute_path("/absolute/path/file.blend")).unwrap_err();
         match err {
             BlenderError::InvalidArtifact(msg) => {
-                assert!(msg.contains("Absolute"));
+                assert!(
+                    msg.contains("Absolute") || msg.contains("Windows drive/UNC"),
+                    "unexpected message: {msg}"
+                );
             }
             other => panic!("Expected InvalidArtifact, got {other:?}"),
         }
@@ -2451,7 +2466,7 @@ mod tests {
         let spec = spec_with_op("save_blend", Some(&absolute_path("/etc/passwd")));
         let err = spec.validate().unwrap_err();
         assert!(
-            err.contains("workspace-relative"),
+            err.contains("workspace-relative") || err.contains("root/prefix"),
             "unexpected error: {err}"
         );
     }
@@ -2481,10 +2496,14 @@ mod tests {
         assert!(spec.validate().is_ok());
     }
 
-    #[cfg(windows)]
     #[test]
-    fn test_windows_drive_relative_and_unc_paths_rejected() {
-        for path in ["C:foo.blend", r"\\server\share\evil.blend"] {
+    fn test_windows_drive_relative_and_unc_paths_rejected_on_every_platform() {
+        for path in [
+            "C:foo.blend",
+            r"C:\tmp\evil.blend",
+            r"\\server\share\evil.blend",
+            "//server/share/evil.blend",
+        ] {
             let artifact_error = validate_artifact_path(path).unwrap_err();
             assert!(
                 matches!(artifact_error, BlenderError::InvalidArtifact(_)),
@@ -2505,7 +2524,7 @@ mod tests {
         let spec = spec_with_op("export_glb", Some(&absolute_path("/etc/out.glb")));
         let err = spec.validate().unwrap_err();
         assert!(
-            err.contains("workspace-relative"),
+            err.contains("workspace-relative") || err.contains("root/prefix"),
             "unexpected error: {err}"
         );
     }
@@ -2540,7 +2559,8 @@ mod tests {
         assert!(result.is_err(), "expected spec validation error");
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
-            err_msg.contains("invalid job spec") && err_msg.contains("workspace-relative"),
+            err_msg.contains("invalid job spec")
+                && (err_msg.contains("workspace-relative") || err_msg.contains("root/prefix")),
             "expected pre-spawn spec rejection, got: {err_msg}"
         );
         assert!(
@@ -2636,6 +2656,55 @@ mod tests {
             "unexpected: {err_msg}"
         );
         assert!(!output.path().join("job_import_ext").exists());
+
+        // Path traversal outside the workspace is rejected before the job dir.
+        let result = test_adapter().run_job_with_fake(
+            &fake,
+            "job_import_traversal",
+            &import_spec("../outside.glb"),
+            workspace.path(),
+            output.path(),
+            Some(30_000),
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid job spec") && err_msg.contains("parent-traversal"),
+            "unexpected: {err_msg}"
+        );
+        assert!(!output.path().join("job_import_traversal").exists());
+
+        // Symlink escape: a workspace-relative path whose real file lives
+        // outside the workspace is rejected before the job dir is created.
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("outside.glb");
+        std::fs::write(&outside_file, b"glTF-outside").unwrap();
+        let link = workspace.path().join("assets/link.glb");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside_file, &link);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(&outside_file, &link);
+        match link_result {
+            Ok(()) => {
+                let result = test_adapter().run_job_with_fake(
+                    &fake,
+                    "job_import_symlink",
+                    &import_spec("assets/link.glb"),
+                    workspace.path(),
+                    output.path(),
+                    Some(30_000),
+                );
+                let err_msg = format!("{}", result.unwrap_err());
+                assert!(
+                    err_msg.contains("outside the workspace"),
+                    "unexpected: {err_msg}"
+                );
+                assert!(!output.path().join("job_import_symlink").exists());
+            }
+            Err(error) => {
+                eprintln!("[skip] import symlink escape case: symlink denied: {error}");
+            }
+        }
     }
 
     #[test]
@@ -3339,6 +3408,449 @@ mod tests {
         let summary = deduped.scene_summary.expect("scene summary");
         assert_eq!(summary["cameras"], serde_json::json!(1));
         assert_eq!(summary["objects"], serde_json::json!(1));
+    }
+
+    /// Real Blender P1 regression: a crafted glTF whose camera node names are
+    /// hostile must make `render_views` fail BEFORE any output directory
+    /// creation or unlink/render, so a sentinel PNG outside the workspace stays
+    /// byte-for-byte untouched. The same test covers the safe normal case
+    /// (unique legacy camera names render one PNG per camera).
+    #[test]
+    fn test_real_blender_crafted_gltf_render_views_containment() {
+        let Some(adapter) =
+            real_blender_adapter_or_skip("test_real_blender_crafted_gltf_render_views_containment")
+        else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let sentinel = outside.path().join("sentinel.png");
+        std::fs::write(&sentinel, b"SENTINEL-ORIGINAL-CONTENT-DO-NOT-TOUCH").unwrap();
+        let sentinel_bytes = std::fs::read(&sentinel).unwrap();
+        let sentinel_modified = std::fs::metadata(&sentinel).unwrap().modified().unwrap();
+
+        // Camera node names: the IT-2 review fixture forms plus a camera whose
+        // derived `<name>.png` is exactly the outside sentinel file.
+        let sentinel_camera_name = format!("{}\\sentinel", outside.path().display());
+        let gltf = serde_json::json!({
+            "asset": {"version": "2.0", "generator": "michelangelo-it2-test"},
+            "scene": 0,
+            "scenes": [{"nodes": [0, 1, 2, 3, 4]}],
+            "nodes": [
+                {"name": "../../escape", "camera": 0},
+                {"name": "a/b", "camera": 0},
+                {"name": "C:\\tmp\\evil", "camera": 0},
+                {"name": "\\\\server\\share\\evil", "camera": 0},
+                {"name": sentinel_camera_name, "camera": 0}
+            ],
+            "cameras": [{
+                "type": "perspective",
+                "perspective": {"yfov": 0.8, "znear": 0.1, "zfar": 100.0}
+            }]
+        });
+        let assets_dir = workspace.path().join("assets");
+        std::fs::create_dir_all(&assets_dir).unwrap();
+        std::fs::write(
+            assets_dir.join("evil.gltf"),
+            serde_json::to_vec_pretty(&gltf).unwrap(),
+        )
+        .unwrap();
+
+        let spec = BlenderJobSpec {
+            job_type: "crafted_gltf_containment".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::ImportMesh {
+                        path: "assets/evil.gltf".into(),
+                        name: None,
+                        component: None,
+                    },
+                    BlenderOperation::RenderViews {
+                        path: Some("blender/renders".into()),
+                    },
+                ],
+            },
+        };
+        let result = adapter
+            .run_job(
+                "real_blender_crafted_gltf",
+                &spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("worker failure is a job-level result, not an adapter error");
+        assert_eq!(result.status, "failed", "{:?}", result.artifacts);
+        let error = result.error.clone().unwrap_or_default();
+        assert!(
+            error.contains("render_views"),
+            "expected a render_views error, got: {error}"
+        );
+        assert!(
+            error.contains("unsafe camera name") || error.contains("duplicate output filename"),
+            "expected a safe-name/containment rejection, got: {error}"
+        );
+        assert!(
+            result.artifacts.as_deref().unwrap_or(&[]).is_empty(),
+            "failed render_views must not report artifacts: {:?}",
+            result.artifacts
+        );
+
+        // No filesystem mutation: sentinel untouched, no renders/escape file.
+        assert_eq!(std::fs::read(&sentinel).unwrap(), sentinel_bytes);
+        assert_eq!(
+            std::fs::metadata(&sentinel).unwrap().modified().unwrap(),
+            sentinel_modified,
+            "sentinel mtime must be unchanged"
+        );
+        let outside_entries: Vec<_> = std::fs::read_dir(outside.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            outside_entries,
+            vec![std::ffi::OsString::from("sentinel.png")],
+            "nothing else may be written outside the workspace"
+        );
+        assert!(
+            !workspace.path().join("escape.png").exists(),
+            "no escape.png may be written by render_views"
+        );
+        assert!(
+            !workspace.path().join("blender").exists(),
+            "render_views must reject before creating the output directory"
+        );
+    }
+
+    /// Real Blender: a normal legacy camera set renders exactly one PNG per
+    /// camera with unique, stripped names (`front/left/top/perspective`).
+    #[test]
+    fn test_real_blender_render_views_unique_artifacts() {
+        let Some(adapter) =
+            real_blender_adapter_or_skip("test_real_blender_render_views_unique_artifacts")
+        else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+        let spec = BlenderJobSpec {
+            job_type: "render_views_unique".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::SetCameraSet { views: None },
+                    BlenderOperation::RenderViews {
+                        path: Some("blender/renders/views".into()),
+                    },
+                    BlenderOperation::GetSceneSummary {},
+                ],
+            },
+        };
+        let result = adapter
+            .run_job(
+                "real_blender_render_views_unique",
+                &spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("normal render_views must complete");
+        assert_eq!(result.status, "completed", "{:?}", result.error);
+
+        let artifacts = result.artifacts.clone().unwrap_or_default();
+        assert_eq!(artifacts.len(), 4, "artifacts: {artifacts:?}");
+        let mut paths: Vec<String> = artifacts.iter().map(|a| a.path.clone()).collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "blender/renders/views/front.png".to_string(),
+                "blender/renders/views/left.png".to_string(),
+                "blender/renders/views/perspective.png".to_string(),
+                "blender/renders/views/top.png".to_string(),
+            ]
+        );
+        let unique: std::collections::HashSet<&String> = paths.iter().collect();
+        assert_eq!(unique.len(), paths.len(), "artifact paths must be unique");
+        for artifact in &artifacts {
+            assert_eq!(artifact.artifact_type, "png");
+            let path = assert_artifact_on_disk(artifact, workspace.path());
+            assert_png_rgba(&path, 512, 512);
+        }
+        let summary = result.scene_summary.expect("scene summary");
+        assert_eq!(summary["cameras"], serde_json::json!(4));
+    }
+
+    /// Real Blender: cameras `Cam_front` and `front` derive the same
+    /// `front.png`; render_views must reject the duplicate before writing.
+    #[test]
+    fn test_real_blender_render_views_duplicate_filename_rejected() {
+        let Some(adapter) = real_blender_adapter_or_skip(
+            "test_real_blender_render_views_duplicate_filename_rejected",
+        ) else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+        let spec = BlenderJobSpec {
+            job_type: "render_views_collision".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateOrthoCamera {
+                        name: "Cam_front".into(),
+                        location: vec![0.0, -10.0, 0.0],
+                        rotation_deg: None,
+                        look_at: Some(vec![0.0, 0.0, 0.0]),
+                        ortho_scale: None,
+                        shift_x: None,
+                        shift_y: None,
+                        clip_start: None,
+                        clip_end: None,
+                        component: None,
+                    },
+                    BlenderOperation::CreateOrthoCamera {
+                        name: "front".into(),
+                        location: vec![0.0, 10.0, 0.0],
+                        rotation_deg: None,
+                        look_at: Some(vec![0.0, 0.0, 0.0]),
+                        ortho_scale: None,
+                        shift_x: None,
+                        shift_y: None,
+                        clip_start: None,
+                        clip_end: None,
+                        component: None,
+                    },
+                    BlenderOperation::RenderViews {
+                        path: Some("blender/renders/collision".into()),
+                    },
+                ],
+            },
+        };
+        let result = adapter
+            .run_job(
+                "real_blender_render_views_collision",
+                &spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("worker failure is a job-level result");
+        assert_eq!(result.status, "failed");
+        let error = result.error.clone().unwrap_or_default();
+        assert!(
+            error.contains("duplicate output filename 'front.png'"),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("Cam_front"), "unexpected error: {error}");
+        assert!(
+            result.artifacts.as_deref().unwrap_or(&[]).is_empty(),
+            "collision must be rejected before writing artifacts"
+        );
+        assert!(
+            !workspace.path().join("blender").exists(),
+            "collision must be rejected before creating the output directory"
+        );
+    }
+
+    /// Real Blender P2-2: importing a single object with its own current name is
+    /// idempotent; only objects that existed before the import collide.
+    #[test]
+    fn test_real_blender_import_mesh_name_is_idempotent() {
+        let Some(adapter) =
+            real_blender_adapter_or_skip("test_real_blender_import_mesh_name_is_idempotent")
+        else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+        let export_spec = BlenderJobSpec {
+            job_type: "export_named_source".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateBox {
+                        name: Some("body".into()),
+                        size: Some(vec![1.0, 1.0, 1.0]),
+                        location: Some(vec![0.0, 0.0, 0.0]),
+                        rotation_deg: None,
+                        component: None,
+                    },
+                    BlenderOperation::ExportGlb {
+                        path: "assets/body.glb".into(),
+                    },
+                ],
+            },
+        };
+        let exported = adapter
+            .run_job(
+                "real_blender_idempotent_export",
+                &export_spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("export must succeed");
+        assert_eq!(exported.status, "completed", "{:?}", exported.error);
+
+        // The GLB node is named `body`; importing it with `name: "body"` must be
+        // accepted because the name already belongs to the imported object.
+        let import_spec = BlenderJobSpec {
+            job_type: "idempotent_import".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateComponent {
+                        name: "imported".into(),
+                    },
+                    BlenderOperation::ImportMesh {
+                        path: "assets/body.glb".into(),
+                        name: Some("body".into()),
+                        component: Some("imported".into()),
+                    },
+                    BlenderOperation::GetSceneSummary {},
+                ],
+            },
+        };
+        let imported = adapter
+            .run_job(
+                "real_blender_idempotent_import",
+                &import_spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("idempotent name import must succeed");
+        assert_eq!(imported.status, "completed", "{:?}", imported.error);
+        let summary = imported.scene_summary.expect("scene summary");
+        assert_eq!(summary["objects"], serde_json::json!(1));
+        assert_eq!(summary["meshes"], serde_json::json!(1));
+        assert_eq!(
+            summary["components"],
+            serde_json::json!([{"name": "Component_imported", "objects": ["body"]}])
+        );
+
+        // A second import that tries to reuse a name owned by an object that
+        // existed before that import is a real collision and must fail.
+        let collision_spec = BlenderJobSpec {
+            job_type: "import_name_collision".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::ImportMesh {
+                        path: "assets/body.glb".into(),
+                        name: None,
+                        component: None,
+                    },
+                    BlenderOperation::ImportMesh {
+                        path: "assets/body.glb".into(),
+                        name: Some("body".into()),
+                        component: None,
+                    },
+                ],
+            },
+        };
+        let collision = adapter
+            .run_job(
+                "real_blender_import_name_collision",
+                &collision_spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("worker failure is a job-level result");
+        assert_eq!(collision.status, "failed");
+        let error = collision.error.clone().unwrap_or_default();
+        assert!(
+            error.contains("already exists in the scene before the import"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Real Blender P2 numeric assertion: set_transform must produce an exact
+    /// world bounding box, and `apply_scale` must bake the scale into the mesh.
+    #[test]
+    fn test_real_blender_set_transform_numeric() {
+        let Some(adapter) = real_blender_adapter_or_skip("test_real_blender_set_transform_numeric")
+        else {
+            return;
+        };
+
+        let workspace = TempDir::new().unwrap();
+        let output = TempDir::new().unwrap();
+        let spec = BlenderJobSpec {
+            job_type: "set_transform_numeric".into(),
+            wait: true,
+            timeout_ms: Some(60_000),
+            spec: BlenderSpecBody {
+                operations: vec![
+                    BlenderOperation::CreateBox {
+                        name: Some("tr_box".into()),
+                        size: Some(vec![2.0, 1.0, 0.5]),
+                        location: Some(vec![0.0, 0.0, 0.0]),
+                        rotation_deg: None,
+                        component: None,
+                    },
+                    // Move to (5, 0, 1), scale 2x, and bake the scale.
+                    BlenderOperation::SetTransform {
+                        object: "tr_box".into(),
+                        location: Some(vec![5.0, 0.0, 1.0]),
+                        rotation_deg: None,
+                        scale: Some(vec![2.0, 2.0, 2.0]),
+                        apply_scale: Some(true),
+                    },
+                    // Resetting object scale to 1 proves the scale was applied:
+                    // geometry must stay 4 x 2 x 1.
+                    BlenderOperation::SetTransform {
+                        object: "tr_box".into(),
+                        location: None,
+                        rotation_deg: None,
+                        scale: Some(vec![1.0, 1.0, 1.0]),
+                        apply_scale: Some(false),
+                    },
+                    BlenderOperation::GetSceneSummary {},
+                ],
+            },
+        };
+        let result = adapter
+            .run_job(
+                "real_blender_set_transform_numeric",
+                &spec,
+                workspace.path(),
+                output.path(),
+                Some(60_000),
+            )
+            .expect("set_transform numeric job must succeed");
+        assert_eq!(result.status, "completed", "{:?}", result.error);
+        let summary = result.scene_summary.expect("scene summary");
+        let bounds = &summary["bounds"];
+        let min = bounds["min"].as_array().expect("bounds.min");
+        let max = bounds["max"].as_array().expect("bounds.max");
+        let expect = |values: &[serde_json::Value], expected: [f64; 3]| {
+            assert_eq!(values.len(), 3);
+            for (value, expected) in values.iter().zip(expected) {
+                let value = value.as_f64().expect("numeric bound");
+                assert!(
+                    (value - expected).abs() < 1e-5,
+                    "expected {expected}, got {value} in {values:?}"
+                );
+            }
+        };
+        // Applied scale: mesh 4 x 2 x 1 centered at (5, 0, 1).
+        expect(min, [3.0, -1.0, 0.5]);
+        expect(max, [7.0, 1.0, 1.5]);
     }
 
     /// Real Blender: calibrated front orthographic silhouette (projection

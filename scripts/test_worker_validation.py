@@ -203,6 +203,7 @@ def test_only_whitelisted_operations_are_registered():
 @test
 def test_contract_constants_match_protocol():
     assert worker.MAX_OPERATIONS == 256
+    assert worker.MAX_JOB_TYPE_CHARS == 128
     assert worker.MAX_NAME_CHARS == 64
     assert worker.MAX_SPEC_PATH_CHARS == 1024
     assert worker.MAX_VIEWS == 64
@@ -215,6 +216,9 @@ def test_contract_constants_match_protocol():
     assert worker.LEGACY_VIEW_ALIASES == {"side": "left"}
     assert "side" in worker.LEGACY_VIEW_NAMES
     assert worker.LEGACY_DEFAULT_VIEWS == ("front", "side", "top", "perspective")
+    # render_views strips `Cam_` only for the canonical legacy render names.
+    assert worker.LEGACY_RENDER_VIEW_NAMES == frozenset(worker.LEGACY_VIEWS)
+    assert "side" not in worker.LEGACY_RENDER_VIEW_NAMES
 
 
 @test
@@ -278,6 +282,32 @@ def test_validate_job_rejects_bad_workspace_root():
             pass
         else:
             raise AssertionError(f"workspace_root {bad_root!r} must be rejected")
+
+
+@test
+def test_job_type_defensive_validation():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        base = {
+            "job_id": "job_1",
+            "workspace_root": str(Path(temp_dir).resolve()),
+            "spec": {"operations": []},
+        }
+        # Absent job_type stays accepted (the adapter's job.json omits it).
+        assert worker.validate_job(dict(base))[0] == "job_1"
+        assert worker.validate_job(dict(base, job_type="blender_scene"))[0] == "job_1"
+        for bad_type in (
+            "",
+            "   ",
+            "bad\njob",
+            "x" * (worker.MAX_JOB_TYPE_CHARS + 1),
+            42,
+        ):
+            try:
+                worker.validate_job(dict(base, job_type=bad_type))
+            except worker.ValidationError as error:
+                assert "job_type" in str(error), f"unexpected message: {error}"
+            else:
+                raise AssertionError(f"job_type {bad_type!r} must be rejected")
 
 
 @test
@@ -549,6 +579,63 @@ def test_side_view_alias_resolution_and_dedupe():
 
 
 @test
+def test_render_view_output_planning():
+    # `Cam_` is stripped only for canonical legacy render view names.
+    assert worker.derive_render_view_name("Cam_front") == "front"
+    assert worker.derive_render_view_name("Cam_perspective") == "perspective"
+    assert worker.derive_render_view_name("Cam_side") == "Cam_side"
+    assert worker.derive_render_view_name("front") == "front"
+    assert worker.derive_render_view_name("body") == "body"
+    assert worker.derive_render_view_name("Cam_body") == "Cam_body"
+
+    plan = worker.plan_render_view_outputs(
+        ["Cam_front", "front_extra", "Cam_left"]
+    )
+    assert [(view, filename) for _camera, view, filename in plan] == [
+        ("front", "front.png"),
+        ("front_extra", "front_extra.png"),
+        ("left", "left.png"),
+    ]
+    assert worker.plan_render_view_outputs([]) == []
+
+    # Unsafe names are rejected before any filesystem access.
+    unsafe_camera_names = [
+        "../../escape",
+        "a/b",
+        "C:\\tmp\\evil",
+        "\\\\server\\share\\evil",
+        "",
+        ".",
+        "..",
+        "x" * (worker.MAX_NAME_CHARS + 1),
+        "bad\x00name",
+        "C:foo",
+        "bad:name",
+        "trail.",
+        "trail ",
+    ]
+    for camera_name in unsafe_camera_names:
+        try:
+            worker.plan_render_view_outputs([camera_name])
+        except worker.OperationError as error:
+            assert "unsafe camera name" in str(error), (
+                f"unexpected error for {camera_name!r}: {error}"
+            )
+        else:
+            raise AssertionError(f"camera name {camera_name!r} must be rejected")
+
+    # Cameras `Cam_front` and `front` derive the same front.png: rejected as a
+    # duplicate before anything is written.
+    try:
+        worker.plan_render_view_outputs(["Cam_front", "front"])
+    except worker.OperationError as error:
+        assert "duplicate output filename 'front.png'" in str(error), error
+        assert "'Cam_front' and 'front'" in str(error), error
+    else:
+        raise AssertionError("duplicate derived filenames must be rejected")
+
+
+@test
 def test_vector_and_numeric_ranges():
     cases = [
         ({"op": "create_box", "size": [2.0, 1.0]}, "exactly 3 components"),
@@ -752,6 +839,56 @@ def test_import_mesh_workspace_checks():
             )
             is not None
         )
+
+
+@test
+def test_render_output_containment():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        base = Path(temp_dir).resolve()
+        workspace = base / "workspace"
+        workspace.mkdir()
+        outside = base / "outside"
+        outside.mkdir()
+        ctx = {"workspace_root": str(workspace)}
+
+        # Normal workspace-relative paths resolve inside and only then create
+        # parent directories.
+        path = worker._prepare_output_path(ctx, "blender/scenes/out.blend")
+        assert path == workspace / "blender/scenes/out.blend", path
+        assert path.parent.is_dir()
+        directory = worker._prepare_output_dir(ctx, "blender/renders")
+        assert directory == workspace / "blender/renders", directory
+        assert directory.is_dir()
+
+        # Existing symlinks that escape the workspace are rejected BEFORE any
+        # mkdir/unlink/render side effect.
+        outside_target = outside / "target.blend"
+        outside_target.write_bytes(b"outside-data")
+        try:
+            (workspace / "escape_dir").symlink_to(outside, target_is_directory=True)
+            (workspace / "escape_file.blend").symlink_to(outside_target)
+        except (OSError, NotImplementedError) as error:  # pragma: no cover
+            print(f"  [skip] symlink containment case unavailable: {error}")
+            return
+
+        for relative in ("escape_dir/evil.png", "escape_file.blend"):
+            try:
+                worker._prepare_output_path(ctx, relative)
+            except worker.OperationError as error:
+                assert "outside the workspace" in str(error), error
+            else:
+                raise AssertionError(f"symlink escape {relative!r} must be rejected")
+        try:
+            worker._prepare_output_dir(ctx, "escape_dir")
+        except worker.OperationError as error:
+            assert "outside the workspace" in str(error), error
+        else:
+            raise AssertionError("symlinked output directory must be rejected")
+
+        # No side effects outside the workspace.
+        assert not (outside / "evil.png").exists()
+        assert outside_target.read_bytes() == b"outside-data"
+        assert sorted(p.name for p in outside.iterdir()) == ["target.blend"]
 
 
 # ---------------------------------------------------------------------------

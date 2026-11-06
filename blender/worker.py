@@ -46,6 +46,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 MAX_JOB_ID_CHARS = 128
+MAX_JOB_TYPE_CHARS = 128
 MAX_OPERATIONS = 256
 MAX_NAME_CHARS = 64
 MAX_SPEC_PATH_CHARS = 1024
@@ -91,6 +92,16 @@ LEGACY_VIEW_ALIASES = {"side": "left"}
 
 # All accepted wire view names (canonical names + aliases).
 LEGACY_VIEW_NAMES = LEGACY_VIEWS + ("side",)
+
+# `render_views` strips a `Cam_` prefix only when the remainder is one of the
+# canonical legacy render view names (the documented `front|back|left|right|
+# top|bottom|perspective` list); any other camera name is used verbatim.
+LEGACY_RENDER_VIEW_NAMES = frozenset(LEGACY_VIEWS)
+
+# Characters that cannot appear in a portable file name (notably on Windows).
+# Camera-derived output names are rejected on every platform so batch behavior
+# is identical everywhere.
+WINDOWS_UNSAFE_FILENAME_CHARS = frozenset('<>:"|?*')
 
 # Phase 2 documented default view literal. Through the alias the effective
 # deterministic cameras are front/left/top/perspective.
@@ -314,6 +325,86 @@ def _validate_relative_path(value, field, label):
                 f"components: '{value}'"
             )
     return value
+
+
+def _render_filename_problem(name):
+    """Return a human-readable reason a camera-derived file name is unsafe."""
+    if not isinstance(name, str) or not name:
+        return "name is empty"
+    if len(name) > MAX_NAME_CHARS:
+        return f"name is too long (max {MAX_NAME_CHARS} chars)"
+    if any(_is_control_char(char) for char in name):
+        return "name contains control characters"
+    if "/" in name or "\\" in name:
+        return "name contains '/' or '\\'"
+    if name in (".", ".."):
+        return "name is '.' or '..'"
+    if _is_absolute_or_prefix_path(name):
+        return "name is an absolute/drive/UNC path"
+    unsafe = sorted(set(name) & WINDOWS_UNSAFE_FILENAME_CHARS)
+    if unsafe:
+        return f"name contains unsafe filename characters {''.join(unsafe)!r}"
+    if name != name.rstrip(". "):
+        return "name must not end with '.' or ' '"
+    return None
+
+
+def validate_render_filename(name, camera_name):
+    """Validate a camera-derived PNG base name; raises `OperationError`.
+
+    Used by `render_views` for camera names that come from imported assets, so
+    the derived `<name>.png` can never escape the output directory.
+    """
+    problem = _render_filename_problem(name)
+    if problem is not None:
+        raise OperationError(
+            f"render_views: unsafe camera name '{camera_name}' "
+            f"(derived file name {name!r}: {problem})"
+        )
+    return name
+
+
+def derive_render_view_name(camera_name):
+    """Derive a safe, deterministic PNG base name from a camera object name.
+
+    A leading `Cam_` is stripped only when the remainder is a canonical legacy
+    render view name (`front|back|left|right|top|bottom|perspective`); other
+    camera names (including imported asset names) are kept verbatim and must
+    pass the safe file-name rules.
+    """
+    if not isinstance(camera_name, str):
+        raise OperationError(
+            f"render_views: camera name is not a string: {camera_name!r}"
+        )
+    view_name = camera_name
+    if camera_name.startswith("Cam_"):
+        remainder = camera_name[len("Cam_") :]
+        if remainder in LEGACY_RENDER_VIEW_NAMES:
+            view_name = remainder
+    return validate_render_filename(view_name, camera_name)
+
+
+def plan_render_view_outputs(camera_names):
+    """Validate camera names and derive unique PNG file names (pure).
+
+    Returns a list of `(camera_name, view_name, filename)` tuples. Raises
+    `OperationError` for unsafe camera names or duplicate derived filenames
+    (e.g. cameras `Cam_front` and `front`). No bpy and no filesystem access, so
+    `render_views` can reject bad input before creating/unlinking anything.
+    """
+    planned = []
+    seen = {}
+    for camera_name in camera_names:
+        view_name = derive_render_view_name(camera_name)
+        filename = f"{view_name}.png"
+        if filename in seen:
+            raise OperationError(
+                f"render_views: duplicate output filename '{filename}' for "
+                f"cameras '{seen[filename]}' and '{camera_name}'"
+            )
+        seen[filename] = camera_name
+        planned.append((camera_name, view_name, filename))
+    return planned
 
 
 def _extension(value):
@@ -784,6 +875,18 @@ def validate_job(job):
             f"invalid job_id: {job_id!r} "
             f"(expected [A-Za-z0-9_-]{{1,{MAX_JOB_ID_CHARS}}})"
         )
+    # Optional defensive re-validation of `job_type` when a caller includes it
+    # (the Rust router validates it before creating the job record).
+    job_type = job.get("job_type")
+    if job_type is not None:
+        if not isinstance(job_type, str) or not job_type.strip():
+            raise ValidationError("job_type must be a non-empty string")
+        if len(job_type) > MAX_JOB_TYPE_CHARS:
+            raise ValidationError(
+                f"job_type is too long (max {MAX_JOB_TYPE_CHARS} chars)"
+            )
+        if _has_control_chars(job_type):
+            raise ValidationError("job_type must not contain control characters")
     workspace = job.get("workspace_root")
     if not isinstance(workspace, str) or not workspace.strip():
         raise ValidationError("workspace_root must be a non-empty string")
@@ -893,31 +996,66 @@ def _workspace_root(ctx):
     return Path(ctx["workspace_root"])
 
 
-def _prepare_output_path(ctx, relative_path):
-    """Create parent dirs and return the absolute output path.
+def _resolved_path(path):
+    try:
+        return Path(path).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise OperationError(f"cannot resolve path '{path}': {exc}") from exc
 
-    The parent must resolve inside the workspace (defense against symlinked
-    workspace subdirectories escaping the sandbox).
+
+def _require_contained(target, root, error_message):
+    """Return the resolved target and raise `OperationError` if it escapes root.
+
+    Resolution follows existing symlinks/junctions, so a symlinked workspace
+    subdirectory or output file pointing outside is rejected. This helper never
+    mutates the filesystem; callers must run it BEFORE mkdir/unlink/render.
+    """
+    resolved_root = _resolved_path(root)
+    resolved_target = _resolved_path(target)
+    try:
+        resolved_target.relative_to(resolved_root)
+    except ValueError:
+        raise OperationError(error_message) from None
+    return resolved_target
+
+
+def _prepare_output_path(ctx, relative_path):
+    """Resolve a workspace-relative output file; validate containment first.
+
+    The target is resolved (following existing symlinks) and must stay inside
+    the resolved workspace root. Parent directories are created only after that
+    check passes, and the containment check is repeated before returning.
     """
     root = _workspace_root(ctx)
     target = root / relative_path
+    message = f"output path resolves outside the workspace: '{relative_path}'"
+    contained = _require_contained(target, root, message)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if not _is_inside(target.parent, root):
-        raise OperationError(
-            f"output path resolves outside the workspace: '{relative_path}'"
-        )
-    return target
+    contained = _require_contained(target, root, message)
+    return contained
 
 
 def _prepare_output_dir(ctx, relative_dir):
+    """Resolve a workspace-relative output directory; validate containment first.
+
+    No directory is created before the target resolves inside the resolved
+    workspace root (existing symlinks included).
+    """
     root = _workspace_root(ctx)
     target = root / relative_dir
-    target.mkdir(parents=True, exist_ok=True)
-    if not _is_inside(target, root):
+    message = f"output directory resolves outside the workspace: '{relative_dir}'"
+    _require_contained(target, root, message)
+    if target.exists() and not target.is_dir():
         raise OperationError(
-            f"output directory resolves outside the workspace: '{relative_dir}'"
+            f"output directory path is not a directory: '{relative_dir}'"
         )
-    return target
+    target.mkdir(parents=True, exist_ok=True)
+    contained = _require_contained(target, root, message)
+    if not contained.is_dir():
+        raise OperationError(
+            f"output directory path is not a directory: '{relative_dir}'"
+        )
+    return contained
 
 
 def _join_artifact_path(base, name):
@@ -1230,8 +1368,16 @@ def op_import_mesh(ctx, params):
                 f"is imported (got {len(imported)})"
             )
         new_name = params["name"]
-        _require_free_object_name(bpy, new_name)
-        imported[0].name = new_name
+        imported_object = imported[0]
+        if new_name in before:
+            # Only collisions with objects that existed before this import are
+            # rejected; accepting the object's own current name is idempotent.
+            raise OperationError(
+                f"import_mesh: object name '{new_name}' already exists in "
+                f"the scene before the import"
+            )
+        if imported_object.name != new_name:
+            imported_object.name = new_name
 
     component = params.get("component")
     for obj in imported:
@@ -1531,7 +1677,6 @@ def op_render_views(ctx, params):
     bpy = _bpy()
     scene = bpy.context.scene
     base_path = params.get("path", DEFAULT_RENDER_BASE)
-    output_dir = _prepare_output_dir(ctx, base_path)
 
     cameras = sorted(
         (obj for obj in scene.objects if obj.type == "CAMERA"),
@@ -1540,20 +1685,33 @@ def op_render_views(ctx, params):
     if not cameras:
         raise OperationError("render_views: no cameras to render")
 
+    # Derive and validate every output filename and detect collisions BEFORE
+    # any filesystem mutation (directory creation, unlink, render). Camera
+    # names may come from imported assets and are untrusted.
+    planned_names = plan_render_view_outputs([obj.name for obj in cameras])
+    planned = [
+        (camera_obj, view_name, filename)
+        for camera_obj, (_camera_name, view_name, filename) in zip(
+            cameras, planned_names
+        )
+    ]
+    output_dir = _prepare_output_dir(ctx, base_path)
+
     artifacts = []
     rendered = []
     state = _snapshot_render_settings(scene)
     try:
-        for camera_obj in cameras:
-            view_name = camera_obj.name
-            if view_name.startswith("Cam_"):
-                view_name = view_name[len("Cam_") :]
-            if not view_name:
-                view_name = camera_obj.name
-            output_path = output_dir / f"{view_name}.png"
+        for camera_obj, view_name, filename in planned:
+            output_path = output_dir / filename
+            relative_path = _join_artifact_path(base_path, filename)
+            _require_contained(
+                output_path,
+                output_dir,
+                f"render output resolves outside the output directory: "
+                f"'{relative_path}'",
+            )
             _remove_stale(output_path)
             size = _render_to_png(scene, camera_obj, output_path, silhouette=False)
-            relative_path = _join_artifact_path(base_path, f"{view_name}.png")
             artifact = {
                 "path": relative_path,
                 "type": "png",
