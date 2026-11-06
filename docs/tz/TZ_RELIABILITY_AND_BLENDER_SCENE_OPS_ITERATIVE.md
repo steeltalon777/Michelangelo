@@ -389,6 +389,8 @@ and the TZ, and returns a verdict; verdict is recorded in section 8.
 |---|---|---|---|
 | IT-1 attempt 1 | `95ebeed` | Separate read-only context (same model family — Windows reviewer route broken: missing `mcp__*_warehouse__` shields/strict `bash` allow-list): **YELLOW** | P1-1 unbounded `blender --version` in capabilities probe; P2: terminal event emitted before transition success, queued failure scheduler/storage split, adapter spec-path rule inconsistent, TZ hygiene. Rework ordered. |
 | IT-1 attempt 2 | `8311ef7` | Same separate read-only context: **GREEN** | P1-1 fixed (bounded `--version` with kill-tree); terminal events after successful transitions; queued→failed identity; spec-path rules aligned; missing tests added; `finished_at` lifecycle persistence added (Lead-found). Residual P2 (version parsed from output tail; `taskkill` unbounded in the timeout path) accepted as non-blocking and recorded in the review. |
+| IT-2 attempt 1 | `59ca3c5` | Same separate read-only context: **YELLOW** | P1: `render_views` derived filenames from imported camera names could unlink/write PNGs outside the workspace before artifact rejection (Blender imports glTF node names verbatim; reproduced by the Lead with a crafted glTF). P2: FS mutation before containment, import name idempotency, missing outside-import/render_views tests. Rework ordered. |
+| IT-2 attempt 2 | `2cf4961` | Same separate read-only context: **GREEN** | Containment-before-mutation for all output paths; safe derived render filenames/collision rejection; import name idempotency; crafted-glTF sentinel regression test (Lead-independent repro: sentinel SHA/size/mtime unchanged); positive render_views (4 unique PNGs), set_transform bbox, cross-platform Windows-path rejection, legacy JSON compat. 271 tests, Lead acceptance E2E 28/28 with calibrated 16384-px silhouette. Non-blocking P2 notes (case-insensitive/Windows reserved names, concurrent symlink TOCTOU) accepted and documented for IT-3. |
 
 Reviewer-route note: on this Windows profile the `worker` agent preset shield allows the
 unavailable `bash` tool, and the `researcher`/`reviewer` shields reference MCP prefixes for
@@ -401,9 +403,9 @@ available model family, and this limitation is reported to the user.
 - [x] IT-1 implementation complete
 - [x] IT-1 verification ladder green (Windows) — Lead-run, see review evidence
 - [x] IT-1 independent review green — attempt 2 (`8311ef7`) GREEN
-- [ ] IT-2 implementation complete
-- [ ] IT-2 verification ladder green + real Blender op smoke
-- [ ] IT-2 independent review green
+- [x] IT-2 implementation complete
+- [x] IT-2 verification ladder green + real Blender op smoke — 271 tests, Lead acceptance E2E 28/28
+- [x] IT-2 independent review green — attempt 2 (`2cf4961`) GREEN
 - [ ] IT-3 E2E acceptance scenario + docs/CI complete
 - [ ] IT-3 full regression + real Blender smoke green
 - [ ] IT-3 independent review green
