@@ -172,8 +172,10 @@ Rules:
   must satisfy the declared tolerance, otherwise the condition is `fail` or `unavailable`.
   A **required** condition with `fail`/`unavailable` cannot be treated as passed; an
   **optional** condition may remain explicitly unverified (`unavailable`).
-- Held-out views must have directions genuinely distinct from the source views
-  (`|dot(dir_i, dir_j)| <= 0.9`); otherwise the held-out result is `unavailable`.
+- Held-out views must add an independent silhouette constraint: a view looking in the same
+  direction as a source view (`dot(dir) > 0.9`) adds nothing and makes the held-out result
+  `unavailable`. Opposite orthographic views (`dot ≈ -1`) are allowed — they see the mirrored
+  silhouette and are the held-out controls of the proof datasets.
 
 ## 7. Acceptance rules
 

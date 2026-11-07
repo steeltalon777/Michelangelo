@@ -234,3 +234,36 @@ pub fn candidate_file(dir: &Path) -> PathBuf {
 pub fn digest(path: &Path) -> String {
     michelangelo_input::sha256::sha256_hex(&std::fs::read(path).expect("the file is read"))
 }
+
+/// Register a synthetic evaluation for a candidate of a run.
+///
+/// The acceptance of IT-8B needs a registered evaluation: the helper builds
+/// one with the evidence crate (pinned to the snapshot, to the package copy
+/// and to the base revision of the candidate) and registers it in the
+/// registry of the Core.
+pub fn register_evaluation(run_dir: &Path, candidate_id: &str) -> PathBuf {
+    let registry =
+        michelangelo_evidence::registry::load_registry(run_dir).expect("the registry is read");
+    let evaluation_id = registry.next_evaluation_id();
+    let report = michelangelo_evidence::testing::synthetic_evaluation(
+        run_dir,
+        candidate_id,
+        &evaluation_id,
+        "2026-01-03T04:05:06Z",
+    )
+    .expect("the synthetic evaluation is built");
+    let entry = michelangelo_evidence::registry::write_and_register(run_dir, &report)
+        .expect("the evaluation is registered");
+    run_dir.join(entry.report_path)
+}
+
+/// Accept a candidate with a registered synthetic evaluation.
+pub fn accept(
+    run_dir: &Path,
+    candidate_id: &str,
+    by: &str,
+    clock: &michelangelo_edit::FixedClock,
+) -> Result<michelangelo_edit::DecisionReport, michelangelo_edit::EditError> {
+    register_evaluation(run_dir, candidate_id);
+    michelangelo_edit::apply::accept_candidate(run_dir, candidate_id, by, clock)
+}

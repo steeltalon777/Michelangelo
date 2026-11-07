@@ -22,8 +22,9 @@ use std::process::ExitCode;
 
 use clap::Subcommand;
 use michelangelo_edit::apply::{
-    accept_candidate, reject_candidate, rollback_scene, show_scene, submit_candidate,
+    accept_candidate_with_options, reject_candidate, rollback_scene, show_scene, submit_candidate,
 };
+use michelangelo_edit::gate::AcceptOptions;
 use michelangelo_edit::scene::init_scene_with_protection;
 use michelangelo_edit::validate::{CheckStatus, Decision, DecisionReport, Severity};
 use michelangelo_edit::SystemClock;
@@ -73,6 +74,13 @@ pub enum EditCommand {
         /// The author that accepts the candidate.
         #[arg(long, value_name = "NAME")]
         by: String,
+        /// The evaluation report the acceptance is based on.
+        ///
+        /// The acceptance is refused (EVALUATION_MISSING) when the option is
+        /// absent and the run carries no registered evaluation for the
+        /// candidate.
+        #[arg(long, value_name = "REPORT")]
+        evaluation: Option<PathBuf>,
         /// Print the decision report instead of a human summary.
         #[arg(long)]
         json: bool,
@@ -144,9 +152,13 @@ pub fn execute(command: &EditCommand) -> ExitCode {
             run,
             candidate,
             by,
+            evaluation,
             json,
         } => {
-            let report = match accept_candidate(run, candidate, by, &clock) {
+            let options = AcceptOptions {
+                evaluation: evaluation.clone(),
+            };
+            let report = match accept_candidate_with_options(run, candidate, by, &clock, options) {
                 Ok(report) => report,
                 Err(error) => return failure(&error),
             };

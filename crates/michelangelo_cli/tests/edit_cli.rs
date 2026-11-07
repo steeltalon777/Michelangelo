@@ -82,6 +82,28 @@ fn digest(path: &Path) -> String {
     michelangelo_input::sha256::sha256_hex(&bytes)
 }
 
+/// Register a synthetic evaluation for the candidate of a scratch run.
+///
+/// The acceptance of IT-8B needs a registered evaluation: the helper builds
+/// one with the evidence crate (pinned to the snapshot, to the package copy
+/// and to the base revision of the candidate) and registers it in the
+/// registry of the Core.
+fn register_evaluation(run_dir: &Path) -> String {
+    let registry =
+        michelangelo_evidence::registry::load_registry(run_dir).expect("the registry is read");
+    let evaluation_id = registry.next_evaluation_id();
+    let report = michelangelo_evidence::testing::synthetic_evaluation(
+        run_dir,
+        "cand-0001",
+        &evaluation_id,
+        "2026-01-03T04:05:06Z",
+    )
+    .expect("the synthetic evaluation is built");
+    let entry = michelangelo_evidence::registry::write_and_register(run_dir, &report)
+        .expect("the evaluation is registered");
+    run_dir.join(entry.report_path).display().to_string()
+}
+
 /// A child helper that is always killed and reaped when the test ends, also on
 /// panic: a leaked lock holder would keep the store busy for later tests.
 struct ChildGuard(std::process::Child);
@@ -235,6 +257,8 @@ fn a_valid_candidate_is_submitted_and_accepted() {
         "cand-0001",
         "--by",
         "alice",
+        "--evaluation",
+        &register_evaluation(&scratch.run_dir),
     ]);
     assert_eq!(code_of(&accept), 0, "{}", stderr_of(&accept));
     assert!(stdout_of(&accept).contains("decision: accepted"));
@@ -303,6 +327,8 @@ fn the_untouched_components_stay_byte_identical() {
         "cand-0001",
         "--by",
         "alice",
+        "--evaluation",
+        &register_evaluation(&scratch.run_dir),
     ]);
     assert_eq!(
         before,
@@ -332,6 +358,8 @@ fn a_stale_candidate_is_rejected() {
         "cand-0001",
         "--by",
         "alice",
+        "--evaluation",
+        &register_evaluation(&scratch.run_dir),
     ]);
 
     // A second candidate that was built on the revision s0001.
@@ -416,6 +444,8 @@ fn a_rollback_points_back_to_the_previous_revision() {
         "cand-0001",
         "--by",
         "alice",
+        "--evaluation",
+        &register_evaluation(&scratch.run_dir),
     ]);
     let output = michelangelo(&[
         "edit",
@@ -589,6 +619,8 @@ fn accept(scratch: &Scratch) -> Output {
         "cand-0001",
         "--by",
         "alice",
+        "--evaluation",
+        &register_evaluation(&scratch.run_dir),
     ])
 }
 

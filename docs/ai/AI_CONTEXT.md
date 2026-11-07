@@ -29,7 +29,9 @@ CLI (michelangelo_cli)
 | `michelangelo_cli` | CLI binary, JSONL transport with event streaming | CLI entry point, `stdio::run_loop` with event channel |
 | `michelangelo_input` | Stage A input package: strict manifest, resource safety, levels 1–2 validation | `InputPackage`, `validate_package`, `ValidateOptions`, `InputPackageReport`, `Diagnostic` |
 | `michelangelo_recon` | Stage B reconstruction pipeline (solver → Blender job → IoU report) | `run`, `score`, `ReconstructionReport`, `camera_basis`/`rotation_deg`, run store, `ReconOptions` |
-| `michelangelo_edit` | Stage C local edit boundary (scene revisions, candidates) | `SceneStore`, `init_scene_with_protection`, `submit_candidate`, `accept_candidate`, `rollback_scene`, `DecisionReport` |
+| `michelangelo_edit` | Local edit boundary: scene revisions, candidates, acceptance integrity | `SceneStore`, `init_scene_with_protection`, `submit_candidate`, `accept_candidate_with_options`, `rollback_scene`, `DecisionReport`, snapshot/lock/unknown-state (`verification.rs`), accept gate (`gate.rs`) |
+| `michelangelo_evidence` | IT-8 verification DTOs: evaluation report, digests, registry, pure accept gate | `EvaluationReport`, digest helpers, `EvaluationRegistry`, `verify_report`, gate codes |
+| `michelangelo_eval` | IT-8 candidate/revision evaluation with pinned inputs | `evaluate_candidate`, `evaluate_revision`, `Renderer`/`Comparator`, real Blender + `compare.py` path and test fakes |
 | `michelangelo_assistant` | Stage D bounded assistant surface + MCP stdio adapter | `assistant-task/0` generation, policy, budget/audit store, four MCP tools, error mapping |
 
 ## Protocol Numbers
@@ -43,9 +45,11 @@ CLI (michelangelo_cli)
   associated response; `wait` defaults to `false` (queue-only — pass `"wait": true` to execute)
 - CLI-only commands (not JSONL methods, no wire contract impact): `michelangelo input
   validate|describe` (Stage A input package), `michelangelo reconstruct run|score|show` (Stage B
-  reconstruction PoC), `michelangelo edit init|submit|accept|reject|rollback|show` (Stage C local
-  edit boundary), `michelangelo assistant task|submit` and `michelangelo mcp serve` (Stage D
-  bounded assistant/MCP); `michelangelo core stdio` is the JSONL transport
+  reconstruction PoC), `michelangelo edit init|submit|accept|reject|rollback|show` (local edit
+  boundary; `accept` now requires `--evaluation`), `michelangelo evaluate` (IT-8B evaluation of a
+  candidate snapshot or a revision), `michelangelo assistant task|submit` and
+  `michelangelo mcp serve` (Stage D bounded assistant/MCP); `michelangelo core stdio` is the JSONL
+  transport
 - Worker ops (18, stable order in `SAFE_WORKER_OPS`): `create_box`, `set_material`,
   `set_camera_set`, `render_views`, `export_glb`, `save_blend`, `get_scene_summary`,
   `create_cylinder`, `create_sphere`, `import_mesh`, `set_transform`, `create_ortho_camera`,
@@ -134,6 +138,12 @@ the current Windows stand).
   apply, persisted per-run budget counters and an append-only audit log, and a local MCP stdio
   adapter exposing four tools. Submissions are always `proposed`; applying stays an explicit
   `michelangelo edit accept`. No embedded model, no network, no external service.
+- IT-8 hardening is in progress: [`docs/specs/VERIFICATION_STATE.md`](../specs/VERIFICATION_STATE.md)
+  + A/B implemented — immutable full-result snapshots, one authoritative bundle pointer, OS lock,
+  append-only decisions with idempotent accept, and a mandatory accept gate over
+  [`EVALUATION.md`](../specs/EVALUATION.md) (actual-geometry render, pinned inputs, per-view 0.01
+  IoU regression, hidden/author/GT taxonomy, registered report digest). Unknown resolution,
+  bindings/policy enforcement (IT-8C) and the external-agent MCP demo remain. No wire changes.
 
 ## Out of Scope
 

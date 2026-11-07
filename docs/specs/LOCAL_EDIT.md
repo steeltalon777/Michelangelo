@@ -359,8 +359,10 @@ a candidate may be applied without an explicit author acceptance:
 
 * The file is optional. When it is absent, only an explicit author acceptance
   applies a candidate (the manual path of ADR 0004 §13.3).
-* `auto_accept` — whether `submit` may apply a candidate that does not
-  require an author acceptance.
+* `auto_accept` — declared for future use only. Since IT-8B an accepted candidate needs a
+  registered evaluation, and an evaluation can only run after the snapshot exists, `submit`
+  always keeps the candidate `proposed` (`EVALUATION_REQUIRED` diagnostic); the policy flag
+  cannot bypass the evaluation gate.
 * `allowed_origins` — the origins the policy accepts (all of them when the
   field is absent).
 * A policy file that exists but cannot be used is an error (exit code 2); the
@@ -371,7 +373,7 @@ a candidate may be applied without an explicit author acceptance:
 ```text
 michelangelo edit init     --run <run_dir> [--protect <name,...>] [--json]
 michelangelo edit submit   --run <run_dir> --candidate <dir> [--json]
-michelangelo edit accept   --run <run_dir> --candidate <id> --by <name> [--json]
+michelangelo edit accept   --run <run_dir> --candidate <id> --by <name> --evaluation <report> [--json]
 michelangelo edit reject   --run <run_dir> --candidate <id> --by <name> [--reason <text>] [--json]
 michelangelo edit rollback --run <run_dir> --to <scene_revision> --by <name> [--json]
 michelangelo edit show     --run <run_dir> [--candidate <id>] [--json]
@@ -380,15 +382,19 @@ michelangelo edit show     --run <run_dir> [--candidate <id>] [--json]
 | Exit code | Meaning |
 |---|---|
 | `0` | the operation succeeded (accepted/proposed/rolled back, or an idempotent repeat with the historical result) |
-| `1` | the candidate was rejected or the store refused the operation (`STALE_BASE`, `EVIDENCE_MISMATCH`, `SNAPSHOT_MISSING`, `CANDIDATE_ALREADY_ACCEPTED`, unknown resolution required in IT-8C) |
+| `1` | the candidate was rejected, the evaluation gate refused it (`EVALUATION_MISSING`, `EVALUATION_UNREGISTERED`, `EVALUATION_STALE`, `INPUT_CHANGED`, `VISIBLE_FAILED`, `AUTHOR_CONDITION_FAILED`, `REGRESSION`, `NO_GROUND_TRUTH`), or the store refused the operation (`STALE_BASE`, `EVIDENCE_MISMATCH`, `SNAPSHOT_MISSING`, `CANDIDATE_ALREADY_ACCEPTED`, unknown resolution required in IT-8C) |
 | `2` | usage error, IO error, a candidate that cannot be interpreted, or a busy store (`STORE_BUSY`) |
 
 * `submit` copies the candidate into the store (`candidates/<id>/`), validates
-  it and decides: the decision is `proposed` (an explicit author acceptance is
-  required) or `accepted` (the policy allowed an automatic acceptance).
-* `accept` re-validates the candidate against the **current** revision and
-  publishes a new revision when the candidate is still valid. A candidate that
-  became stale in the meantime is rejected with `STALE_BASE`.
+  it, creates the full-result snapshot and keeps the decision `proposed`: an
+  acceptance always needs a registered evaluation of that snapshot.
+* `accept` re-validates the candidate against the **current** revision, then runs
+  the evaluation gate on the registered `--evaluation` report (see
+  `docs/specs/EVALUATION.md`): target aggregate, base revision, pinned inputs, visible
+  conformance, required author geometric conditions and per-view regression. Only then a new
+  revision is published and its bundle references the evaluation. A candidate that became
+  stale is refused with `STALE_BASE`; a missing/invalid evaluation is refused with the gate
+  code and an `accept-refused` history record.
 * `reject` records the refusal of an author; the scene is not modified.
 * `rollback` points the store back to an existing revision; the revision
   directories themselves are never modified.
@@ -420,6 +426,10 @@ The machine-readable output of `--json`:
 | the candidate base is not current at publication time | `STALE_BASE`, no revision, `accept-refused` history, exit code 1 |
 | the store lock is held by another process | `STORE_BUSY`, no change, exit code 2 |
 | the candidate was already accepted | repeated accept returns the historical result (exit 0); rejecting it is `CANDIDATE_ALREADY_ACCEPTED` (exit 1) |
+| no registered evaluation is supplied for accept | `EVALUATION_MISSING`, no revision, `accept-refused` history, exit code 1 |
+| the evaluation is unregistered, its digest is stale or the inputs changed | `EVALUATION_UNREGISTERED` / `EVALUATION_STALE` / `INPUT_CHANGED`, no revision, exit code 1 |
+| the evaluation's visible conformance fails, a required author condition fails or a per-view regression exceeds 0.01 IoU | `VISIBLE_FAILED` / `AUTHOR_CONDITION_FAILED` / `REGRESSION`, no revision, exit code 1 |
+| a required claim has no ground truth | `NO_GROUND_TRUTH`, no revision, exit code 1 |
 | a crash happens between publishing the revision and the pointer | the previous bundle stays authoritative; a retry reuses the published revision |
 
 The rollback is a pointer move, never an inversion: the revisions keep their
@@ -452,6 +462,13 @@ directory shaped like an IT-5 run. The run carries no dataset content.
 ```text
 michelangelo edit init   --run examples/edit/run-0001
 michelangelo edit submit --run examples/edit/run-0001 --candidate examples/edit/candidate-valid
-michelangelo edit accept --run examples/edit/run-0001 --candidate cand-0001 --by alice
+# evaluation requires a run with the pinned package copy (a real IT-5 run):
+michelangelo evaluate    --run <run> --candidate cand-0001 [--evaluation <eval-package>]
+michelangelo edit accept --run <run> --candidate cand-0001 --by alice \
+                         --evaluation <run>/verification/evaluations/ev-0001/report.json
 michelangelo edit show   --run examples/edit/run-0001 --json
 ```
+
+The `examples/edit` run has no package copy, so its unit tests register a synthetic
+evaluation through `michelangelo_evidence::testing`; the real evaluation path is exercised on
+a run produced by `michelangelo reconstruct` (see `docs/specs/EVALUATION.md`).

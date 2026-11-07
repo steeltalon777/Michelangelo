@@ -111,6 +111,13 @@ Stage D (ADR §13.4) — optional assistant — ✅ **done (IT-7, 2026-11-07)**:
   `michelangelo assistant task|submit` CLI. Spec:
   [ASSISTANT_MCP.md](docs/specs/ASSISTANT_MCP.md), TZ:
   [TZ](docs/tz/TZ_ASSISTANT_STAGE_D.md).
+- ✅ Verification/acceptance integrity (IT-8A/IT-8B): immutable full-result snapshot with
+  per-file/aggregate digests, one authoritative bundle pointer, OS advisory lock, append-only
+  decision history and idempotent accept; evaluation of the actual new geometry with pinned
+  camera/mask/package inputs, visible vs author conditions vs ground truth vs hidden decision,
+  per-view 0.01 IoU regression, and a mandatory accept gate with a Core-registered digest.
+  Remaining: unknown resolution/bindings and policy enforcement (IT-8C) and the external-agent
+  demo (replacing a stub via MCP, with a cube control that does not close the unknown).
 - Natural language command interpretation — future (needs a provider under the same bounded-task /
   data-policy rules)
 - Build plan validation → `BlenderJobSpec`; iterative refinement as bounded local-change

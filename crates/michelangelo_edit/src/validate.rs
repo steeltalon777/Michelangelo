@@ -164,6 +164,12 @@ pub struct DecisionReport {
     /// The aggregate digest of the geometry of the snapshot of the candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregate_sha256: Option<String>,
+    /// The identifier of the evaluation report the decision is based on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_id: Option<String>,
+    /// The digest of the evaluation report the decision is based on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_sha256: Option<String>,
 }
 
 impl DecisionReport {
@@ -185,6 +191,8 @@ impl DecisionReport {
             decided_by: None,
             snapshot_id: None,
             aggregate_sha256: None,
+            evaluation_id: None,
+            evaluation_sha256: None,
         }
     }
 

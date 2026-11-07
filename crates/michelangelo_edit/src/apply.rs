@@ -26,12 +26,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::candidate::{is_valid_component_name, parse_candidate, CandidateAction, EditCandidate};
 use crate::error::{io_error, EditError};
+use crate::gate::{self, AcceptOptions};
 use crate::policy::load_policy;
 use crate::scene::{
     component_bytes, list_revisions, load_current, load_index, load_scene, next_revision,
     publish_revision, write_bytes_atomic, write_current, write_index, CandidateIndexEntry,
-    CurrentPointer, RollbackRecord, Scene, SceneComponent, SceneStore, SceneVerification,
-    UnknownStateRef, VerificationPolicies, COMPONENTS_DIR_NAME,
+    CurrentPointer, EvaluationRef, RollbackRecord, Scene, SceneComponent, SceneStore,
+    SceneVerification, UnknownStateRef, VerificationPolicies, COMPONENTS_DIR_NAME,
 };
 use crate::validate::{
     validate, Check, CheckStatus, Decision, DecisionReport, Diagnostic, Severity,
@@ -102,6 +103,14 @@ fn coded_edit_error(code: &str, message: String) -> EditError {
         crate::error::SNAPSHOT_MISSING => EditError::SnapshotMissing { message },
         crate::error::EVIDENCE_MISMATCH => EditError::EvidenceMismatch { message },
         crate::error::STALE_BASE => EditError::StaleBase { message },
+        crate::error::EVALUATION_MISSING => EditError::EvaluationMissing { message },
+        crate::error::EVALUATION_STALE => EditError::EvaluationStale { message },
+        crate::error::EVALUATION_UNREGISTERED => EditError::EvaluationUnregistered { message },
+        crate::error::INPUT_CHANGED => EditError::InputChanged { message },
+        crate::error::VISIBLE_FAILED => EditError::VisibleFailed { message },
+        crate::error::AUTHOR_CONDITION_FAILED => EditError::AuthorConditionFailed { message },
+        crate::error::REGRESSION => EditError::Regression { message },
+        crate::error::NO_GROUND_TRUTH => EditError::NoGroundTruth { message },
         _ => EditError::Internal { message },
     }
 }
@@ -310,12 +319,28 @@ pub fn submit_candidate(
     report.aggregate_sha256 = Some(manifest.aggregate_sha256.clone());
 
     if outcome.auto_accept {
-        let revision = publish_snapshot(&store, &manifest, &candidate, &base_scene, clock)?;
-        report.decision = Decision::Accepted;
-        report.resulting_scene_revision = Some(revision.clone());
+        // The automatic acceptance of the workspace policy cannot publish a
+        // revision: an acceptance always needs a registered evaluation
+        // (contract §7). The candidate stays proposed until the evaluation
+        // exists and an author accepts it.
+        report.decision = Decision::Proposed;
+        report.checks.push(Check {
+            check: "evaluation".to_string(),
+            status: CheckStatus::Skipped,
+            detail: String::from(
+                "the acceptance needs a registered evaluation: the candidate stays proposed",
+            ),
+        });
+        report.diagnostics.push(Diagnostic {
+            code: String::from("EVALUATION_REQUIRED"),
+            severity: Severity::Info,
+            message: String::from(
+                "the automatic acceptance of the workspace policy is deferred: an acceptance needs a registered evaluation (run 'michelangelo evaluate')",
+            ),
+            address: None,
+        });
         write_decision(&store, &report, DECISION_SUBMIT)?;
-        record_index(&store, &report, Some(revision.clone()))?;
-        set_current(&store, &revision, Some(candidate_id.clone()), clock)?;
+        record_index(&store, &report, None)?;
         return Ok(report);
     }
 
@@ -326,13 +351,40 @@ pub fn submit_candidate(
 }
 
 /// Accept a candidate of the store and publish a new scene revision.
+///
+/// The acceptance is strict: it needs an evaluation report that the Core
+/// registered for the candidate. Without a registered evaluation the
+/// acceptance is refused (`EVALUATION_MISSING`) and no revision is
+/// published.
 pub fn accept_candidate(
     run_dir: &Path,
     candidate_id: &str,
     by: &str,
     clock: &dyn Clock,
 ) -> Result<DecisionReport, EditError> {
-    accept_candidate_with_hooks(run_dir, candidate_id, by, clock, AcceptHooks::default())
+    accept_candidate_with_options(run_dir, candidate_id, by, clock, AcceptOptions::default())
+}
+
+/// Accept a candidate with the options of the acceptance.
+///
+/// The option `evaluation` names the report of the evaluation the
+/// acceptance is based on. When it is absent the gate uses the last
+/// evaluation that the Core registered for the candidate.
+pub fn accept_candidate_with_options(
+    run_dir: &Path,
+    candidate_id: &str,
+    by: &str,
+    clock: &dyn Clock,
+    options: AcceptOptions,
+) -> Result<DecisionReport, EditError> {
+    accept_candidate_with_hooks_and_options(
+        run_dir,
+        candidate_id,
+        by,
+        clock,
+        AcceptHooks::default(),
+        options,
+    )
 }
 
 /// Accept a candidate with the test hooks of the acceptance.
@@ -342,7 +394,27 @@ pub fn accept_candidate_with_hooks(
     candidate_id: &str,
     by: &str,
     clock: &dyn Clock,
+    hooks: AcceptHooks<'_>,
+) -> Result<DecisionReport, EditError> {
+    accept_candidate_with_hooks_and_options(
+        run_dir,
+        candidate_id,
+        by,
+        clock,
+        hooks,
+        AcceptOptions::default(),
+    )
+}
+
+/// Accept a candidate with the test hooks and the options of the acceptance.
+#[doc(hidden)]
+pub fn accept_candidate_with_hooks_and_options(
+    run_dir: &Path,
+    candidate_id: &str,
+    by: &str,
+    clock: &dyn Clock,
     mut hooks: AcceptHooks<'_>,
+    options: AcceptOptions,
 ) -> Result<DecisionReport, EditError> {
     let store = SceneStore::new(run_dir);
     let candidate = load_stored_candidate(&store, candidate_id)?;
@@ -510,7 +582,43 @@ pub fn accept_candidate_with_hooks(
         );
     }
 
-    let revision = publish_snapshot(&store, &manifest, &candidate, &base_scene, clock)?;
+    // The accept gate: the acceptance needs a registered evaluation whose
+    // digest, target aggregate, base revision and pinned inputs match the
+    // state of the store, whose projection conformance passes, whose required
+    // author geometric conditions pass and whose source views do not
+    // regress against the base revision.
+    let binding = match gate::resolve_evaluation(&store, candidate_id, &options) {
+        Ok(binding) => binding,
+        Err(error) => {
+            return refuse_accept(
+                &store,
+                candidate_id,
+                by,
+                clock,
+                error.code(),
+                error.message().to_string(),
+            );
+        }
+    };
+    if let Err(error) = gate::verify_evaluation(&store, &candidate, &manifest, &binding) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+
+    let revision = publish_snapshot(
+        &store,
+        &manifest,
+        &candidate,
+        &base_scene,
+        clock,
+        Some(&gate::evaluation_ref(&binding)),
+    )?;
 
     // The hook runs between the publication of the revision and the switch of
     // the pointer: a crash here leaves the old bundle authoritative and the
@@ -523,6 +631,8 @@ pub fn accept_candidate_with_hooks(
     report.resulting_scene_revision = Some(revision.clone());
     report.snapshot_id = Some(manifest.snapshot_id.clone());
     report.aggregate_sha256 = Some(manifest.aggregate_sha256.clone());
+    report.evaluation_id = Some(binding.evaluation_id.clone());
+    report.evaluation_sha256 = Some(binding.sha256.clone());
     set_current(&store, &revision, Some(candidate_id.to_string()), clock)?;
     write_decision(&store, &report, DECISION_ACCEPT)?;
     record_index(&store, &report, Some(revision.clone()))?;
@@ -916,6 +1026,7 @@ fn publish_snapshot(
     candidate: &EditCandidate,
     base_scene: &Scene,
     clock: &dyn Clock,
+    evaluation: Option<&EvaluationRef>,
 ) -> Result<String, EditError> {
     if let Some(revision) = find_revision_of_candidate(
         store,
@@ -985,7 +1096,10 @@ fn publish_snapshot(
                 path: unknown_state_relative_path(&revision),
                 sha256: unknown_sha256,
             }),
-            evaluations: Vec::new(),
+            evaluations: match evaluation {
+                Some(reference) => vec![reference.clone()],
+                None => Vec::new(),
+            },
             confirmations: Vec::new(),
             resolutions: Vec::new(),
             policies: VerificationPolicies {

@@ -158,6 +158,23 @@ TZ: `docs/tz/TZ_ASSISTANT_STAGE_D.md` (branch `dev`; evidence in `target/techlea
   (`-32001`), invalid policy stops the server, audit log complete without absolute paths; the
   candidate is applied only by an explicit `michelangelo edit accept` (→ `s0003`).
 
+## Completed — IT-8 hardening: acceptance integrity & evaluation (A/B)
+
+TZ: `docs/tz/TZ_IT8_ACCEPTANCE_INTEGRITY.md`; contract: `docs/specs/VERIFICATION_STATE.md`;
+evidence in `target/techlead/IT-8/` and `target/techlead/IT-8B/`.
+
+- [x] T-0801 Acceptance integrity (IT-8A, `003594b`) — full-result snapshot with digests,
+  publication from the snapshot, OS lock and under-lock pointer re-read, append-only decision
+  history, idempotent accept (also after rollback), reject-after-accept refusal, crash recovery,
+  revision bundle with unknown-state document and rollback selection; 27 crate failure tests +
+  CLI lock/tamper/legacy tests; reviewer GREEN after fixes.
+- [x] T-0802 Candidate evaluation + accept gate (IT-8B) — `michelangelo_evidence` report/digests/
+  registry/gate, `michelangelo_eval` actual-geometry rendering with pinned inputs and per-view
+  regression, held-out evaluation, mandatory `edit accept --evaluation`, CLI `evaluate`,
+  `docs/specs/EVALUATION.md`; 48 tests; real-Blender acceptance reproduced (source mean 0.9584,
+  held-out 0.9450); reviewer GREEN after fixes.
+- [ ] T-0803 Unknown resolution/bindings + policy enforcement (IT-8C) and the external-agent demo.
+
 ## Not yet started
 
 - Future Blender ops: `create_reference_planes`, `apply_bevel`, curve/extrusion/boolean ops

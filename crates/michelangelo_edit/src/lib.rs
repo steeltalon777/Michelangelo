@@ -31,6 +31,7 @@
 pub mod apply;
 pub mod candidate;
 pub mod error;
+pub mod gate;
 pub mod obj;
 pub mod policy;
 pub mod scene;
@@ -38,11 +39,13 @@ pub mod validate;
 pub mod verification;
 
 pub use apply::{
-    accept_candidate, accept_candidate_with_hooks, reject_candidate, rollback_scene, show_scene,
-    submit_candidate, AcceptHooks, ShowReport,
+    accept_candidate, accept_candidate_with_hooks, accept_candidate_with_hooks_and_options,
+    accept_candidate_with_options, reject_candidate, rollback_scene, show_scene, submit_candidate,
+    AcceptHooks, ShowReport,
 };
 pub use candidate::{CandidateAction, CandidateOrigin, EditCandidate};
 pub use error::{io_error, EditError};
+pub use gate::{AcceptOptions, EvaluationBinding};
 pub use obj::{parse_obj, Bbox, ObjError, ObjMesh};
 pub use policy::{EditPolicy, PolicyDecision};
 pub use scene::{

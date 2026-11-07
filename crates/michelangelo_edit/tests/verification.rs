@@ -9,7 +9,9 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{candidate, digest, lid_obj, make_run, write_candidate, write_file};
+use common::{
+    accept, candidate, digest, lid_obj, make_run, register_evaluation, write_candidate, write_file,
+};
 use michelangelo_edit::apply::{
     accept_candidate, accept_candidate_with_hooks, reject_candidate, rollback_scene,
     submit_candidate, AcceptHooks, DECISION_ACCEPT, DECISION_ACCEPT_IDEMPOTENT, DECISION_REJECT,
@@ -61,7 +63,7 @@ impl Fixture {
     }
 
     fn accept(&self) -> michelangelo_edit::DecisionReport {
-        accept_candidate(&self.run_dir, "cand-0001", "alice", &self.clock())
+        accept(&self.run_dir, "cand-0001", "alice", &self.clock())
             .expect("the candidate is accepted")
     }
 }
@@ -235,7 +237,7 @@ fn a_tampered_candidate_geometry_is_refused() {
         .run_dir
         .join("candidates/cand-0001/geometry/lid.obj");
     write_file(&geometry, &lid_obj(0.03));
-    let error = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    let error = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect_err("the acceptance is refused");
     assert_eq!(error.code(), EVIDENCE_MISMATCH);
     assert_eq!(error.exit_code(), 1);
@@ -255,7 +257,7 @@ fn a_tampered_snapshot_is_refused() {
         .run_dir
         .join("verification/snapshots/cand-0001/geometry/lid.obj");
     write_file(&geometry, &lid_obj(0.03));
-    let error = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    let error = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect_err("the acceptance is refused");
     assert_eq!(error.code(), EVIDENCE_MISMATCH);
     assert_eq!(error.exit_code(), 1);
@@ -270,7 +272,7 @@ fn a_refused_acceptance_is_appended_to_the_history() {
         .run_dir
         .join("candidates/cand-0001/geometry/lid.obj");
     write_file(&geometry, &lid_obj(0.03));
-    let _ = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock());
+    let _ = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock());
     let store = fixture.store();
     let refused: Vec<String> = history(&store)
         .into_iter()
@@ -300,7 +302,7 @@ fn the_published_geometry_comes_from_the_snapshot() {
         .join("candidates/cand-0001/geometry/lid.obj");
     write_file(&geometry, &lid_obj(0.03));
     // The tampered candidate is refused, the snapshot is untouched.
-    let _ = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock());
+    let _ = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock());
     let snapshot = fixture
         .run_dir
         .join("verification/snapshots/cand-0001/geometry/lid.obj");
@@ -320,7 +322,7 @@ fn a_busy_lock_is_refused() {
     fixture.submit();
     let store = fixture.store();
     let _lock = StoreLock::acquire(&store, "test").expect("the lock is taken");
-    let error = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    let error = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect_err("the acceptance is refused");
     assert_eq!(error.code(), STORE_BUSY);
     assert_eq!(error.exit_code(), 2);
@@ -356,6 +358,7 @@ fn an_injected_change_of_the_pointer_is_refused() {
         after_validation: Some(&mut after_validation),
         ..Default::default()
     };
+    register_evaluation(&fixture.run_dir, "cand-0001");
     let error = accept_candidate_with_hooks(
         &fixture.run_dir,
         "cand-0001",
@@ -386,6 +389,7 @@ fn a_crash_before_the_pointer_leaves_the_old_bundle_authoritative() {
         before_publish: Some(&mut before_publish),
         ..Default::default()
     };
+    register_evaluation(&fixture.run_dir, "cand-0001");
     let error = accept_candidate_with_hooks(
         &fixture.run_dir,
         "cand-0001",

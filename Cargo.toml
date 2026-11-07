@@ -11,6 +11,8 @@ members = [
     "crates/michelangelo_recon",
     "crates/michelangelo_edit",
     "crates/michelangelo_assistant",
+    "crates/michelangelo_evidence",
+    "crates/michelangelo_eval",
 ]
 
 [workspace.package]

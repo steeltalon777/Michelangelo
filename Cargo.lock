@@ -339,6 +339,8 @@ dependencies = [
  "michelangelo_assistant",
  "michelangelo_core",
  "michelangelo_edit",
+ "michelangelo_eval",
+ "michelangelo_evidence",
  "michelangelo_input",
  "michelangelo_protocol",
  "michelangelo_recon",
@@ -362,8 +364,34 @@ dependencies = [
 name = "michelangelo_edit"
 version = "0.1.0"
 dependencies = [
+ "michelangelo_evidence",
  "michelangelo_input",
  "michelangelo_recon",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "michelangelo_eval"
+version = "0.1.0"
+dependencies = [
+ "michelangelo_blender",
+ "michelangelo_edit",
+ "michelangelo_evidence",
+ "michelangelo_input",
+ "michelangelo_protocol",
+ "michelangelo_recon",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "michelangelo_evidence"
+version = "0.1.0"
+dependencies = [
+ "michelangelo_input",
  "serde",
  "serde_json",
  "tempfile",

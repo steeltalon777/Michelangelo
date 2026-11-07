@@ -117,6 +117,39 @@ no network code; the JSONL core wire contract is unchanged.
 - README status, ROADMAP Phase 3 (Stage A done), `docs/ai/AI_CONTEXT.md` and `TASKS.md` updated
   for IT-4; test count baseline 387 Rust tests.
 
+ADR 0004 hardening IT-8 (IT-8A acceptance integrity + IT-8B candidate evaluation). The input
+package format stays v0 and the JSONL wire contract is unchanged; the new functionality is two
+library crates plus CLI subcommands and an accept gate.
+
+### Added (IT-8A/IT-8B)
+
+- **Verification state contract** (`docs/specs/VERIFICATION_STATE.md`): one authoritative bundle
+  pointer, immutable full-result snapshots, digest rules, verification taxonomy
+  (`projection_conformance`, `author_geometric_conditions`, `independent_ground_truth`,
+  `author_hidden_decision`), partial acceptance, resolution invalidation and policy precedence.
+- **Acceptance integrity (IT-8A)**: `submit` snapshots the full post-change component set with
+  per-file and aggregate SHA-256; publication reads only the snapshot; the store runs under an OS
+  advisory lock (`std::fs::File::try_lock`, no TTL stealing) and accept re-reads the pointer and
+  re-verifies evidence under it; duplicate accepts are idempotent (historical result, same
+  revision, also after rollback), reject-after-accept is refused, crash-before-pointer recovers
+  by reusing the published revision; every decision (including `accept-refused`) is append-only;
+  each revision carries a hash-pinned unknown-state document and rollback restores it.
+- **Candidate evaluation (IT-8B)**: `michelangelo_evidence` (report DTO, digests, append-only
+  registry, pure accept gate) and `michelangelo_eval` (renders the actual candidate snapshot or
+  revision and its base with pinned cameras/masks/package inputs; visible vs author conditions vs
+  ground truth vs hidden decision; per-view 0.01 IoU regression; held-out views optional);
+  `michelangelo evaluate --run (--candidate|--revision)` and a mandatory
+  `edit accept --evaluation <report>` gate that requires a registered report digest, matching
+  target aggregate/base/inputs, passing visible conformance and required author geometric
+  conditions, and a pinned regression limit. Hidden claims stay `unverified`/`pending`; missing
+  ground truth is `unavailable`, never a pass; `auto_accept` is deferred (submit stays `proposed`).
+- Spec `docs/specs/EVALUATION.md`; 51 new tests (evidence 23, eval 12, edit gate 10, CLI 6).
+
+### Changed (IT-8A/IT-8B)
+
+- `docs/specs/LOCAL_EDIT.md`, `docs/specs/VERIFICATION_STATE.md`, TZ `TZ_IT8_ACCEPTANCE_INTEGRITY.md`
+  and ROADMAP/TASKS/AI_CONTEXT updated for A/B; test count baseline 792 Rust tests.
+
 ## [0.1.0] — 2026-11-07
 
 Phase 2 acceptance hardening, execution reliability, safe Blender scene operations and

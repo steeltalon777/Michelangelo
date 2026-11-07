@@ -5,12 +5,14 @@
 
 mod assistant_cmd;
 mod edit_cmd;
+mod evaluate_cmd;
 mod input_cmd;
 mod mcp_cmd;
 mod reconstruct_cmd;
 mod stdio;
 
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "michelangelo")]
@@ -47,6 +49,27 @@ enum Commands {
     Assistant {
         #[command(subcommand)]
         command: assistant_cmd::AssistantCommand,
+    },
+    /// Evaluate a candidate or a scene revision of a run (Stage B)
+    Evaluate {
+        /// The run directory (the directory with report.json).
+        #[arg(long, value_name = "DIR")]
+        run: PathBuf,
+        /// The identifier of the candidate to evaluate.
+        #[arg(long, value_name = "ID")]
+        candidate: Option<String>,
+        /// The scene revision to evaluate.
+        #[arg(long, value_name = "REVISION")]
+        revision: Option<String>,
+        /// The held-out evaluation package.
+        #[arg(long, value_name = "DIR")]
+        evaluation: Option<PathBuf>,
+        /// The Blender executable.
+        #[arg(long, value_name = "BIN")]
+        blender: Option<PathBuf>,
+        /// Print the evaluation report instead of a human summary.
+        #[arg(long)]
+        json: bool,
     },
     /// Serve the assistant surface over the MCP stdio transport (Stage D2)
     Mcp {
@@ -93,6 +116,23 @@ fn main() -> std::process::ExitCode {
             // The edit subcommands are independent of the protocol mode:
             // stdout carries the summary or the decision report JSON.
             return edit_cmd::execute(command);
+        }
+        Some(Commands::Evaluate {
+            run,
+            candidate,
+            revision,
+            evaluation,
+            blender,
+            json,
+        }) => {
+            return evaluate_cmd::execute(
+                run,
+                candidate.as_deref(),
+                revision.as_deref(),
+                evaluation.as_deref(),
+                blender.as_deref(),
+                *json,
+            );
         }
         Some(Commands::Assistant { command }) => {
             // The assistant subcommands are independent of the protocol mode:

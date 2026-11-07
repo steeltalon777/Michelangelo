@@ -4,10 +4,8 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{candidate, far_lid_obj, lid_obj, make_run, write_candidate};
-use michelangelo_edit::apply::{
-    accept_candidate, reject_candidate, rollback_scene, show_scene, submit_candidate,
-};
+use common::{accept, candidate, far_lid_obj, lid_obj, make_run, write_candidate};
+use michelangelo_edit::apply::{reject_candidate, rollback_scene, show_scene, submit_candidate};
 use michelangelo_edit::scene::{load_current, load_index, load_scene, SceneStore};
 use michelangelo_edit::{Decision, FixedClock};
 use serde_json::json;
@@ -91,7 +89,7 @@ fn an_accepted_candidate_publishes_a_new_revision() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    let report = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    let report = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     assert_eq!(report.decision, Decision::Accepted);
     assert_eq!(report.resulting_scene_revision, Some("s0002".to_string()));
@@ -109,7 +107,7 @@ fn the_untouched_components_stay_byte_identical() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     let before = std::fs::read(fixture.run_dir.join("scene/s0001/components/base.obj"))
         .expect("the base component is read");
@@ -123,7 +121,7 @@ fn the_changed_component_is_replaced() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     let before = std::fs::read(fixture.run_dir.join("scene/s0001/components/lid.obj"))
         .expect("the lid is read");
@@ -138,7 +136,7 @@ fn the_new_revision_records_its_lineage() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     let store = SceneStore::new(&fixture.run_dir);
     let scene = load_scene(&store, "s0002").expect("the scene is read");
@@ -163,9 +161,9 @@ fn a_stale_candidate_is_rejected_after_an_acceptance() {
     submit_candidate(&fixture.run_dir, &stale_dir, &fixture.clock())
         .expect("the second candidate is submitted");
 
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the first candidate is accepted");
-    let report = accept_candidate(&fixture.run_dir, "cand-0002", "alice", &fixture.clock())
+    let report = accept(&fixture.run_dir, "cand-0002", "alice", &fixture.clock())
         .expect("the candidate is decided");
     assert_eq!(report.decision, Decision::Rejected);
     let codes: Vec<String> = report
@@ -181,10 +179,10 @@ fn a_repeated_acceptance_returns_the_historical_result() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    let first = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    let first = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     assert_eq!(first.decision, Decision::Accepted);
-    let second = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    let second = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is decided");
     assert_eq!(second.decision, Decision::Accepted);
     assert_eq!(
@@ -248,7 +246,7 @@ fn a_failing_publication_leaves_the_pointer_untouched() {
     // The temporary revision directory is blocked: the publication must fail.
     let blocked = fixture.run_dir.join("scene/s0002.tmp");
     std::fs::write(&blocked, b"blocked").expect("the file is written");
-    let error = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    let error = accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect_err("the publication fails");
     assert!(error.to_string().contains("temporary"));
     let store = SceneStore::new(&fixture.run_dir);
@@ -285,7 +283,7 @@ fn a_rollback_points_to_the_previous_revision() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     let report = rollback_scene(&fixture.run_dir, "s0001", "alice", &fixture.clock())
         .expect("the store is rolled back");
@@ -303,7 +301,7 @@ fn a_rollback_is_recorded_in_the_index() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     rollback_scene(&fixture.run_dir, "s0001", "alice", &fixture.clock())
         .expect("the store is rolled back");
@@ -362,8 +360,16 @@ fn a_policy_allows_an_automatic_acceptance() {
     );
     let report = submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    assert_eq!(report.decision, Decision::Accepted);
-    assert_eq!(report.resulting_scene_revision, Some("s0002".to_string()));
+    // The automatic acceptance of the policy is deferred: an acceptance always
+    // needs a registered evaluation (contract §7), so the candidate stays
+    // proposed until the evaluation exists.
+    assert_eq!(report.decision, Decision::Proposed);
+    assert_eq!(report.resulting_scene_revision, None);
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "EVALUATION_REQUIRED"));
+    assert!(!fixture.run_dir.join("scene/s0002").exists());
 }
 
 #[test]
@@ -441,7 +447,7 @@ fn the_store_never_writes_into_the_source_directory() {
     let before = common::digest(&fixture.run_dir.join("source/base.obj"));
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     assert_eq!(
         before,
@@ -484,7 +490,7 @@ fn an_added_component_joins_the_new_revision() {
     );
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     let store = SceneStore::new(&fixture.run_dir);
     let scene = load_scene(&store, "s0002").expect("the scene is read");
@@ -497,7 +503,7 @@ fn the_scene_revision_is_never_modified_after_its_publication() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
-    accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+    accept(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
         .expect("the candidate is accepted");
     let digest = common::digest(&fixture.run_dir.join("scene/s0001/scene.json"));
     rollback_scene(&fixture.run_dir, "s0001", "alice", &fixture.clock())

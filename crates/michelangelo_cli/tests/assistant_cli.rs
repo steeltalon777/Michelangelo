@@ -190,6 +190,8 @@ fn an_accepted_candidate_publishes_a_new_scene_revision() -> Result<(), Box<dyn 
     let pointer = std::fs::read_to_string(fixture.run_dir.join("current.json"))?;
     assert!(pointer.contains("s0001"));
     // The explicit acceptance of the author publishes the new revision.
+    // The acceptance needs a registered evaluation (IT-8B).
+    let evaluation = common::register_evaluation(&fixture.run_dir, "cand-0001");
     let (code, _, stderr) = run(&[
         "edit",
         "accept",
@@ -199,6 +201,8 @@ fn an_accepted_candidate_publishes_a_new_scene_revision() -> Result<(), Box<dyn 
         "cand-0001",
         "--by",
         "alice",
+        "--evaluation",
+        &evaluation.display().to_string(),
     ]);
     assert_eq!(code, 0, "the candidate is accepted: {stderr}");
     let pointer = std::fs::read_to_string(fixture.run_dir.join("current.json"))?;

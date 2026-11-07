@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+michelangelo_evidence = { path = "../michelangelo_evidence" }
 michelangelo_input = { path = "../michelangelo_input" }
 michelangelo_recon = { path = "../michelangelo_recon" }
 serde = { version = "1", features = ["derive"] }

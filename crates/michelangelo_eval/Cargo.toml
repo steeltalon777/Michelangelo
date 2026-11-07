@@ -1,0 +1,18 @@
+[package]
+name = "michelangelo_eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+michelangelo_evidence = { path = "../michelangelo_evidence" }
+michelangelo_edit = { path = "../michelangelo_edit" }
+michelangelo_recon = { path = "../michelangelo_recon" }
+michelangelo_protocol = { path = "../michelangelo_protocol" }
+michelangelo_blender = { path = "../michelangelo_blender" }
+michelangelo_input = { path = "../michelangelo_input" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

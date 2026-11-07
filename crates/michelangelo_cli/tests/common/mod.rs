@@ -264,6 +264,28 @@ pub fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_michelangelo")
 }
 
+/// Register a synthetic evaluation for a candidate of the run.
+///
+/// The acceptance of IT-8B needs a registered evaluation: the helper builds
+/// one with the evidence crate (pinned to the snapshot, to the package copy
+/// and to the base revision of the candidate) and registers it in the
+/// registry of the Core.
+pub fn register_evaluation(run_dir: &Path, candidate_id: &str) -> PathBuf {
+    let registry =
+        michelangelo_evidence::registry::load_registry(run_dir).expect("the registry is read");
+    let evaluation_id = registry.next_evaluation_id();
+    let report = michelangelo_evidence::testing::synthetic_evaluation(
+        run_dir,
+        candidate_id,
+        &evaluation_id,
+        "2026-01-03T04:05:06Z",
+    )
+    .expect("the synthetic evaluation is built");
+    let entry = michelangelo_evidence::registry::write_and_register(run_dir, &report)
+        .expect("the evaluation is registered");
+    run_dir.join(entry.report_path)
+}
+
 /// The path of a directory relative to the workspace.
 pub fn relative(workspace: &Path, path: &Path) -> String {
     path.strip_prefix(workspace)

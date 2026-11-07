@@ -127,6 +127,37 @@ impl From<michelangelo_edit::EditError> for AssistantError {
             | michelangelo_edit::EditError::StaleBase { message } => {
                 AssistantError::Invalid { message }
             }
+            // The refusals of the accept gate keep their diagnostic code.
+            michelangelo_edit::EditError::EvaluationMissing { message } => {
+                AssistantError::Invalid {
+                    message: format!("EVALUATION_MISSING: {message}"),
+                }
+            }
+            michelangelo_edit::EditError::EvaluationStale { message } => AssistantError::Invalid {
+                message: format!("EVALUATION_STALE: {message}"),
+            },
+            michelangelo_edit::EditError::EvaluationUnregistered { message } => {
+                AssistantError::Invalid {
+                    message: format!("EVALUATION_UNREGISTERED: {message}"),
+                }
+            }
+            michelangelo_edit::EditError::InputChanged { message } => AssistantError::Invalid {
+                message: format!("INPUT_CHANGED: {message}"),
+            },
+            michelangelo_edit::EditError::VisibleFailed { message } => AssistantError::Invalid {
+                message: format!("VISIBLE_FAILED: {message}"),
+            },
+            michelangelo_edit::EditError::AuthorConditionFailed { message } => {
+                AssistantError::Invalid {
+                    message: format!("AUTHOR_CONDITION_FAILED: {message}"),
+                }
+            }
+            michelangelo_edit::EditError::Regression { message } => AssistantError::Invalid {
+                message: format!("REGRESSION: {message}"),
+            },
+            michelangelo_edit::EditError::NoGroundTruth { message } => AssistantError::Invalid {
+                message: format!("NO_GROUND_TRUTH: {message}"),
+            },
         }
     }
 }
