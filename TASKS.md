@@ -138,6 +138,26 @@ TZ: `docs/tz/TZ_LOCAL_EDIT_STAGE_C.md` (branch `dev`; evidence in `target/techle
   candidate publishes `s0002`, stale resubmit rejected, protected tamper rejected, region
   violation rejected, rollback to `s0001`; protected components byte-identical after accept.
 
+## Completed — ADR 0004 Stage D2 (Optional Bounded Assistant + MCP Adapter)
+
+TZ: `docs/tz/TZ_ASSISTANT_STAGE_D.md` (branch `dev`; evidence in `target/techlead/IT-7/`).
+
+- [x] T-0701 Bounded assistant surface (IT-7, 2026-11-07) — `michelangelo_assistant` crate:
+  `michelangelo.assistant-task/0` generation from a run (allowed components/region, protected
+  parts, filtered references, acceptance criteria, budgets, data policy), workspace policy
+  (deny-by-default, `allow_apply` forbidden), persisted per-run budget counters and append-only
+  audit log; 92 crate tests.
+- [x] T-0702 MCP stdio adapter + CLI (IT-7) — newline-delimited JSON-RPC 2.0 server with
+  `initialize`, `tools/list`, `tools/call` and the four allow-listed tools; error mapping
+  (`-32001`…`-32005`, `-32700`, `-32601`, `-32602`), path confinement, no absolute paths;
+  `michelangelo mcp serve`, `michelangelo assistant task|submit`; 12 CLI + 4 stdio integration
+  tests; spec `docs/specs/ASSISTANT_MCP.md`.
+- [x] T-0703 Stage D2 acceptance (IT-7) — MCP session against a copy of the IT-6 run: task
+  generated, candidate submitted as `proposed`, budget exhausted on the 4th submission
+  (`-32003`), path escape rejected (`-32002`), malformed line survived (`-32700`), policy denial
+  (`-32001`), invalid policy stops the server, audit log complete without absolute paths; the
+  candidate is applied only by an explicit `michelangelo edit accept` (→ `s0003`).
+
 ## Not yet started
 
 - Future Blender ops: `create_reference_planes`, `apply_bevel`, curve/extrusion/boolean ops

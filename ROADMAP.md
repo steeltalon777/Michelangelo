@@ -98,13 +98,24 @@ Stage C (ADR §13.3) — local edit boundary — ✅ **done (IT-6, 2026-11-07)**
   Proven end-to-end on a real Stage B run: accepted candidate → `s0002`, stale resubmit rejected,
   protected tamper rejected, out-of-region candidate rejected, rollback to `s0001`.
 
-Stage D (ADR §13.4) — optional assistant:
+Stage D (ADR §13.4) — optional assistant — ✅ **done (IT-7, 2026-11-07)**:
 
-- MCP adapter for LLM clients — kept, but only after permissions, budgets, data policy and
-  measurable acceptance criteria are defined (ADR §8)
-- Natural language command interpretation
+- ✅ Bounded assistant task (`michelangelo.assistant-task/0`): base revision, allowed components,
+  allowed region, protected components, filtered references (masks, silhouette renders, reports),
+  acceptance criteria, budgets and an explicit data policy; workspace policy
+  (`.michelangelo/assistant_policy.json`, deny-by-default); persisted per-run budget counters and
+  an append-only audit log; MCP stdio adapter (`michelangelo mcp serve`) exposing
+  `michelangelo_get_task`, `michelangelo_validate_package`, `michelangelo_submit_candidate`,
+  `michelangelo_get_report`. A submission is always `proposed` — applying stays an explicit
+  `michelangelo edit accept`. No embedded model, no network, no external service;
+  `michelangelo assistant task|submit` CLI. Spec:
+  [ASSISTANT_MCP.md](docs/specs/ASSISTANT_MCP.md), TZ:
+  [TZ](docs/tz/TZ_ASSISTANT_STAGE_D.md).
+- Natural language command interpretation — future (needs a provider under the same bounded-task /
+  data-policy rules)
 - Build plan validation → `BlenderJobSpec`; iterative refinement as bounded local-change
-  candidates (ADR §8.2), not unrestricted scene ownership
+  candidates (ADR §8.2), not unrestricted scene ownership — the bounded candidate intake is
+  implemented; a concrete LLM/build-plan provider remains future work
 
 ## 🔜 Phase 5 — GUI/TUI
 

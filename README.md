@@ -14,7 +14,7 @@ diagnostics. Blender runs as a bounded external batch subprocess driven by the s
   `result.json`/artifact validation, correct job identity and terminal-state ordering,
   deterministic empty scenes, 18 typed safe operations, calibrated orthographic silhouettes,
   assertable camera framing, Workbench-only rendering.
-- Verification at the IT-6 baseline: **593 Rust tests**, **30 Python worker validation checks**,
+- Verification at the IT-7 baseline: **702 Rust tests**, **30 Python worker validation checks**,
   the input-package acceptance checks (fixtures + a package derived from a local PoC dataset) and
   the cross-platform acceptance E2E (`scripts/smoke_blender_scene.py`: 119 checks on
   real Blender, 113 on `--fake`) with a calibrated **16,384 px** silhouette and a framed-scene
@@ -23,9 +23,23 @@ diagnostics. Blender runs as a bounded external batch subprocess driven by the s
   `michelangelo input validate|describe` implements format/safety and sufficiency validation,
   hash-verified PNG resources, targeted diagnostics and a machine-readable report
   ([spec](docs/specs/INPUT_PACKAGE.md)). The JSONL wire contract is unchanged.
-- Next: ADR 0004 Stage B (vertical reconstruction PoC) — see [ROADMAP.md](ROADMAP.md).
-  Visual Hull solver, Parametric Solver, LLM integration, Asset Graph and Unreal import are
-  **not implemented**.
+- ADR 0004 Stage B (vertical reconstruction PoC) — done in IT-5: deterministic voxel visual hull
+  from calibrated orthographic silhouettes + authored supplements, Blender rendering of source and
+  held-out cameras, per-view silhouette IoU report, editable `.blend`/`.glb` blockout;
+  `michelangelo reconstruct run|score|show` ([spec](docs/specs/RECONSTRUCTION.md)); 12/12
+  acceptance runs on Blender 5.2.3 (source IoU 0.91–0.996, held-out 0.91–0.99).
+- ADR 0004 Stage C (local edit boundary) — done in IT-6: immutable scene revisions, explicit edit
+  candidates, deterministic validator (stale base, protected geometry, region), atomic applier and
+  rollback; `michelangelo edit init|submit|accept|reject|rollback|show`
+  ([spec](docs/specs/LOCAL_EDIT.md)).
+- ADR 0004 Stage D2 (optional bounded assistant) — done in IT-7: bounded assistant tasks,
+  deny-by-default policy, persisted budgets and an audit log, local MCP stdio adapter
+  (`michelangelo mcp serve`, `michelangelo assistant task|submit`); no embedded model and no
+  network code ([spec](docs/specs/ASSISTANT_MCP.md)).
+- Next: GUI/TUI (Phase 5), Asset Graph/thumbnails, perspective/multi-view reconstruction and a
+  concrete external assistant provider under the Stage D policy — see [ROADMAP.md](ROADMAP.md).
+  Parametric Solver, LLM provider integration, Asset Graph and Unreal import are **not
+  implemented**.
 
 ## Quick start
 

@@ -16,6 +16,7 @@ michelangelo_protocol = { path = "../michelangelo_protocol" }
 michelangelo_input = { path = "../michelangelo_input" }
 michelangelo_recon = { path = "../michelangelo_recon" }
 michelangelo_edit = { path = "../michelangelo_edit" }
+michelangelo_assistant = { path = "../michelangelo_assistant" }
 
 [dev-dependencies]
 tempfile = "3"

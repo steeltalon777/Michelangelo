@@ -3,8 +3,10 @@
 //! Thin shell over the Core protocol. All human-readable diagnostics
 //! go to stderr; stdout is reserved for protocol JSONL messages.
 
+mod assistant_cmd;
 mod edit_cmd;
 mod input_cmd;
+mod mcp_cmd;
 mod reconstruct_cmd;
 mod stdio;
 
@@ -40,6 +42,16 @@ enum Commands {
     Edit {
         #[command(subcommand)]
         command: edit_cmd::EditCommand,
+    },
+    /// Generate and submit bounded assistant tasks (Stage D2)
+    Assistant {
+        #[command(subcommand)]
+        command: assistant_cmd::AssistantCommand,
+    },
+    /// Serve the assistant surface over the MCP stdio transport (Stage D2)
+    Mcp {
+        #[command(subcommand)]
+        command: mcp_cmd::McpCommand,
     },
 }
 
@@ -81,6 +93,16 @@ fn main() -> std::process::ExitCode {
             // The edit subcommands are independent of the protocol mode:
             // stdout carries the summary or the decision report JSON.
             return edit_cmd::execute(command);
+        }
+        Some(Commands::Assistant { command }) => {
+            // The assistant subcommands are independent of the protocol mode:
+            // stdout carries the summary or the task JSON.
+            return assistant_cmd::execute(command);
+        }
+        Some(Commands::Mcp { command }) => {
+            // The MCP transport owns stdout: only the JSON-RPC responses are
+            // written there.
+            return mcp_cmd::execute(command);
         }
         None => {
             // No subcommand — show help (--help is handled by clap automatically)

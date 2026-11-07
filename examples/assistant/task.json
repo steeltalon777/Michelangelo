@@ -1,0 +1,68 @@
+{
+  "schema": "michelangelo.assistant-task/0",
+  "task_id": "asst-0001",
+  "created_at": "2026-11-07T12:00:00Z",
+  "base": {
+    "package_id": "demo-lantern",
+    "package_revision": 1,
+    "run_id": "run-0001",
+    "scene_revision": "s0001"
+  },
+  "allowed_components": [
+    "lid"
+  ],
+  "allowed_region": {
+    "min": [
+      -0.044,
+      0.049,
+      -0.044
+    ],
+    "max": [
+      0.044,
+      0.071,
+      0.044
+    ]
+  },
+  "protected": [
+    "base"
+  ],
+  "unknowns": [
+    {
+      "id": "u_lid_inside",
+      "description": "the inside of the lid is unknown",
+      "policy": "author_required"
+    }
+  ],
+  "supplements": [],
+  "references": {
+    "views": [],
+    "renders": [],
+    "quality_report": null,
+    "build_report": null
+  },
+  "acceptance_criteria": {
+    "min_source_iou": 0.85,
+    "min_evaluation_iou": 0.7,
+    "measurement_relative_error_max": 0.05,
+    "reject_if_protected_changed": true
+  },
+  "budget": {
+    "max_calls": 3,
+    "max_seconds": 600,
+    "max_cost_usd": 0,
+    "max_candidate_bytes": 67108864
+  },
+  "data_policy": {
+    "allow_network": false,
+    "allow_external_service": false,
+    "allowed_reference_kinds": [
+      "mask",
+      "silhouette_render",
+      "report"
+    ]
+  },
+  "provenance": {
+    "origin": "core",
+    "detail": "bounded task generated from run 'run-0001'"
+  }
+}

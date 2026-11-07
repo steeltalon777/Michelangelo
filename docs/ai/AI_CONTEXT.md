@@ -30,6 +30,7 @@ CLI (michelangelo_cli)
 | `michelangelo_input` | Stage A input package: strict manifest, resource safety, levels 1–2 validation | `InputPackage`, `validate_package`, `ValidateOptions`, `InputPackageReport`, `Diagnostic` |
 | `michelangelo_recon` | Stage B reconstruction pipeline (solver → Blender job → IoU report) | `run`, `score`, `ReconstructionReport`, `camera_basis`/`rotation_deg`, run store, `ReconOptions` |
 | `michelangelo_edit` | Stage C local edit boundary (scene revisions, candidates) | `SceneStore`, `init_scene_with_protection`, `submit_candidate`, `accept_candidate`, `rollback_scene`, `DecisionReport` |
+| `michelangelo_assistant` | Stage D bounded assistant surface + MCP stdio adapter | `assistant-task/0` generation, policy, budget/audit store, four MCP tools, error mapping |
 
 ## Protocol Numbers
 
@@ -43,7 +44,8 @@ CLI (michelangelo_cli)
 - CLI-only commands (not JSONL methods, no wire contract impact): `michelangelo input
   validate|describe` (Stage A input package), `michelangelo reconstruct run|score|show` (Stage B
   reconstruction PoC), `michelangelo edit init|submit|accept|reject|rollback|show` (Stage C local
-  edit boundary); `michelangelo core stdio` is the JSONL transport
+  edit boundary), `michelangelo assistant task|submit` and `michelangelo mcp serve` (Stage D
+  bounded assistant/MCP); `michelangelo core stdio` is the JSONL transport
 - Worker ops (18, stable order in `SAFE_WORKER_OPS`): `create_box`, `set_material`,
   `set_camera_set`, `render_views`, `export_glb`, `save_blend`, `get_scene_summary`,
   `create_cylinder`, `create_sphere`, `import_mesh`, `set_transform`, `create_ortho_camera`,
@@ -57,7 +59,7 @@ CLI (michelangelo_cli)
 ## Verification
 
 ```bash
-# Rust (real-Blender tests auto-skip when Blender is absent) — 593 tests
+# Rust (real-Blender tests auto-skip when Blender is absent) — 702 tests
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -125,13 +127,20 @@ the current Windows stand).
   (stale base, protected tamper, region/geometry/identity, acceptance/policy) and atomic applier
   with byte-identical untouched components and rollback. Run-level protection is established at
   `edit init --protect`; candidates cannot redefine it. No wire changes, no Blender, no network.
+- Stage D2 is implemented (IT-7): [`docs/specs/ASSISTANT_MCP.md`](../specs/ASSISTANT_MCP.md),
+  `michelangelo_assistant` crate + `michelangelo assistant task|submit` + `michelangelo mcp serve`.
+  Bounded assistant task from a run (allowed components/region, protected parts, filtered
+  references, acceptance criteria, budgets, data policy), workspace policy with deny-by-default
+  apply, persisted per-run budget counters and an append-only audit log, and a local MCP stdio
+  adapter exposing four tools. Submissions are always `proposed`; applying stays an explicit
+  `michelangelo edit accept`. No embedded model, no network, no external service.
 
 ## Out of Scope
 
-GUI/TUI, LLM providers, MCP, Asset Graph ingest, PNG decomposition, Qdrant/vector databases,
-network transport, Unreal import, arbitrary Python execution, Blender addon/persistent daemon,
+GUI/TUI, LLM providers, Asset Graph ingest, PNG decomposition, Qdrant/vector databases, network
+transport, Unreal import, arbitrary Python execution, Blender addon/persistent daemon,
 EEVEE/Cycles render reliability. Visual Hull is now implemented as a deterministic v0 blockout
 solver (Stage B, voxel carving, no perspective/multi-view fitting, no hidden-void recovery);
-Parametric Solver is still planned by accepted ADR 0004 (Stage C/D and later stages) — deferred,
-not rejected. LLM providers/MCP belong to the optional assistant (Stage D) and are not required by
-the deterministic core.
+Parametric Solver is still planned by accepted ADR 0004 (later stages) — deferred, not rejected.
+A local MCP adapter exists (Stage D2, tool boundary only); LLM providers/API integration and
+natural-language interpretation remain future work and are not required by the deterministic core.

@@ -85,6 +85,33 @@ crate, CLI subcommands and a spec.
 
 - ROADMAP Phase 4 Stage C marked done, `docs/ai/AI_CONTEXT.md` and `TASKS.md` updated for IT-6.
 
+ADR 0004 Stage D2 (IT-7): optional bounded assistant + MCP stdio adapter. No embedded model and
+no network code; the JSONL core wire contract is unchanged.
+
+### Added (Stage D2)
+
+- **Bounded assistant task** (`michelangelo.assistant-task/0`): generated from a reconstruction
+  run — base package/scene revision, allowed components and region, protected components,
+  filtered references (package masks/images, run silhouette renders, build/quality reports only,
+  never evaluation/ground-truth), acceptance criteria from the measured thresholds, budgets and
+  an explicit data policy (`allow_network: false`, `allow_external_service: false`).
+- **`michelangelo_assistant` crate**: deterministic task generation, strict workspace policy
+  (`.michelangelo/assistant_policy.json`, deny-by-default; `allow_apply: true` is a startup
+  error), per-run persisted budget counters (`assistant/budget.json`) and an append-only audit log
+  (`assistant/audit.jsonl`), four MCP tools and a newline-delimited JSON-RPC 2.0 stdio server with
+  the documented error codes and path confinement; 93 crate tests.
+- **CLI `michelangelo assistant task|submit` and `michelangelo mcp serve`**; 12 CLI +
+  4 stdio integration tests; spec `docs/specs/ASSISTANT_MCP.md`; fixtures `examples/assistant/`.
+- **Stage D2 acceptance**: MCP session on a copy of the IT-6 run — task generated, submission
+  `proposed` (never applied), budget exhaustion `-32003`, path escape `-32002`, malformed line
+  `-32700` with the server still alive, policy denial `-32001`, invalid policy stops the server,
+  audit complete with no absolute paths; explicit `michelangelo edit accept` applies the candidate.
+
+### Changed (Stage D2)
+
+- ROADMAP Phase 4 Stage D marked done, `docs/ai/AI_CONTEXT.md` and `TASKS.md` updated for IT-7;
+  test count baseline 702 Rust tests.
+
 ### Changed
 
 - README status, ROADMAP Phase 3 (Stage A done), `docs/ai/AI_CONTEXT.md` and `TASKS.md` updated
