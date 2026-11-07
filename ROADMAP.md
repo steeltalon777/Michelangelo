@@ -49,19 +49,21 @@ calibrated front silhouette, the framed-scene silhouette coverage/margin asserti
 rejection. Only
 Blender 5.2.3 is verified; 4.2 is API-plausible but untested.
 
-## 🔜 Phase 3 (Next) — Validated Input Package & Asset Pipeline (Stage A of ADR 0004)
+## 🔜 Phase 3 (In progress) — Validated Input Package & Asset Pipeline (Stage A of ADR 0004)
 
 Direction fixed by accepted
 [ADR 0004](docs/adr/0004-validated-visual-spec-and-hybrid-reconstruction.md) §13 (Stage A):
 before reconstruction, define and validate the minimal input package — a versioned description
 of the object (images + geometric supplements of hidden shape + explicit unknowns), see ADR §5.
 
-- Minimal input package: manifest/PNG ingest, alpha masks, bbox, connected components,
-  contours (kept from the previous plan, now serving the ADR §5 package structure)
-- Input validation levels per ADR §6: format/safety, sufficiency, geometric compatibility,
-  draft build + back-projection, author acceptance; targeted diagnostics, no silent guessing
-- Provenance and revision policy per ADR §5.3: origin/acceptance of supplements, conflict and
-  revision handling
+- ✅ **Stage A done (IT-4, 2026-11-07):** input package v0 contract
+  ([spec](docs/specs/INPUT_PACKAGE.md), [schema](docs/specs/schemas/input_package_v0.schema.json)),
+  `michelangelo_input` crate (strict manifest, SHA-256/CRC-32/PNG header checks in-repo, path
+  containment, levels 1–2 per ADR §6, addressable diagnostics, deterministic report) and
+  `michelangelo input validate|describe`; wire contract unchanged. Evidence:
+  [TZ](docs/tz/TZ_INPUT_PACKAGE_STAGE_A.md).
+- Minimal input package ingest beyond validation (bbox, connected components, contours, mask
+  generation) — next as part of the Stage B solver/pipeline
 - Asset Graph indexing (SQLite FTS/RTree) — kept, serves as the indexed representation of the
   input package
 - Thumbnail and mask generation — kept

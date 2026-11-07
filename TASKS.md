@@ -85,6 +85,24 @@ recorded in the TZ review log).
   `target/techlead/IT-3/` (gitignored) — real run 119 checks / fake run 113 checks (3 skips),
   framed-vs-unframed counterfactual and a space-containing `TMP`/`TEMP` fake run.
 
+## Completed — ADR 0004 Stage A (Validated Input Package v0)
+
+TZ: `docs/tz/TZ_INPUT_PACKAGE_STAGE_A.md` (branch `dev`; review log in the TZ).
+
+- [x] T-0401 Input package v0 contract + `michelangelo_input` validator (IT-4, 2026-11-07) —
+  strict manifest (`michelangelo.input-package/0`, `deny_unknown_fields`), in-repo SHA-256,
+  CRC-32 and PNG header parsing (no new crates), resource path containment, hash verification,
+  validation levels 1–2 per ADR §6.1, addressable diagnostics, deterministic report.
+- [x] T-0402 CLI `michelangelo input validate|describe` (IT-4) — report JSON on stdout, exit
+  codes 0/1/2, `--require-complete`, `--no-hash-verify`, `--report`, `--quiet`; JSONL wire
+  contract unchanged.
+- [x] T-0403 Fixtures, spec and JSON Schema (IT-4) — `examples/input_packages/{valid_full,
+  valid_partial}`, `docs/specs/INPUT_PACKAGE.md`,
+  `docs/specs/schemas/input_package_v0.schema.json`; 105 crate tests, 10 CLI integration tests.
+  Evidence: `target/techlead/IT-4/` (gitignored) — including a package derived from the local
+  `harbor_lantern_v01` dataset (3 calibrated orthographic + 3 reference views, 1024², real
+  hashes) validating as `valid_complete`.
+
 ## Not yet started
 
 - Future Blender ops: `create_reference_planes`, `apply_bevel`, curve/extrusion/boolean ops

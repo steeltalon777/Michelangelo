@@ -3,6 +3,37 @@
 All notable changes to Michelangelo are documented here. The workspace version is `0.1.0`
 (protocol version follows the crate version). Release dates are repository dates.
 
+## [Unreleased]
+
+ADR 0004 Stage A (IT-4): validated input package v0. The JSONL wire contract is unchanged —
+the new functionality is a library crate plus a CLI subcommand.
+
+### Added
+
+- **Input package v0 contract** (`michelangelo.input-package/0`): a versioned package directory
+  (`<workspace>/input/<revision>/package.json` + `images/` + `masks/`) describing an object as
+  calibrated orthographic views, masks, parts, author supplements of hidden shape, explicit
+  unknowns, known measurements, uncertainty policy, provenance and acceptance entries.
+  Normative spec: `docs/specs/INPUT_PACKAGE.md`; JSON Schema:
+  `docs/specs/schemas/input_package_v0.schema.json`.
+- **`michelangelo_input` crate**: strict manifest deserialization (`deny_unknown_fields`),
+  in-repo SHA-256, CRC-32 and PNG header parsing (no new third-party crates), resource path
+  containment (no traversal/absolute/drive/UNC/symlink escape), hash verification, validation
+  level 1 (format/safety) and level 2 (sufficiency: calibrated-view completeness, distinct
+  directions, acceptance, reference-projection rules), addressable diagnostics and a
+  deterministic report (`michelangelo.input-package-report/0`).
+- **CLI `michelangelo input validate|describe`**: report JSON on stdout, exit codes 0/1/2,
+  `--require-complete`, `--no-hash-verify`, `--report`, `--quiet`.
+- **Fixtures and tests**: `examples/input_packages/{valid_full,valid_partial}` (8×8 PNGs, real
+  hashes), 105 crate tests, 10 CLI integration tests; evidence includes a package derived from
+  the local `harbor_lantern_v01` PoC dataset (3 calibrated orthographic + 3 reference views,
+  1024², hash-verified) validating as `valid_complete`.
+
+### Changed
+
+- README status, ROADMAP Phase 3 (Stage A done), `docs/ai/AI_CONTEXT.md` and `TASKS.md` updated
+  for IT-4; test count baseline 387 Rust tests.
+
 ## [0.1.0] — 2026-11-07
 
 Phase 2 acceptance hardening, execution reliability, safe Blender scene operations and

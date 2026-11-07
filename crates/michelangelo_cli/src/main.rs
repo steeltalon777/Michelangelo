@@ -3,6 +3,7 @@
 //! Thin shell over the Core protocol. All human-readable diagnostics
 //! go to stderr; stdout is reserved for protocol JSONL messages.
 
+mod input_cmd;
 mod stdio;
 
 use clap::{Parser, Subcommand};
@@ -23,6 +24,11 @@ enum Commands {
         #[command(subcommand)]
         mode: Option<CoreMode>,
     },
+    /// Validate and describe input packages (Stage A)
+    Input {
+        #[command(subcommand)]
+        command: input_cmd::InputCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -31,7 +37,7 @@ enum CoreMode {
     Stdio,
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
 
     match &cli.command {
@@ -49,6 +55,11 @@ fn main() {
                 }
             }
         }
+        Some(Commands::Input { command }) => {
+            // The input subcommands are independent of the protocol mode:
+            // stdout carries the report JSON, stderr the human diagnostics.
+            return input_cmd::run(command);
+        }
         None => {
             // No subcommand — show help (--help is handled by clap automatically)
             // If someone runs `michelangelo` with no args, just print help to stderr
@@ -56,6 +67,7 @@ fn main() {
             eprintln!("[michelangelo] no command given. Run with --help for usage.");
         }
     }
+    std::process::ExitCode::SUCCESS
 }
 
 #[cfg(test)]

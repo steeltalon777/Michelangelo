@@ -325,6 +325,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "michelangelo_core",
+ "michelangelo_input",
  "michelangelo_protocol",
  "serde_json",
  "tempfile",
@@ -338,6 +339,15 @@ dependencies = [
  "michelangelo_jobs",
  "michelangelo_protocol",
  "michelangelo_workspace",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "michelangelo_input"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "serde_json",
  "tempfile",
 ]

@@ -1,0 +1,101 @@
+{
+  "schema": "michelangelo.input-package/0",
+  "package_id": "stage-a-fixture-partial",
+  "object": {
+    "name": "Stage A fixture lantern",
+    "notes": "Committed test fixture."
+  },
+  "revision": 1,
+  "units": "m",
+  "coordinate_system": {
+    "handedness": "right",
+    "up": "+Z",
+    "right": "+X",
+    "forward": "-Y"
+  },
+  "views": [
+    {
+      "view_id": "front",
+      "kind": "calibrated",
+      "image": {
+        "path": "images/front.png",
+        "sha256": "92bcc898f20c17dbbeb5d7c2d87140b0efbbc41bee8010cdd3868175191eb863",
+        "width_px": 8,
+        "height_px": 8
+      },
+      "mask": {
+        "path": "masks/front.png",
+        "sha256": "a242cfa644a71318e7502a9a99949e125b35db9f3cac7b65d9bf3ad54886f66c",
+        "format": "grayscale8",
+        "foreground": "white"
+      },
+      "projection": {
+        "type": "orthographic",
+        "location_m": [
+          0.0,
+          -4.0,
+          0.0
+        ],
+        "look_at_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "up_world": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "ortho_scale_m": 1.0,
+        "shift_x": 0.0,
+        "shift_y": 0.0,
+        "clip_start_m": 0.02,
+        "clip_end_m": 100.0
+      },
+      "provenance": {
+        "origin": "ai_author",
+        "detail": "calibrated orthographic render"
+      }
+    }
+  ],
+  "parts": [
+    {
+      "part_id": "body",
+      "label": "body"
+    }
+  ],
+  "supplements": [],
+  "unknowns": [
+    {
+      "id": "u_interior",
+      "description": "hidden interior of the body",
+      "affected_parts": [
+        "body"
+      ],
+      "policy": "stub_allowed"
+    }
+  ],
+  "measurements": [
+    {
+      "id": "height",
+      "label": "overall height",
+      "kind": "height",
+      "value_m": 0.25,
+      "tolerance_m": 0.002,
+      "origin": "human"
+    }
+  ],
+  "uncertainty_policy": {
+    "allowed_completion_rules": [
+      "thickness",
+      "closure"
+    ],
+    "stub_policy": "allowed",
+    "require_author_acceptance": true
+  },
+  "provenance": {
+    "origin": "ai_author",
+    "detail": "Stage A committed fixture"
+  },
+  "acceptance": []
+}

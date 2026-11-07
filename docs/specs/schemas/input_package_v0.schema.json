@@ -1,0 +1,717 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/input_package_v0.schema.json",
+  "title": "Michelangelo input package manifest v0",
+  "description": "JSON Schema of the Michelangelo input package manifest (michelangelo.input-package/0). Mirrors the Rust types of crates/michelangelo_input/src/manifest.rs; unknown fields are rejected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "package_id",
+    "object",
+    "revision",
+    "units",
+    "coordinate_system",
+    "views",
+    "provenance"
+  ],
+  "properties": {
+    "schema": {
+      "const": "michelangelo.input-package/0"
+    },
+    "package_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "maxLength": 64
+    },
+    "object": {
+      "$ref": "#/$defs/objectInfo"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "units": {
+      "type": "string",
+      "enum": ["m", "cm", "mm"]
+    },
+    "coordinate_system": {
+      "$ref": "#/$defs/coordinateSystem"
+    },
+    "views": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/view"
+      }
+    },
+    "parts": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/part"
+      }
+    },
+    "supplements": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/supplement"
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/unknown"
+      }
+    },
+    "measurements": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/measurement"
+      }
+    },
+    "uncertainty_policy": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/uncertaintyPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "acceptance": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/acceptance"
+      }
+    }
+  },
+  "$defs": {
+    "objectInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "notes": {
+          "type": ["string", "null"],
+          "maxLength": 2000
+        }
+      }
+    },
+    "coordinateSystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handedness", "up", "right", "forward"],
+      "properties": {
+        "handedness": {
+          "type": "string",
+          "enum": ["right"]
+        },
+        "up": {
+          "$ref": "#/$defs/axis"
+        },
+        "right": {
+          "$ref": "#/$defs/axis"
+        },
+        "forward": {
+          "$ref": "#/$defs/axis"
+        }
+      }
+    },
+    "axis": {
+      "type": "string",
+      "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["view_id", "kind", "image", "mask"],
+      "properties": {
+        "view_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+          "maxLength": 32
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["calibrated", "reference"]
+        },
+        "image": {
+          "$ref": "#/$defs/imageResource"
+        },
+        "mask": {
+          "$ref": "#/$defs/maskResource"
+        },
+        "projection": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/projection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/provenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "imageResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "width_px", "height_px"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/resourcePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "width_px": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "height_px": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        }
+      }
+    },
+    "maskResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "format", "foreground"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/resourcePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["grayscale8", "rgba8"]
+        },
+        "foreground": {
+          "type": "string",
+          "enum": ["white", "alpha"]
+        }
+      }
+    },
+    "resourcePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Package relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "location_m", "look_at_m", "up_world", "ortho_scale_m"],
+      "properties": {
+        "type": {
+          "const": "orthographic"
+        },
+        "location_m": {
+          "$ref": "#/$defs/point3"
+        },
+        "look_at_m": {
+          "$ref": "#/$defs/point3"
+        },
+        "up_world": {
+          "$ref": "#/$defs/point3"
+        },
+        "ortho_scale_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000000
+        },
+        "shift_x": {
+          "type": "number",
+          "minimum": -10,
+          "maximum": 10,
+          "default": 0
+        },
+        "shift_y": {
+          "type": "number",
+          "minimum": -10,
+          "maximum": 10,
+          "default": 0
+        },
+        "clip_start_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 0.1
+        },
+        "clip_end_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1000
+        }
+      }
+    },
+    "point3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "number",
+        "minimum": -1000000,
+        "maximum": 1000000
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": {
+          "type": "string",
+          "enum": ["human", "ai_author", "mixed"]
+        },
+        "detail": {
+          "type": ["string", "null"],
+          "maxLength": 2000
+        }
+      }
+    },
+    "part": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["part_id"],
+      "properties": {
+        "part_id": {
+          "$ref": "#/$defs/partToken"
+        },
+        "label": {
+          "$ref": "#/$defs/partToken"
+        },
+        "parent": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/partToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protected": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "partToken": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$",
+      "maxLength": 64
+    },
+    "supplement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supplement_id", "part_id", "kind", "geometry", "provenance"],
+      "properties": {
+        "supplement_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "part_id": {
+          "$ref": "#/$defs/partToken"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "thickness",
+            "curve",
+            "section",
+            "profile",
+            "closure",
+            "cavity",
+            "connection",
+            "symmetry"
+          ]
+        },
+        "geometry": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true,
+          "description": "Non-empty JSON object; the required members depend on the supplement kind."
+        },
+        "provenance": {
+          "$ref": "#/$defs/authorProvenance"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "thickness"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "geometry": {
+                "required": ["value_m"],
+                "properties": {
+                  "value_m": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "curve"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "geometry": {
+                "required": ["points_m"],
+                "properties": {
+                  "points_m": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 256,
+                    "items": {
+                      "$ref": "#/$defs/point3"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": ["section", "profile"]
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "geometry": {
+                "required": ["points_m"],
+                "properties": {
+                  "points_m": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 256,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/$defs/point3"
+                        },
+                        {
+                          "type": "array",
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "items": {
+                            "type": "number",
+                            "minimum": -1000000,
+                            "maximum": 1000000
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "plane": {
+                    "type": "string",
+                    "enum": ["xy", "yz", "xz"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "cavity"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "geometry": {
+                "anyOf": [
+                  {
+                    "required": ["bbox_m"],
+                    "properties": {
+                      "bbox_m": {
+                        "type": "array",
+                        "minItems": 3,
+                        "maxItems": 3,
+                        "items": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "required": ["points_m"],
+                    "properties": {
+                      "points_m": {
+                        "type": "array",
+                        "minItems": 4,
+                        "items": {
+                          "$ref": "#/$defs/point3"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": ["closure", "connection"]
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "geometry": {
+                "required": ["from", "to"],
+                "properties": {
+                  "from": {
+                    "$ref": "#/$defs/point3"
+                  },
+                  "to": {
+                    "$ref": "#/$defs/point3"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "symmetry"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "geometry": {
+                "required": ["axis"],
+                "properties": {
+                  "axis": {
+                    "type": "string",
+                    "enum": ["x", "y", "z"]
+                  },
+                  "plane_offset_m": {
+                    "type": "number",
+                    "minimum": -1000000,
+                    "maximum": 1000000
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "authorProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": {
+          "type": "string",
+          "enum": ["human", "ai_author", "computed"]
+        },
+        "detail": {
+          "type": ["string", "null"],
+          "maxLength": 1000
+        }
+      }
+    },
+    "unknown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/lowerId"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "affected_parts": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/partToken"
+          }
+        },
+        "policy": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["author_required", "rule_allowed", "stub_allowed"]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "lowerId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "maxLength": 64
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "value_m", "origin"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/lowerId"
+        },
+        "label": {
+          "type": ["string", "null"],
+          "maxLength": 200
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["height", "width", "depth", "distance", "bbox"]
+        },
+        "value_m": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "tolerance_m": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["human", "ai_author", "computed"]
+        }
+      }
+    },
+    "uncertaintyPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stub_policy"],
+      "properties": {
+        "allowed_completion_rules": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "enum": [
+              "thickness",
+              "curve",
+              "section",
+              "profile",
+              "closure",
+              "cavity",
+              "connection",
+              "symmetry",
+              "primitive_fill"
+            ]
+          }
+        },
+        "stub_policy": {
+          "type": "string",
+          "enum": ["allowed", "forbidden"]
+        },
+        "require_author_acceptance": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "status", "by", "at"],
+      "properties": {
+        "target": {
+          "type": "string",
+          "pattern": "^(views|parts|supplements|unknowns|measurements):.+",
+          "maxLength": 300
+        },
+        "status": {
+          "type": "string",
+          "enum": ["proposed", "accepted", "needs_revision"]
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "minLength": 20,
+          "maxLength": 64
+        }
+      }
+    }
+  }
+}

@@ -27,6 +27,7 @@ CLI (michelangelo_cli)
 | `michelangelo_jobs` | In-process job scheduler, event queue | `Scheduler`, `JobState`, `JobEvent`, `JobId` |
 | `michelangelo_blender` | Bounded Blender subprocess adapter | `HeadlessBlenderAdapter`, `BlenderError`, `create_fake_blender()` |
 | `michelangelo_cli` | CLI binary, JSONL transport with event streaming | CLI entry point, `stdio::run_loop` with event channel |
+| `michelangelo_input` | Stage A input package: strict manifest, resource safety, levels 1–2 validation | `InputPackage`, `validate_package`, `ValidateOptions`, `InputPackageReport`, `Diagnostic` |
 
 ## Protocol Numbers
 
@@ -37,6 +38,8 @@ CLI (michelangelo_cli)
   `job.completed`, `job.failed`, `job.cancelled`
 - Transport: one JSON object per line on stdin/stdout; stderr for diagnostics; events before their
   associated response; `wait` defaults to `false` (queue-only — pass `"wait": true` to execute)
+- CLI-only commands (not JSONL methods, no wire contract impact): `michelangelo input
+  validate|describe` (Stage A input package); `michelangelo core stdio` is the JSONL transport
 - Worker ops (18, stable order in `SAFE_WORKER_OPS`): `create_box`, `set_material`,
   `set_camera_set`, `render_views`, `export_glb`, `save_blend`, `get_scene_summary`,
   `create_cylinder`, `create_sphere`, `import_mesh`, `set_transform`, `create_ortho_camera`,
@@ -50,7 +53,7 @@ CLI (michelangelo_cli)
 ## Verification
 
 ```bash
-# Rust (real-Blender tests auto-skip when Blender is absent) — 271 tests
+# Rust (real-Blender tests auto-skip when Blender is absent) — 387 tests
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -99,6 +102,11 @@ the current Windows stand).
   local AI-assisted completion. Staged plan (ADR §13): A) minimal input package + validation
   (ROADMAP Phase 3), B) vertical reconstruction PoC without API, C) local-edit boundary,
   D) optional assistant (ROADMAP Phase 4).
+- Stage A is implemented (IT-4): [`docs/specs/INPUT_PACKAGE.md`](../specs/INPUT_PACKAGE.md),
+  `michelangelo_input` crate and `michelangelo input validate|describe` (levels 1–2, hash-verified
+  PNG resources, targeted diagnostics, deterministic report). No JSONL wire changes. Input
+  packages live at `<workspace>/input/<revision>/package.json`; masks are PNG gray8/alpha with
+  `>= 128` = object; calibrated views are orthographic with `ortho_scale` = full view width.
 
 ## Out of Scope
 

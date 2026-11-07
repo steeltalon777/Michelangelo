@@ -1,0 +1,52 @@
+{
+  "schema": "michelangelo.input-package/0",
+  "package_id": "crate-local-fixture",
+  "object": {
+    "name": "Crate local fixture"
+  },
+  "revision": 1,
+  "units": "m",
+  "coordinate_system": {
+    "handedness": "right",
+    "up": "+Z",
+    "right": "+X",
+    "forward": "-Y"
+  },
+  "views": [
+    {
+      "view_id": "front",
+      "kind": "calibrated",
+      "image": {
+        "path": "images/front.png",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "width_px": 8,
+        "height_px": 8
+      },
+      "mask": {
+        "path": "masks/front.png",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "format": "grayscale8",
+        "foreground": "white"
+      },
+      "projection": {
+        "type": "orthographic",
+        "location_m": [0.0, -4.0, 0.0],
+        "look_at_m": [0.0, 0.0, 0.0],
+        "up_world": [0.0, 0.0, 1.0],
+        "ortho_scale_m": 1.0,
+        "shift_x": 0.0,
+        "shift_y": 0.0,
+        "clip_start_m": 0.02,
+        "clip_end_m": 100.0
+      },
+      "provenance": {
+        "origin": "human",
+        "detail": "crate local fixture manifest"
+      }
+    }
+  ],
+  "provenance": {
+    "origin": "human",
+    "detail": "crate local fixture manifest"
+  }
+}

@@ -14,12 +14,18 @@ diagnostics. Blender runs as a bounded external batch subprocess driven by the s
   `result.json`/artifact validation, correct job identity and terminal-state ordering,
   deterministic empty scenes, 18 typed safe operations, calibrated orthographic silhouettes,
   assertable camera framing, Workbench-only rendering.
-- Verification at the IT-2/IT-3 baseline: **271 Rust tests**, **30 Python worker validation
-  checks**, and the cross-platform acceptance E2E (`scripts/smoke_blender_scene.py`: 119 checks on
+- Verification at the IT-4 baseline: **387 Rust tests**, **30 Python worker validation checks**,
+  the input-package acceptance checks (fixtures + a package derived from a local PoC dataset) and
+  the cross-platform acceptance E2E (`scripts/smoke_blender_scene.py`: 119 checks on
   real Blender, 113 on `--fake`) with a calibrated **16,384 px** silhouette and a framed-scene
   silhouette coverage/margin assertion (real Blender).
-- Next: Phase 3 (asset pipeline) — see [ROADMAP.md](ROADMAP.md). Visual Hull, Parametric
-  Solver, LLM integration, Asset Graph and Unreal import are **not implemented**.
+- ADR 0004 Stage A (validated input package v0) — done in IT-4:
+  `michelangelo input validate|describe` implements format/safety and sufficiency validation,
+  hash-verified PNG resources, targeted diagnostics and a machine-readable report
+  ([spec](docs/specs/INPUT_PACKAGE.md)). The JSONL wire contract is unchanged.
+- Next: ADR 0004 Stage B (vertical reconstruction PoC) — see [ROADMAP.md](ROADMAP.md).
+  Visual Hull solver, Parametric Solver, LLM integration, Asset Graph and Unreal import are
+  **not implemented**.
 
 ## Quick start
 
