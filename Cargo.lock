@@ -327,6 +327,7 @@ dependencies = [
  "michelangelo_core",
  "michelangelo_input",
  "michelangelo_protocol",
+ "michelangelo_recon",
  "serde_json",
  "tempfile",
 ]
@@ -369,6 +370,18 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "michelangelo_recon"
+version = "0.1.0"
+dependencies = [
+ "michelangelo_blender",
+ "michelangelo_input",
+ "michelangelo_protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

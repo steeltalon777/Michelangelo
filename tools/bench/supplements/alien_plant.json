@@ -1,0 +1,57 @@
+{
+  "parts": [
+    {"part_id": "trunk", "label": "main trunk"},
+    {"part_id": "branches", "label": "overlapping branches", "parent": "trunk"},
+    {"part_id": "leaves", "label": "thin leaves and buds", "parent": "branches"}
+  ],
+  "supplements": [
+    {
+      "supplement_id": "branch_section",
+      "part_id": "branches",
+      "kind": "thickness",
+      "geometry": {"value_m": 0.004},
+      "provenance": {"origin": "human", "detail": "hidden branch section: woody core inside the silhouette-consistent hull"}
+    },
+    {
+      "supplement_id": "leaf_thickness",
+      "part_id": "leaves",
+      "kind": "thickness",
+      "geometry": {"value_m": 0.003},
+      "provenance": {"origin": "human", "detail": "thin leaf section (hidden from silhouettes)"}
+    }
+  ],
+  "unknowns": [
+    {
+      "id": "u_hidden_branch",
+      "description": "hidden continuation of a branch behind the leaves",
+      "affected_parts": ["branches"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_leaf_section",
+      "description": "leaf thickness and curvature",
+      "affected_parts": ["leaves"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_flower_bud",
+      "description": "unseen flower bud at the top",
+      "affected_parts": ["branches"],
+      "policy": "stub_allowed"
+    },
+    {
+      "id": "u_bark_detail",
+      "description": "bark micro-detail",
+      "affected_parts": ["trunk"],
+      "policy": "author_required"
+    }
+  ],
+  "acceptance": [
+    {"target": "supplements:branch_section", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:leaf_thickness", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_hidden_branch", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_leaf_section", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_flower_bud", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_bark_detail", "status": "needs_revision", "by": "owner", "at": "2026-11-07T12:00:00Z"}
+  ]
+}

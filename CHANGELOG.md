@@ -29,6 +29,37 @@ the new functionality is a library crate plus a CLI subcommand.
   the local `harbor_lantern_v01` PoC dataset (3 calibrated orthographic + 3 reference views,
   1024², hash-verified) validating as `valid_complete`.
 
+ADR 0004 Stage B (IT-5): deterministic vertical reconstruction PoC. The JSONL wire contract is
+unchanged — new library crate, Python solver tool, CLI subcommands and a bench harness.
+
+### Added (Stage B)
+
+- **`michelangelo_recon` crate**: deterministic pipeline from a Stage A package to an editable
+  blockout — camera basis→Blender Euler-XYZ conversion (verified against Blender 5.2.3), solver
+  subprocess invocation, `BlenderJobSpec` construction (existing 18 worker ops only), run store
+  `<workspace>/recon/r%04d/run-%04d/`, workspace-relative artifacts and a
+  `michelangelo.reconstruction-report/0` report; `score` re-renders the built blockout from a
+  held-out evaluation package and writes `evaluation_quality_report.json`; 60 crate tests.
+- **`tools/solver/`** (Python stdlib only): PNG decoder, orthographic view projection, voxel
+  silhouette carving (AABB derivation, arbitrary ortho poses), authored supplement rules
+  (thickness, cavity, closure, connection, curve, symmetry), explicit unknown stubs, Y-up OBJ
+  blocky meshing, deterministic `build_report.json`, and `compare.py` per-view silhouette
+  IoU/coverage with thresholds; 68 solver tests.
+- **CLI `michelangelo reconstruct run|score|show`**: exit codes 0 pass / 1 quality fail /
+  2 invalid input or setup; spec `docs/specs/RECONSTRUCTION.md`.
+- **Bench harness `tools/bench/`**: dataset→package converter, Blender `bpy` synthetic-case
+  generator (blind recess with a proof of non-observability, alien plant, composite lamp),
+  authored supplement sets, single-case runner and the full matrix runner.
+- **Stage B acceptance**: local PoC datasets (`harbor_lantern_v01`, `naval_cannon_v01`,
+  `wagon_wheel_v01`) and the three synthetic cases, hull-only and with authored supplements;
+  source silhouette IoU 0.94–0.97, held-out orthographic control IoU 0.94–0.95; blind-recess
+  limit reported as unresolved, hidden-shape supplements applied and unknowns resolved.
+
+### Changed (Stage B)
+
+- ROADMAP Phase 4 Stage B marked done, `docs/ai/AI_CONTEXT.md` (crate, CLI, product direction,
+  out of scope) and `TASKS.md` updated for IT-5.
+
 ### Changed
 
 - README status, ROADMAP Phase 3 (Stage A done), `docs/ai/AI_CONTEXT.md` and `TASKS.md` updated

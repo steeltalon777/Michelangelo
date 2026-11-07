@@ -4,6 +4,7 @@
 //! go to stderr; stdout is reserved for protocol JSONL messages.
 
 mod input_cmd;
+mod reconstruct_cmd;
 mod stdio;
 
 use clap::{Parser, Subcommand};
@@ -28,6 +29,11 @@ enum Commands {
     Input {
         #[command(subcommand)]
         command: input_cmd::InputCommand,
+    },
+    /// Reconstruct a blockout from an input package (Stage B)
+    Reconstruct {
+        #[command(subcommand)]
+        command: reconstruct_cmd::ReconstructCommand,
     },
 }
 
@@ -59,6 +65,11 @@ fn main() -> std::process::ExitCode {
             // The input subcommands are independent of the protocol mode:
             // stdout carries the report JSON, stderr the human diagnostics.
             return input_cmd::run(command);
+        }
+        Some(Commands::Reconstruct { command }) => {
+            // The reconstruction subcommands are independent of the protocol
+            // mode: stdout carries the summary or the report JSON.
+            return reconstruct_cmd::execute(command);
         }
         None => {
             // No subcommand — show help (--help is handled by clap automatically)

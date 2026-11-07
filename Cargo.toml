@@ -8,6 +8,7 @@ members = [
     "crates/michelangelo_blender",
     "crates/michelangelo_cli",
     "crates/michelangelo_input",
+    "crates/michelangelo_recon",
 ]
 
 [workspace.package]

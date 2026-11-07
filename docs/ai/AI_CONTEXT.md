@@ -28,6 +28,7 @@ CLI (michelangelo_cli)
 | `michelangelo_blender` | Bounded Blender subprocess adapter | `HeadlessBlenderAdapter`, `BlenderError`, `create_fake_blender()` |
 | `michelangelo_cli` | CLI binary, JSONL transport with event streaming | CLI entry point, `stdio::run_loop` with event channel |
 | `michelangelo_input` | Stage A input package: strict manifest, resource safety, levels 1–2 validation | `InputPackage`, `validate_package`, `ValidateOptions`, `InputPackageReport`, `Diagnostic` |
+| `michelangelo_recon` | Stage B reconstruction pipeline (solver → Blender job → IoU report) | `run`, `score`, `ReconstructionReport`, `camera_basis`/`rotation_deg`, run store, `ReconOptions` |
 
 ## Protocol Numbers
 
@@ -39,7 +40,8 @@ CLI (michelangelo_cli)
 - Transport: one JSON object per line on stdin/stdout; stderr for diagnostics; events before their
   associated response; `wait` defaults to `false` (queue-only — pass `"wait": true` to execute)
 - CLI-only commands (not JSONL methods, no wire contract impact): `michelangelo input
-  validate|describe` (Stage A input package); `michelangelo core stdio` is the JSONL transport
+  validate|describe` (Stage A input package), `michelangelo reconstruct run|score|show` (Stage B
+  reconstruction PoC); `michelangelo core stdio` is the JSONL transport
 - Worker ops (18, stable order in `SAFE_WORKER_OPS`): `create_box`, `set_material`,
   `set_camera_set`, `render_views`, `export_glb`, `save_blend`, `get_scene_summary`,
   `create_cylinder`, `create_sphere`, `import_mesh`, `set_transform`, `create_ortho_camera`,
@@ -53,7 +55,7 @@ CLI (michelangelo_cli)
 ## Verification
 
 ```bash
-# Rust (real-Blender tests auto-skip when Blender is absent) — 387 tests
+# Rust (real-Blender tests auto-skip when Blender is absent) — 454 tests
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -107,12 +109,20 @@ the current Windows stand).
   PNG resources, targeted diagnostics, deterministic report). No JSONL wire changes. Input
   packages live at `<workspace>/input/<revision>/package.json`; masks are PNG gray8/alpha with
   `>= 128` = object; calibrated views are orthographic with `ortho_scale` = full view width.
+- Stage B is implemented (IT-5): [`docs/specs/RECONSTRUCTION.md`](../specs/RECONSTRUCTION.md),
+  `michelangelo_recon` crate + `tools/solver/` (stdlib Python) + `michelangelo reconstruct
+  run|score|show`. Deterministic voxel visual hull from calibrated orthographic silhouettes,
+  authored supplements as explicit voxel rules, unknown stubs, Blender job rendering source and
+  held-out cameras, per-view silhouette IoU/coverage report, editable `.blend`/`.glb` blockout in
+  `<workspace>/recon/r%04d/run-%04d/`. Bench harness: `tools/bench/` (dataset conversion, synthetic
+  cases, full matrix). No wire changes, no external API.
 
 ## Out of Scope
 
 GUI/TUI, LLM providers, MCP, Asset Graph ingest, PNG decomposition, Qdrant/vector databases,
 network transport, Unreal import, arbitrary Python execution, Blender addon/persistent daemon,
-EEVEE/Cycles render reliability. Visual Hull and Parametric Solver are not implemented yet, but
-are planned by accepted ADR 0004 (Stage B reconstruction PoC) — they are deferred, not rejected.
-LLM providers/MCP belong to the optional assistant (Stage D) and are not required by the
-deterministic core.
+EEVEE/Cycles render reliability. Visual Hull is now implemented as a deterministic v0 blockout
+solver (Stage B, voxel carving, no perspective/multi-view fitting, no hidden-void recovery);
+Parametric Solver is still planned by accepted ADR 0004 (Stage C/D and later stages) — deferred,
+not rejected. LLM providers/MCP belong to the optional assistant (Stage D) and are not required by
+the deterministic core.

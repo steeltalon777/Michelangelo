@@ -1,0 +1,58 @@
+{
+  "parts": [
+    {"part_id": "barrel", "label": "gun barrel"},
+    {"part_id": "carriage", "label": "gun carriage", "parent": "barrel"},
+    {"part_id": "wheels", "label": "carriage wheels", "parent": "carriage"}
+  ],
+  "supplements": [
+    {
+      "supplement_id": "barrel_wall",
+      "part_id": "barrel",
+      "kind": "thickness",
+      "geometry": {"value_m": 0.012},
+      "provenance": {"origin": "human", "detail": "cast barrel wall thickness (hidden)"}
+    },
+    {
+      "supplement_id": "bore_blind_void",
+      "part_id": "barrel",
+      "kind": "cavity",
+      "geometry": {"bbox_m": [0.25, 0.25, 0.25]},
+      "provenance": {"origin": "human", "detail": "blind bore interior is not silhouette-observable"}
+    },
+    {
+      "supplement_id": "axle_connection",
+      "part_id": "wheels",
+      "kind": "connection",
+      "geometry": {"from": [0.0, 0.0, 0.45], "to": [0.6, 0.0, 0.45], "radius_m": 0.03},
+      "provenance": {"origin": "human", "detail": "axle connects the wheel pair"}
+    }
+  ],
+  "unknowns": [
+    {
+      "id": "u_bore_interior",
+      "description": "blind bore depth and interior shape",
+      "affected_parts": ["barrel"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_carriage_joinery",
+      "description": "hidden joinery under the carriage",
+      "affected_parts": ["carriage"],
+      "policy": "stub_allowed"
+    },
+    {
+      "id": "u_wood_grain",
+      "description": "wood grain of the carriage beams",
+      "affected_parts": ["carriage"],
+      "policy": "author_required"
+    }
+  ],
+  "acceptance": [
+    {"target": "supplements:barrel_wall", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:bore_blind_void", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:axle_connection", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_bore_interior", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_carriage_joinery", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_wood_grain", "status": "needs_revision", "by": "owner", "at": "2026-11-07T12:00:00Z"}
+  ]
+}

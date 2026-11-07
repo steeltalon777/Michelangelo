@@ -72,13 +72,19 @@ of the object (images + geometric supplements of hidden shape + explicit unknown
 
 ## 🔜 Phase 4 — Reconstruction PoC & Optional Assistant (Stages B–D of ADR 0004)
 
-Stage B (ADR §13.2) — vertical PoC, no API required:
+Stage B (ADR §13.2) — vertical PoC, no API required — ✅ **done (IT-5, 2026-11-07)**:
 
-- Prepared package → limited deterministic build → render from source cameras → quality report
-  → editable blockout with explicit unknowns (calibrated front-silhouette rendering from
-  Phase 2.5 is the measurement base)
-- Validation cases from ADR §13: control body with a blind recess, an alien plant with
-  overlapping branches, a composite fantastic object
+- ✅ Package → deterministic voxel-hull build (orthographic calibrated silhouette carving, authored
+  supplements as explicit voxel rules, unknown stubs) → render through the unchanged worker
+  (`import_mesh`, calibrated ortho cameras, `render_camera silhouette`) → per-view IoU quality
+  report → editable `.blend`/`.glb` blockout with explicit unresolved list.
+  `michelangelo reconstruct run|score|show`, `michelangelo_recon` crate,
+  [spec](docs/specs/RECONSTRUCTION.md), [TZ](docs/tz/TZ_RECON_POC_STAGE_B.md).
+- ✅ Validation cases: `harbor_lantern_v01` (composite lamp), `naval_cannon_v01` (blind recess /
+  silhouette limit), `wagon_wheel_v01` (through-holes, thin spokes) from the local untracked PoC
+  datasets, plus synthetic `blind_recess`, `alien_plant` and `composite_lamp` cases
+  (`tools/bench/make_synthetic_case.py`), each with hull-only and authored-supplement variants.
+  Measured: source-view silhouette IoU 0.94–0.97, held-out orthographic control IoU 0.94–0.95.
 
 Stage C (ADR §13.3) — local edit boundary:
 

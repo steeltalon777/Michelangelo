@@ -1,0 +1,58 @@
+{
+  "parts": [
+    {"part_id": "rim", "label": "wheel rim"},
+    {"part_id": "hub", "label": "wheel hub"},
+    {"part_id": "spokes", "label": "spokes", "parent": "hub"}
+  ],
+  "supplements": [
+    {
+      "supplement_id": "rim_section",
+      "part_id": "rim",
+      "kind": "thickness",
+      "geometry": {"value_m": 0.02},
+      "provenance": {"origin": "human", "detail": "rim cross-section thickness"}
+    },
+    {
+      "supplement_id": "spoke_symmetry",
+      "part_id": "spokes",
+      "kind": "symmetry",
+      "geometry": {"axis": "x"},
+      "provenance": {"origin": "human", "detail": "wheel is symmetric about X=0"}
+    },
+    {
+      "supplement_id": "hub_bore",
+      "part_id": "hub",
+      "kind": "cavity",
+      "geometry": {"bbox_m": [0.15, 0.15, 0.15]},
+      "provenance": {"origin": "human", "detail": "hidden axle bore through the hub"}
+    }
+  ],
+  "unknowns": [
+    {
+      "id": "u_spoke_tenons",
+      "description": "hidden spoke-to-rim tenons",
+      "affected_parts": ["spokes"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_hub_bore",
+      "description": "axle bore interior",
+      "affected_parts": ["hub"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_rim_wear",
+      "description": "rim wear and iron band detail",
+      "affected_parts": ["rim"],
+      "policy": "author_required"
+    }
+  ],
+  "acceptance": [
+    {"target": "supplements:rim_section", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:spoke_symmetry", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:hub_bore", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_spoke_tenons", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_hub_bore", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_rim_wear", "status": "needs_revision", "by": "owner", "at": "2026-11-07T12:00:00Z"}
+  ]
+}

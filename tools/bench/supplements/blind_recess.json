@@ -1,0 +1,13 @@
+{
+  "parts": [
+    {"part_id": "body", "label": "control body with a blind recess"}
+  ],
+  "unknowns": [
+    {
+      "id": "u_blind_recess",
+      "description": "blind recess in the top face: depth and interior wall are not observable from the frontal/right/top silhouettes",
+      "affected_parts": ["body"],
+      "policy": "author_required"
+    }
+  ]
+}

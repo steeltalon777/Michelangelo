@@ -1,0 +1,65 @@
+{
+  "parts": [
+    {"part_id": "glass_bulb", "label": "organic glass bulb"},
+    {"part_id": "base", "label": "mechanical base"},
+    {"part_id": "bulbs", "label": "bulb variants", "parent": "glass_bulb"}
+  ],
+  "supplements": [
+    {
+      "supplement_id": "bulb_wall",
+      "part_id": "glass_bulb",
+      "kind": "thickness",
+      "geometry": {"value_m": 0.004},
+      "provenance": {"origin": "human", "detail": "glass wall thickness (hidden surface)"}
+    },
+    {
+      "supplement_id": "bulb_void",
+      "part_id": "glass_bulb",
+      "kind": "cavity",
+      "geometry": {"bbox_m": [0.18, 0.18, 0.22]},
+      "provenance": {"origin": "human", "detail": "hollow glass bulb interior"}
+    },
+    {
+      "supplement_id": "base_connection",
+      "part_id": "base",
+      "kind": "connection",
+      "geometry": {"from": [0.0, 0.0, 0.0], "to": [0.0, 0.0, 0.12], "radius_m": 0.03},
+      "provenance": {"origin": "human", "detail": "mechanical collar joins the bulb to the base"}
+    }
+  ],
+  "unknowns": [
+    {
+      "id": "u_bulb_interior",
+      "description": "hidden interior of the glass bulb",
+      "affected_parts": ["glass_bulb"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_bulb_thickness",
+      "description": "glass thickness",
+      "affected_parts": ["glass_bulb"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_inner_mechanism",
+      "description": "unseen mechanism inside the base",
+      "affected_parts": ["base"],
+      "policy": "stub_allowed"
+    },
+    {
+      "id": "u_glass_frost",
+      "description": "frosted pattern on the glass",
+      "affected_parts": ["glass_bulb"],
+      "policy": "author_required"
+    }
+  ],
+  "acceptance": [
+    {"target": "supplements:bulb_wall", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:bulb_void", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:base_connection", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_bulb_interior", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_bulb_thickness", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_inner_mechanism", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_glass_frost", "status": "needs_revision", "by": "owner", "at": "2026-11-07T12:00:00Z"}
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "parts": [
+    {"part_id": "glass_chamber", "label": "glazed chamber"},
+    {"part_id": "lid", "label": "pagoda roof and finial", "parent": "glass_chamber"},
+    {"part_id": "bracket", "label": "wall bracket", "parent": "lid"},
+    {"part_id": "base", "label": "base plate", "parent": "glass_chamber"}
+  ],
+  "supplements": [
+    {
+      "supplement_id": "glass_pane_thickness",
+      "part_id": "glass_chamber",
+      "kind": "thickness",
+      "geometry": {"value_m": 0.004},
+      "provenance": {"origin": "human", "detail": "authored glass thickness (hidden surface)"}
+    },
+    {
+      "supplement_id": "chamber_void",
+      "part_id": "glass_chamber",
+      "kind": "cavity",
+      "geometry": {"bbox_m": [0.18, 0.18, 0.30]},
+      "provenance": {"origin": "human", "detail": "hollow lamp chamber behind the glazing"}
+    },
+    {
+      "supplement_id": "bracket_arm_connection",
+      "part_id": "bracket",
+      "kind": "connection",
+      "geometry": {"from": [0.0, 0.30, 0.0], "to": [0.0, 0.42, 0.0], "radius_m": 0.02},
+      "provenance": {"origin": "human", "detail": "wooden arm connects to the wall plate"}
+    }
+  ],
+  "unknowns": [
+    {
+      "id": "u_glass_thickness",
+      "description": "hidden glass pane thickness behind the frame",
+      "affected_parts": ["glass_chamber"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_chamber_void",
+      "description": "unknown interior of the glazed chamber",
+      "affected_parts": ["glass_chamber"],
+      "policy": "rule_allowed"
+    },
+    {
+      "id": "u_flame_shape",
+      "description": "flame silhouette is not silhouette-observable",
+      "affected_parts": ["glass_chamber"],
+      "policy": "stub_allowed"
+    },
+    {
+      "id": "u_bracket_grain",
+      "description": "wood grain and carved detail of the bracket",
+      "affected_parts": ["bracket"],
+      "policy": "author_required"
+    }
+  ],
+  "acceptance": [
+    {"target": "supplements:glass_pane_thickness", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:chamber_void", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "supplements:bracket_arm_connection", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_glass_thickness", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_chamber_void", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_flame_shape", "status": "accepted", "by": "owner", "at": "2026-11-07T12:00:00Z"},
+    {"target": "unknowns:u_bracket_grain", "status": "needs_revision", "by": "owner", "at": "2026-11-07T12:00:00Z"}
+  ]
+}
