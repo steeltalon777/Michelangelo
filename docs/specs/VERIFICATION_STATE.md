@@ -61,7 +61,7 @@ owner gate.
 ```json
 {
   "geometry_digest": "<sha256>",
-  "bindings":   {"version": "b0001", "path": "verification/bindings/b0001.json", "sha256": "..."},
+  "bindings":   [{"version": "b0001", "path": "verification/bindings/b0001.json", "sha256": "..."}],
   "unknowns":   {"revision": "s0002", "path": "verification/unknowns/revisions/s0002.json", "sha256": "..."},
   "evaluations":[{"evaluation_id": "ev-0001", "path": "...", "sha256": "..."}],
   "confirmations":[{"confirmation_id": "cf-0001", "path": "...", "sha256": "..."}],
@@ -71,6 +71,10 @@ owner gate.
   "created_at": "<RFC 3339 UTC>"
 }
 ```
+
+`verification.bindings` is a list of binding-document references (one per active binding
+version); it is empty until IT-8C creates the first binding. A revision only selects the
+versions it refers to, so old revisions keep their binding set.
 
 `current.json` is published by write-to-temp + rename. Publishing a revision means: write
 `scene/sNNNN.tmp` completely, verify every referenced document hash, rename to `scene/sNNNN`,
@@ -201,6 +205,10 @@ Rules:
 - **Legacy data.** A candidate/run without snapshot evidence cannot be accepted:
   `SNAPSHOT_MISSING` (exit 1). Historical accepted revisions stay readable; no automatic
   `verified` is inferred for them.
+- **Refused attempts are auditable.** A refused acceptance (missing snapshot, evidence
+  mismatch, stale base) appends an `accept-refused` record with its diagnostic code to the
+  candidate history; the latest-decision mirror is left untouched because the refusal is an
+  attempt, not a new decision about the candidate.
 
 ## 8. Policy precedence and build-time enforcement
 

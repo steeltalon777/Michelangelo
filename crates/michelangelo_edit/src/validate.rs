@@ -157,6 +157,13 @@ pub struct DecisionReport {
     pub decided_at: String,
     /// The author that decided the candidate.
     pub decided_by: Option<String>,
+    /// The identifier of the snapshot of the candidate (None for a decision
+    /// that was taken before the verification contract).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    /// The aggregate digest of the geometry of the snapshot of the candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate_sha256: Option<String>,
 }
 
 impl DecisionReport {
@@ -176,6 +183,8 @@ impl DecisionReport {
             diagnostics: Vec::new(),
             decided_at: decided_at.into(),
             decided_by: None,
+            snapshot_id: None,
+            aggregate_sha256: None,
         }
     }
 

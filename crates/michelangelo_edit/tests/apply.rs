@@ -152,9 +152,20 @@ fn a_stale_candidate_is_rejected_after_an_acceptance() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
     submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
         .expect("the candidate is submitted");
+    // A second candidate that was built on the revision s0001.
+    let stale_dir = fixture
+        .run_dir
+        .parent()
+        .expect("the parent exists")
+        .join("cand-0002");
+    let value = candidate(&json!({"candidate_id": "cand-0002"}));
+    write_candidate(&stale_dir, &value, &lid_geometry());
+    submit_candidate(&fixture.run_dir, &stale_dir, &fixture.clock())
+        .expect("the second candidate is submitted");
+
     accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
-        .expect("the candidate is accepted");
-    let report = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+        .expect("the first candidate is accepted");
+    let report = accept_candidate(&fixture.run_dir, "cand-0002", "alice", &fixture.clock())
         .expect("the candidate is decided");
     assert_eq!(report.decision, Decision::Rejected);
     let codes: Vec<String> = report
@@ -163,6 +174,23 @@ fn a_stale_candidate_is_rejected_after_an_acceptance() {
         .map(|diagnostic| diagnostic.code.clone())
         .collect();
     assert!(codes.contains(&"STALE_BASE".to_string()));
+}
+
+#[test]
+fn a_repeated_acceptance_returns_the_historical_result() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
+        .expect("the candidate is submitted");
+    let first = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+        .expect("the candidate is accepted");
+    assert_eq!(first.decision, Decision::Accepted);
+    let second = accept_candidate(&fixture.run_dir, "cand-0001", "alice", &fixture.clock())
+        .expect("the candidate is decided");
+    assert_eq!(second.decision, Decision::Accepted);
+    assert_eq!(
+        second.resulting_scene_revision,
+        first.resulting_scene_revision
+    );
 }
 
 #[test]

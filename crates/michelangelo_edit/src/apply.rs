@@ -1,19 +1,24 @@
 //! The applier of the edit boundary.
 //!
-//! The applier implements the four operations of the boundary:
+//! The applier implements the operations of the boundary:
 //!
-//! * `submit` — a candidate enters the store and is validated; it becomes a
-//!   `proposed` candidate or, when the workspace policy allows it, an
-//!   `accepted` one,
+//! * `submit` — a candidate enters the store, is validated and is
+//!   registered together with an immutable snapshot of the **full**
+//!   post-change result,
 //! * `accept` — an author accepts a candidate and a new scene revision is
-//!   published,
+//!   published **from the snapshot**, never from the candidate directory,
 //! * `reject` — an author refuses a candidate,
 //! * `rollback` — the store points to a previous revision again.
 //!
-//! Publishing a revision never modifies the base revision, never modifies the
-//! `source/` directory of the run and never modifies a component that the
-//! candidate does not change: the bytes of an untouched component are copied
-//! into the new revision verbatim.
+//! Every mutation of the store runs under the exclusive OS lock of the run
+//! (`verification/run.lock`): a busy lock is refused (`STORE_BUSY`), the
+//! boundary never waits. The decision history of a candidate is append-only
+//! (`candidates/<id>/decisions/NNNN-<kind>.json`); `decision.json` is the
+//! mirror of the latest decision.
+//!
+//! An accepted candidate is never applied twice: a repeated acceptance
+//! returns the historical result, appends an `accept-idempotent` record and
+//! does not switch the scene back (also after a rollback).
 
 use std::path::{Path, PathBuf};
 
@@ -24,12 +29,19 @@ use crate::error::{io_error, EditError};
 use crate::policy::load_policy;
 use crate::scene::{
     component_bytes, list_revisions, load_current, load_index, load_scene, next_revision,
-    publish_revision, write_current, write_index, CandidateIndexEntry, CurrentPointer,
-    RollbackRecord, Scene, SceneComponent, SceneStore,
+    publish_revision, write_bytes_atomic, write_current, write_index, CandidateIndexEntry,
+    CurrentPointer, RollbackRecord, Scene, SceneComponent, SceneStore, SceneVerification,
+    UnknownStateRef, VerificationPolicies, COMPONENTS_DIR_NAME,
 };
 use crate::validate::{
     validate, Check, CheckStatus, Decision, DecisionReport, Diagnostic, Severity,
     ValidationContext, ValidationMode,
+};
+use crate::verification::{
+    aggregate_digest, canonical_json, file_sha256, load_snapshot, load_unknown_state,
+    package_digest, package_policy_digest, snapshot_file_path, tool_versions,
+    unknown_state_relative_path, verify_snapshot, workspace_policy_digest, write_bytes_new,
+    write_unknown_state, SnapshotFile, SnapshotManifest, SnapshotSource, StoreLock, UnknownState,
 };
 use crate::{Clock, INDEX_SCHEMA};
 
@@ -37,6 +49,62 @@ use crate::{Clock, INDEX_SCHEMA};
 pub const ROLLBACK_SCHEMA: &str = "michelangelo.edit-rollback/0";
 /// The schema of the scene view.
 pub const VIEW_SCHEMA: &str = "michelangelo.edit-scene-view/0";
+
+/// The kind of the decision record of a submission.
+pub const DECISION_SUBMIT: &str = "submit";
+/// The kind of the decision record of an acceptance.
+pub const DECISION_ACCEPT: &str = "accept";
+/// The kind of the decision record of a repeated acceptance.
+pub const DECISION_ACCEPT_IDEMPOTENT: &str = "accept-idempotent";
+/// The kind of the decision record of a rejection.
+pub const DECISION_REJECT: &str = "reject";
+/// The kind of the decision record of a repeated rejection.
+pub const DECISION_REJECT_IDEMPOTENT: &str = "reject-idempotent";
+/// The kind of the decision record of a refused rejection.
+pub const DECISION_REJECT_REFUSED: &str = "reject-refused";
+pub const DECISION_ACCEPT_REFUSED: &str = "accept-refused";
+
+/// Record a refused acceptance in the append-only history.
+///
+/// The latest-decision mirror of the candidate is left untouched: the refusal
+/// is an attempt, not a new decision about the candidate. The history keeps
+/// the diagnostic code so a tampered/legacy candidate stays auditable.
+fn refuse_accept(
+    store: &SceneStore,
+    candidate_id: &str,
+    by: &str,
+    clock: &dyn Clock,
+    code: &str,
+    message: String,
+) -> Result<DecisionReport, EditError> {
+    let decided_at = clock.now_rfc3339_utc();
+    let mut report =
+        DecisionReport::empty(candidate_id.to_string(), Decision::Rejected, &decided_at);
+    report.decided_by = Some(by.to_string());
+    report.checks.push(Check {
+        check: "evidence".to_string(),
+        status: CheckStatus::Fail,
+        detail: message.clone(),
+    });
+    report.diagnostics.push(Diagnostic {
+        code: code.to_string(),
+        severity: Severity::Error,
+        message: message.clone(),
+        address: None,
+    });
+    write_history(store, &report, DECISION_ACCEPT_REFUSED)?;
+    Err(coded_edit_error(code, message))
+}
+
+/// Rebuild the typed error of a refusal code.
+fn coded_edit_error(code: &str, message: String) -> EditError {
+    match code {
+        crate::error::SNAPSHOT_MISSING => EditError::SnapshotMissing { message },
+        crate::error::EVIDENCE_MISMATCH => EditError::EvidenceMismatch { message },
+        crate::error::STALE_BASE => EditError::StaleBase { message },
+        _ => EditError::Internal { message },
+    }
+}
 
 /// The report of a rollback.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,12 +177,27 @@ impl ShowReport {
     }
 }
 
+/// The hooks of an acceptance.
+///
+/// The hooks exist for the failure tests of the contract: they inject a
+/// change of the store between two steps of the acceptance. They are never
+/// used by the production code.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct AcceptHooks<'a> {
+    /// Called after the validation and before the publication.
+    pub after_validation: Option<&'a mut dyn FnMut()>,
+    /// Called after the revision directory is published and before the
+    /// pointer is switched (a crash here leaves the old bundle
+    /// authoritative).
+    pub before_publish: Option<&'a mut dyn FnMut() -> Result<(), EditError>>,
+}
+
 /// Submit a candidate into the store of a run.
 ///
-/// The candidate is copied into the store, validated against the current scene
-/// revision and decided: it becomes `proposed` (an explicit author
-/// acceptance is required) or, when the workspace policy allows it,
-/// `accepted`.
+/// The candidate is copied into the store, validated against the current
+/// scene revision and registered together with an immutable snapshot of the
+/// full post-change result.
 pub fn submit_candidate(
     run_dir: &Path,
     candidate_dir: &Path,
@@ -131,6 +214,11 @@ pub fn submit_candidate(
 
     let parsed = parse_candidate(&text);
     let candidate_id = candidate_id_of(candidate_dir, &text, &parsed)?;
+
+    // The whole submission is one critical section: the candidate enters the
+    // store and its snapshot is registered atomically.
+    let _lock = StoreLock::acquire(&store, "submit")?;
+
     let target = store.candidate_dir(&candidate_id);
     if target.exists() {
         return Err(EditError::Schema {
@@ -158,12 +246,12 @@ pub fn submit_candidate(
     }
 
     let decided_at = clock.now_rfc3339_utc();
+    let mut report = DecisionReport::empty(candidate_id.clone(), Decision::Error, &decided_at);
+    report.base_scene_revision = base_scene_revision_hint(&text);
+
     let candidate = match parsed {
         Ok(candidate) => candidate,
         Err(error) => {
-            let mut report =
-                DecisionReport::empty(candidate_id.clone(), Decision::Error, &decided_at);
-            report.base_scene_revision = base_scene_revision_hint(&text);
             report.checks.push(Check {
                 check: "candidate_schema".to_string(),
                 status: CheckStatus::Fail,
@@ -180,7 +268,7 @@ pub fn submit_candidate(
             } else {
                 Decision::Error
             };
-            write_decision(&store, &report)?;
+            write_decision(&store, &report, DECISION_SUBMIT)?;
             record_index(&store, &report, None)?;
             return Ok(report);
         }
@@ -204,30 +292,35 @@ pub fn submit_candidate(
     };
     let outcome = validate(&context, policy.as_ref());
 
-    let mut report = DecisionReport::empty(candidate_id.clone(), Decision::Proposed, &decided_at);
     report.base_scene_revision = Some(pointer.scene_revision.clone());
     report.checks = outcome.checks.clone();
     report.diagnostics = outcome.diagnostics.clone();
 
     if !outcome.valid {
         report.decision = Decision::Rejected;
-        write_decision(&store, &report)?;
+        write_decision(&store, &report, DECISION_SUBMIT)?;
         record_index(&store, &report, None)?;
         return Ok(report);
     }
 
+    // The immutable snapshot of the full post-change result: the unchanged
+    // components are copied byte-identically from the base revision.
+    let manifest = create_snapshot(&store, &candidate, &base_scene, &outcome, clock)?;
+    report.snapshot_id = Some(manifest.snapshot_id.clone());
+    report.aggregate_sha256 = Some(manifest.aggregate_sha256.clone());
+
     if outcome.auto_accept {
-        let revision = publish_candidate(&store, &candidate, &base_scene, &outcome, clock)?;
+        let revision = publish_snapshot(&store, &manifest, &candidate, &base_scene, clock)?;
         report.decision = Decision::Accepted;
         report.resulting_scene_revision = Some(revision.clone());
-        write_decision(&store, &report)?;
+        write_decision(&store, &report, DECISION_SUBMIT)?;
         record_index(&store, &report, Some(revision.clone()))?;
         set_current(&store, &revision, Some(candidate_id.clone()), clock)?;
         return Ok(report);
     }
 
     report.decision = Decision::Proposed;
-    write_decision(&store, &report)?;
+    write_decision(&store, &report, DECISION_SUBMIT)?;
     record_index(&store, &report, None)?;
     Ok(report)
 }
@@ -239,8 +332,103 @@ pub fn accept_candidate(
     by: &str,
     clock: &dyn Clock,
 ) -> Result<DecisionReport, EditError> {
+    accept_candidate_with_hooks(run_dir, candidate_id, by, clock, AcceptHooks::default())
+}
+
+/// Accept a candidate with the test hooks of the acceptance.
+#[doc(hidden)]
+pub fn accept_candidate_with_hooks(
+    run_dir: &Path,
+    candidate_id: &str,
+    by: &str,
+    clock: &dyn Clock,
+    mut hooks: AcceptHooks<'_>,
+) -> Result<DecisionReport, EditError> {
     let store = SceneStore::new(run_dir);
     let candidate = load_stored_candidate(&store, candidate_id)?;
+
+    // An accepted candidate is never applied twice: the historical result is
+    // returned, the scene is not switched back (also after a rollback).
+    if let Some(historical) = historical_acceptance(&store, candidate_id)? {
+        let mut report = historical;
+        report.decided_at = clock.now_rfc3339_utc();
+        let _lock = StoreLock::acquire(&store, "accept")?;
+        write_decision(&store, &report, DECISION_ACCEPT_IDEMPOTENT)?;
+        return Ok(report);
+    }
+
+    // A crash between the switch of the pointer and the write of the decision
+    // leaves the pointer on the revision of the candidate: the bookkeeping is
+    // completed here.
+    if let Some(pointer) = load_current(&store)? {
+        if pointer.candidate_id.as_deref() == Some(candidate_id) {
+            let mut report = DecisionReport::empty(
+                candidate_id.to_string(),
+                Decision::Accepted,
+                pointer.accepted_at.clone(),
+            );
+            report.base_scene_revision = None;
+            report.resulting_scene_revision = Some(pointer.scene_revision.clone());
+            report.decided_by = Some(by.to_string());
+            report.checks.push(Check {
+                check: "recovery".to_string(),
+                status: CheckStatus::Pass,
+                detail: format!(
+                    "the store already points to the revision '{}' of the candidate",
+                    pointer.scene_revision
+                ),
+            });
+            let _lock = StoreLock::acquire(&store, "accept")?;
+            write_decision(&store, &report, DECISION_ACCEPT)?;
+            record_index(&store, &report, Some(pointer.scene_revision.clone()))?;
+            return Ok(report);
+        }
+    }
+
+    // The lock is taken before the evidence is verified: every refusal is
+    // appended to the history under the same lock, so concurrent refusals
+    // cannot race on the decision sequence.
+    let _lock = StoreLock::acquire(&store, "accept")?;
+
+    // The evidence of the candidate: without a snapshot the candidate cannot
+    // be accepted (a legacy candidate stays readable, it is never accepted).
+    // Every refusal is appended to the decision history of the candidate.
+    let manifest = match load_snapshot(&store, candidate_id)? {
+        Some(manifest) => manifest,
+        None => {
+            return refuse_accept(
+                &store,
+                candidate_id,
+                by,
+                clock,
+                crate::error::SNAPSHOT_MISSING,
+                format!(
+                    "the candidate '{candidate_id}' carries no snapshot: it cannot be accepted"
+                ),
+            );
+        }
+    };
+    if let Err(error) = verify_snapshot(&store, &manifest) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+    if let Err(error) = verify_candidate_geometry(&store, &candidate, &manifest) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+
     let pointer = load_current(&store)?.ok_or_else(|| EditError::Scene {
         message: "the scene store is not initialized: run 'michelangelo edit init' first"
             .to_string(),
@@ -268,17 +456,76 @@ pub fn accept_candidate(
     report.decided_by = Some(by.to_string());
 
     if !outcome.valid {
-        write_decision(&store, &report)?;
+        write_decision(&store, &report, DECISION_REJECT)?;
         record_index(&store, &report, None)?;
         return Ok(report);
     }
 
-    let revision = publish_candidate(&store, &candidate, &base_scene, &outcome, clock)?;
+    // The hook runs between the validation and the publication.
+    if let Some(hook) = hooks.after_validation.as_mut() {
+        hook();
+    }
+
+    // The pointer is re-read under the lock: the candidate may only be
+    // applied to the revision it was built on.
+    let current = load_current(&store)?.ok_or_else(|| EditError::Scene {
+        message: "the scene store is not initialized: run 'michelangelo edit init' first"
+            .to_string(),
+    })?;
+    if current.scene_revision != pointer.scene_revision
+        || candidate.base.scene_revision != current.scene_revision
+    {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            crate::error::STALE_BASE,
+            format!(
+                "the candidate was built on the revision '{}' but the store points to the revision '{}'",
+                candidate.base.scene_revision, current.scene_revision
+            ),
+        );
+    }
+
+    // The evidence is verified again under the lock.
+    if let Err(error) = verify_snapshot(&store, &manifest) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+    if let Err(error) = verify_candidate_geometry(&store, &candidate, &manifest) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+
+    let revision = publish_snapshot(&store, &manifest, &candidate, &base_scene, clock)?;
+
+    // The hook runs between the publication of the revision and the switch of
+    // the pointer: a crash here leaves the old bundle authoritative and the
+    // revision is reused by the next attempt.
+    if let Some(hook) = hooks.before_publish.as_mut() {
+        hook()?;
+    }
+
     report.decision = Decision::Accepted;
     report.resulting_scene_revision = Some(revision.clone());
-    write_decision(&store, &report)?;
-    record_index(&store, &report, Some(revision.clone()))?;
+    report.snapshot_id = Some(manifest.snapshot_id.clone());
+    report.aggregate_sha256 = Some(manifest.aggregate_sha256.clone());
     set_current(&store, &revision, Some(candidate_id.to_string()), clock)?;
+    write_decision(&store, &report, DECISION_ACCEPT)?;
+    record_index(&store, &report, Some(revision.clone()))?;
     Ok(report)
 }
 
@@ -293,8 +540,68 @@ pub fn reject_candidate(
     let store = SceneStore::new(run_dir);
     let candidate = load_stored_candidate(&store, candidate_id)?;
     let decided_at = clock.now_rfc3339_utc();
+    let index = load_index(&store)?;
+    let status = index
+        .entry(candidate_id)
+        .map(|entry| entry.status.clone())
+        .unwrap_or_default();
+
+    if status == "accepted" {
+        // The acceptance of a candidate is never rewritten: the rejection is
+        // refused and only the refusal is recorded.
+        let mut report =
+            DecisionReport::empty(candidate_id.to_string(), Decision::Rejected, &decided_at);
+        report.base_scene_revision = Some(candidate.base.scene_revision.clone());
+        report.decided_by = Some(by.to_string());
+        report.checks.push(Check {
+            check: "author_decision".to_string(),
+            status: CheckStatus::Fail,
+            detail: format!(
+                "the candidate '{candidate_id}' was already accepted and cannot be rejected"
+            ),
+        });
+        report.diagnostics.push(Diagnostic {
+            code: crate::error::CANDIDATE_ALREADY_ACCEPTED.to_string(),
+            severity: Severity::Error,
+            message: format!(
+                "the candidate '{candidate_id}' was already accepted: its history is not rewritten"
+            ),
+            address: None,
+        });
+        let _lock = StoreLock::acquire(&store, "reject")?;
+        write_history(&store, &report, DECISION_REJECT_REFUSED)?;
+        return Ok(report);
+    }
+
+    if status == "rejected" {
+        // The rejection is idempotent: the same rejected result is returned.
+        let mut report = match last_history(&store, candidate_id, DECISION_REJECT)? {
+            Some(report) => report,
+            None => rejection_report(&candidate, candidate_id, by, reason, &decided_at),
+        };
+        report.decided_at = decided_at;
+        let _lock = StoreLock::acquire(&store, "reject")?;
+        write_decision(&store, &report, DECISION_REJECT_IDEMPOTENT)?;
+        return Ok(report);
+    }
+
+    let report = rejection_report(&candidate, candidate_id, by, reason, &decided_at);
+    let _lock = StoreLock::acquire(&store, "reject")?;
+    write_decision(&store, &report, DECISION_REJECT)?;
+    record_index(&store, &report, None)?;
+    Ok(report)
+}
+
+/// Build the report of a rejection.
+fn rejection_report(
+    candidate: &EditCandidate,
+    candidate_id: &str,
+    by: &str,
+    reason: Option<&str>,
+    decided_at: &str,
+) -> DecisionReport {
     let mut report =
-        DecisionReport::empty(candidate_id.to_string(), Decision::Rejected, &decided_at);
+        DecisionReport::empty(candidate_id.to_string(), Decision::Rejected, decided_at);
     report.base_scene_revision = Some(candidate.base.scene_revision.clone());
     report.decided_by = Some(by.to_string());
     let detail = match reason {
@@ -308,12 +615,13 @@ pub fn reject_candidate(
         status: CheckStatus::Fail,
         detail,
     });
-    write_decision(&store, &report)?;
-    record_index(&store, &report, None)?;
-    Ok(report)
+    report
 }
 
 /// Roll the store back to a previous scene revision.
+///
+/// The target revision keeps its own bundle: its geometry, its unknown state
+/// and its references are the ones that become authoritative again.
 pub fn rollback_scene(
     run_dir: &Path,
     to_scene_revision: &str,
@@ -326,6 +634,7 @@ pub fn rollback_scene(
             message: format!("the scene revision '{to_scene_revision}' does not exist"),
         });
     }
+    let _lock = StoreLock::acquire(&store, "rollback")?;
     let from = load_current(&store)?.map(|pointer| pointer.scene_revision);
     let at = clock.now_rfc3339_utc();
     let pointer = CurrentPointer {
@@ -343,6 +652,17 @@ pub fn rollback_scene(
         at: at.clone(),
     });
     write_index(&store, &index)?;
+
+    crate::verification::append_event(
+        &store,
+        &serde_json::json!({
+            "event": "rollback",
+            "at": at,
+            "by": by,
+            "from_scene_revision": from,
+            "to_scene_revision": to_scene_revision,
+        }),
+    )?;
 
     Ok(RollbackReport {
         schema: ROLLBACK_SCHEMA.to_string(),
@@ -402,18 +722,20 @@ pub fn show_scene(run_dir: &Path, candidate_id: Option<&str>) -> Result<ShowRepo
     })
 }
 
-/// Publish a new scene revision for an accepted candidate.
-fn publish_candidate(
+/// Create the immutable snapshot of the full post-change result of a
+/// candidate.
+///
+/// The snapshot materialises every component of the result: the changed and
+/// the added components come from the candidate, the unchanged ones are
+/// copied byte-identically from the base revision.
+fn create_snapshot(
     store: &SceneStore,
     candidate: &EditCandidate,
     base_scene: &Scene,
     outcome: &crate::validate::ValidationOutcome,
     clock: &dyn Clock,
-) -> Result<String, EditError> {
-    let revision = next_revision(store)?;
-    let mut components: Vec<SceneComponent> = Vec::new();
-    let mut payloads: Vec<(String, Vec<u8>)> = Vec::new();
-
+) -> Result<SnapshotManifest, EditError> {
+    let mut entries: Vec<(String, SnapshotSource, Vec<u8>)> = Vec::new();
     for component in &base_scene.components {
         match outcome
             .prepared
@@ -427,38 +749,20 @@ fn publish_candidate(
                         format!("the geometry cannot be read: {err}"),
                     )
                 })?;
-                components.push(SceneComponent {
-                    name: component.name.clone(),
-                    part_id: component.part_id.clone(),
-                    obj: format!(
-                        "{}/{}.obj",
-                        crate::scene::COMPONENTS_DIR_NAME,
-                        component.name
-                    ),
-                    sha256: change.sha256.clone(),
-                    bbox_min: change.bbox.min,
-                    bbox_max: change.bbox.max,
-                    protected: component.protected,
-                });
-                payloads.push((component.name.clone(), bytes));
+                entries.push((component.name.clone(), SnapshotSource::Candidate, bytes));
             }
             None => {
                 // The component is untouched: its bytes are copied verbatim.
                 let bytes = component_bytes(store, &base_scene.scene_revision, &component.name)?;
-                components.push(component.clone());
-                payloads.push((component.name.clone(), bytes));
+                entries.push((component.name.clone(), SnapshotSource::Base, bytes));
             }
         }
     }
-
     for change in &outcome.prepared {
         if change.action != CandidateAction::Add {
             continue;
         }
-        if components
-            .iter()
-            .any(|component| component.name == change.component)
-        {
+        if entries.iter().any(|(name, _, _)| name == &change.component) {
             continue;
         }
         let bytes = std::fs::read(&change.source).map_err(|err| {
@@ -467,24 +771,201 @@ fn publish_candidate(
                 format!("the geometry cannot be read: {err}"),
             )
         })?;
-        components.push(SceneComponent {
-            name: change.component.clone(),
-            part_id: None,
-            obj: format!(
-                "{}/{}.obj",
-                crate::scene::COMPONENTS_DIR_NAME,
-                change.component
-            ),
-            sha256: change.sha256.clone(),
-            bbox_min: change.bbox.min,
-            bbox_max: change.bbox.max,
-            protected: false,
-        });
-        payloads.push((change.component.clone(), bytes));
+        entries.push((change.component.clone(), SnapshotSource::Candidate, bytes));
     }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
 
+    let files: Vec<SnapshotFile> = entries
+        .iter()
+        .map(|(name, source, bytes)| SnapshotFile {
+            component: name.clone(),
+            path: format!("{}/{name}.obj", crate::verification::GEOMETRY_DIR_NAME),
+            sha256: michelangelo_input::sha256::sha256_hex(bytes),
+            source: *source,
+        })
+        .collect();
+    let components: Vec<(String, String)> = files
+        .iter()
+        .map(|file| (file.component.clone(), file.sha256.clone()))
+        .collect();
+    let aggregate_sha256 = aggregate_digest(&components);
+    let base_components: Vec<(String, String)> = base_scene
+        .components
+        .iter()
+        .map(|component| (component.name.clone(), component.sha256.clone()))
+        .collect();
+
+    let task = serde_json::to_value(&candidate.task).map_err(|err| EditError::Internal {
+        message: format!("the task of the candidate cannot be serialized: {err}"),
+    })?;
+    let manifest = SnapshotManifest {
+        schema: crate::verification::SNAPSHOT_SCHEMA.to_string(),
+        snapshot_id: candidate.candidate_id.clone(),
+        created_at: clock.now_rfc3339_utc(),
+        base: crate::verification::SnapshotBase {
+            package_id: base_scene.source.package_id.clone(),
+            package_revision: base_scene.source.package_revision,
+            run_id: base_scene.run_id.clone(),
+            scene_revision: base_scene.scene_revision.clone(),
+            geometry_digest: aggregate_digest(&base_components),
+        },
+        candidate_sha256: file_sha256(&store.candidate_path(&candidate.candidate_id)).ok(),
+        task_sha256: Some(michelangelo_input::sha256::sha256_hex(
+            canonical_json(&task).as_bytes(),
+        )),
+        package_sha256: package_digest(store),
+        bindings_sha256: None,
+        package_policy_sha256: package_policy_digest(store),
+        files,
+        aggregate_sha256,
+        tool_versions: tool_versions(store),
+    };
+
+    // The snapshot is written into a temporary directory and renamed into
+    // place: it is immutable afterwards.
+    let target = store.snapshot_dir(&candidate.candidate_id);
+    if target.exists() {
+        return Err(io_error(
+            &target,
+            "the snapshot already exists and is never overwritten",
+        ));
+    }
+    let temporary = store.snapshot_dir(&format!("{}.tmp", candidate.candidate_id));
+    if temporary.exists() {
+        return Err(io_error(
+            &temporary,
+            "a temporary snapshot directory already exists",
+        ));
+    }
+    let geometry_dir = temporary.join(crate::verification::GEOMETRY_DIR_NAME);
+    std::fs::create_dir_all(&geometry_dir).map_err(|err| {
+        io_error(
+            &geometry_dir,
+            format!("the snapshot geometry cannot be created: {err}"),
+        )
+    })?;
+    for (name, _, bytes) in &entries {
+        let path = geometry_dir.join(format!("{name}.obj"));
+        std::fs::write(&path, bytes).map_err(|err| {
+            io_error(
+                &path,
+                format!("the snapshot geometry cannot be written: {err}"),
+            )
+        })?;
+    }
+    let text = serde_json::to_string_pretty(&manifest).map_err(|err| EditError::Internal {
+        message: format!("the snapshot manifest cannot be serialized: {err}"),
+    })?;
+    write_bytes_atomic(
+        &temporary.join(crate::verification::MANIFEST_FILE_NAME),
+        format!(
+            "{text}
+"
+        )
+        .as_bytes(),
+    )?;
+    std::fs::rename(&temporary, &target).map_err(|err| {
+        let _ = std::fs::remove_dir_all(&temporary);
+        io_error(&target, format!("the snapshot cannot be published: {err}"))
+    })?;
+    Ok(manifest)
+}
+
+/// Verify that the geometry of the candidate still matches the snapshot.
+///
+/// The published geometry comes from the snapshot; a candidate that was
+/// modified after the submission is refused (`EVIDENCE_MISMATCH`).
+fn verify_candidate_geometry(
+    store: &SceneStore,
+    candidate: &EditCandidate,
+    manifest: &SnapshotManifest,
+) -> Result<(), EditError> {
+    for change in &candidate.changes {
+        let file = match manifest.file(&change.component) {
+            Some(file) => file,
+            None => continue,
+        };
+        if file.source != SnapshotSource::Candidate {
+            continue;
+        }
+        let path = store
+            .candidate_dir(&candidate.candidate_id)
+            .join(&change.obj);
+        let digest = file_sha256(&path)?;
+        if digest != file.sha256 {
+            return Err(EditError::EvidenceMismatch {
+                message: format!(
+                    "the geometry of the component '{}' of the candidate '{}' carries the digest {digest} but the snapshot pins {}",
+                    change.component, candidate.candidate_id, file.sha256
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Publish a new scene revision from the snapshot of a candidate.
+///
+/// The components of the revision are copied from the snapshot, never from
+/// the candidate directory. A revision of the same candidate that already
+/// exists (a crash between the publication and the switch of the pointer) is
+/// reused, never duplicated.
+fn publish_snapshot(
+    store: &SceneStore,
+    manifest: &SnapshotManifest,
+    candidate: &EditCandidate,
+    base_scene: &Scene,
+    clock: &dyn Clock,
+) -> Result<String, EditError> {
+    if let Some(revision) = find_revision_of_candidate(
+        store,
+        &candidate.candidate_id,
+        &base_scene.scene_revision,
+        &manifest.aggregate_sha256,
+    )? {
+        return Ok(revision);
+    }
+    let revision = next_revision(store)?;
+
+    let mut components: Vec<SceneComponent> = Vec::new();
+    let mut payloads: Vec<(String, Vec<u8>)> = Vec::new();
+    for file in &manifest.files {
+        let path = snapshot_file_path(store, &manifest.snapshot_id, &file.path);
+        let bytes = std::fs::read(&path).map_err(|err| {
+            io_error(
+                &path,
+                format!("the snapshot geometry cannot be read: {err}"),
+            )
+        })?;
+        let parsed = crate::obj::parse_obj_file(&path).map_err(|err: crate::obj::ObjError| {
+            EditError::Scene {
+                message: format!(
+                    "the component '{}' of the snapshot is not usable: {err}",
+                    file.component
+                ),
+            }
+        })?;
+        let base_component = base_scene.component(&file.component);
+        components.push(SceneComponent {
+            name: file.component.clone(),
+            part_id: base_component.and_then(|component| component.part_id.clone()),
+            obj: format!("{}/{}.obj", COMPONENTS_DIR_NAME, file.component),
+            sha256: parsed.sha256.clone(),
+            bbox_min: parsed.mesh.bbox.min,
+            bbox_max: parsed.mesh.bbox.max,
+            protected: base_component
+                .map(|component| component.protected)
+                .unwrap_or(false),
+        });
+        payloads.push((file.component.clone(), bytes));
+    }
     components.sort_by(|left, right| left.name.cmp(&right.name));
     payloads.sort_by(|left, right| left.0.cmp(&right.0));
+
+    // Every revision carries its own immutable state of the unknowns.
+    let created_at = clock.now_rfc3339_utc();
+    build_unknown_state(store, &revision, &base_scene.scene_revision, &created_at)?;
+    let unknown_sha256 = file_sha256(&store.unknown_state_path(&revision))?;
 
     let scene = Scene {
         schema: crate::SCENE_SCHEMA.to_string(),
@@ -492,19 +973,133 @@ fn publish_candidate(
         scene_revision: revision.clone(),
         base_scene_revision: Some(base_scene.scene_revision.clone()),
         parent_candidate_id: Some(candidate.candidate_id.clone()),
-        created_at: clock.now_rfc3339_utc(),
+        created_at: created_at.clone(),
         components,
         source: base_scene.source.clone(),
         notes: base_scene.notes.clone(),
+        verification: Some(SceneVerification {
+            geometry_digest: manifest.aggregate_sha256.clone(),
+            bindings: Vec::new(),
+            unknowns: Some(UnknownStateRef {
+                revision: revision.clone(),
+                path: unknown_state_relative_path(&revision),
+                sha256: unknown_sha256,
+            }),
+            evaluations: Vec::new(),
+            confirmations: Vec::new(),
+            resolutions: Vec::new(),
+            policies: VerificationPolicies {
+                package_sha256: manifest.package_sha256.clone(),
+                workspace_policy_sha256: workspace_policy_digest(store),
+            },
+            tool_versions: manifest.tool_versions.clone(),
+            created_at: created_at.clone(),
+        }),
     };
     publish_revision(store, &scene, &payloads)?;
     Ok(revision)
 }
 
-/// Write the decision report of a candidate into the store.
-fn write_decision(store: &SceneStore, report: &DecisionReport) -> Result<(), EditError> {
+/// Build the immutable state of the unknowns of a revision.
+///
+/// The state of a new revision is a copy of the state of its base: only an
+/// explicit resolution (IT-8C) changes it.
+fn build_unknown_state(
+    store: &SceneStore,
+    revision: &str,
+    base_revision: &str,
+    created_at: &str,
+) -> Result<UnknownState, EditError> {
+    if let Some(existing) = load_unknown_state(store, revision)? {
+        return Ok(existing);
+    }
+    let mut state = load_unknown_state(store, base_revision)?
+        .unwrap_or_else(|| UnknownState::empty(revision, created_at));
+    state.revision = revision.to_string();
+    state.created_at = created_at.to_string();
+    write_unknown_state(store, &state)?;
+    match load_unknown_state(store, revision)? {
+        Some(state) => Ok(state),
+        None => Ok(state),
+    }
+}
+
+/// Find the revision that a candidate already produced.
+///
+/// A crash between the publication of a revision and the switch of the
+/// pointer leaves the revision behind: the next attempt reuses it instead of
+/// publishing a second one.
+fn find_revision_of_candidate(
+    store: &SceneStore,
+    candidate_id: &str,
+    base_revision: &str,
+    aggregate_sha256: &str,
+) -> Result<Option<String>, EditError> {
+    for revision in list_revisions(store)? {
+        let scene = match load_scene(store, &revision) {
+            Ok(scene) => scene,
+            Err(_) => continue,
+        };
+        if scene.parent_candidate_id.as_deref() != Some(candidate_id) {
+            continue;
+        }
+        if scene.base_scene_revision.as_deref() != Some(base_revision) {
+            continue;
+        }
+        let components: Vec<(String, String)> = scene
+            .components
+            .iter()
+            .map(|component| (component.name.clone(), component.sha256.clone()))
+            .collect();
+        if aggregate_digest(&components) == aggregate_sha256 {
+            return Ok(Some(revision));
+        }
+    }
+    Ok(None)
+}
+
+/// The historical acceptance of a candidate (None when the candidate was
+/// never accepted).
+fn historical_acceptance(
+    store: &SceneStore,
+    candidate_id: &str,
+) -> Result<Option<DecisionReport>, EditError> {
+    let index = load_index(store)?;
+    let entry = match index.entry(candidate_id) {
+        Some(entry) => entry,
+        None => return Ok(None),
+    };
+    if entry.status != "accepted" {
+        return Ok(None);
+    }
+    if let Some(report) = last_history(store, candidate_id, DECISION_ACCEPT)? {
+        return Ok(Some(report));
+    }
+    // A legacy candidate: the index carries the result of the acceptance.
+    let mut report = DecisionReport::empty(
+        candidate_id.to_string(),
+        Decision::Accepted,
+        entry
+            .decided_at
+            .clone()
+            .unwrap_or_else(|| entry.submitted_at.clone()),
+    );
+    report.resulting_scene_revision = entry.scene_revision.clone();
+    Ok(Some(report))
+}
+
+/// Write the decision of a candidate into the store.
+///
+/// The decision is appended to the immutable history of the candidate and
+/// mirrored into `decision.json`.
+fn write_decision(
+    store: &SceneStore,
+    report: &DecisionReport,
+    kind: &str,
+) -> Result<(), EditError> {
+    write_history(store, report, kind)?;
     let text = report.to_json()?;
-    crate::scene::write_bytes_atomic(
+    write_bytes_atomic(
         &store.decision_path(&report.candidate_id),
         format!(
             "{text}
@@ -512,6 +1107,119 @@ fn write_decision(store: &SceneStore, report: &DecisionReport) -> Result<(), Edi
         )
         .as_bytes(),
     )
+}
+
+/// Append a decision to the immutable history of a candidate.
+///
+/// The history is append-only: the sequence number is the next free one and
+/// an existing record is never rewritten.
+fn write_history(store: &SceneStore, report: &DecisionReport, kind: &str) -> Result<(), EditError> {
+    let directory = store.decisions_dir(&report.candidate_id);
+    std::fs::create_dir_all(&directory).map_err(|err| {
+        io_error(
+            &directory,
+            format!("the decision history cannot be created: {err}"),
+        )
+    })?;
+    let sequence = next_decision_sequence(&directory)?;
+    let path = directory.join(format!("{sequence:04}-{kind}.json"));
+    let text = report.to_json()?;
+    write_bytes_new(
+        &path,
+        format!(
+            "{text}
+"
+        )
+        .as_bytes(),
+    )
+}
+
+/// The next free sequence number of a decision history.
+fn next_decision_sequence(directory: &Path) -> Result<u32, EditError> {
+    let mut highest = 0_u32;
+    if !directory.is_dir() {
+        return Ok(1);
+    }
+    let entries = std::fs::read_dir(directory).map_err(|err| {
+        io_error(
+            directory,
+            format!("the decision history cannot be read: {err}"),
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            io_error(
+                directory,
+                format!("the decision history cannot be read: {err}"),
+            )
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some((sequence, _)) = name.split_once('-') {
+            if let Ok(value) = sequence.parse::<u32>() {
+                if value > highest {
+                    highest = value;
+                }
+            }
+        }
+    }
+    Ok(highest + 1)
+}
+
+/// The last record of a kind of the decision history of a candidate.
+fn last_history(
+    store: &SceneStore,
+    candidate_id: &str,
+    kind: &str,
+) -> Result<Option<DecisionReport>, EditError> {
+    let directory = store.decisions_dir(candidate_id);
+    if !directory.is_dir() {
+        return Ok(None);
+    }
+    let suffix = format!("-{kind}.json");
+    let entries = std::fs::read_dir(&directory).map_err(|err| {
+        io_error(
+            &directory,
+            format!("the decision history cannot be read: {err}"),
+        )
+    })?;
+    let mut best: Option<(u32, PathBuf)> = None;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            io_error(
+                &directory,
+                format!("the decision history cannot be read: {err}"),
+            )
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(&suffix) {
+            continue;
+        }
+        let sequence = match name
+            .split('-')
+            .next()
+            .and_then(|text| text.parse::<u32>().ok())
+        {
+            Some(sequence) => sequence,
+            None => continue,
+        };
+        let replace = match &best {
+            Some((current, _)) => sequence > *current,
+            None => true,
+        };
+        if replace {
+            best = Some((sequence, entry.path()));
+        }
+    }
+    let path = match best {
+        Some((_, path)) => path,
+        None => return Ok(None),
+    };
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| io_error(&path, format!("the decision cannot be read: {err}")))?;
+    let report = serde_json::from_str(&text).map_err(|err| EditError::Scene {
+        message: format!("the decision '{}' is not usable: {err}", path.display()),
+    })?;
+    Ok(Some(report))
 }
 
 /// Record a candidate in the index of the store.

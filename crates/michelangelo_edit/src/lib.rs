@@ -35,9 +35,11 @@ pub mod obj;
 pub mod policy;
 pub mod scene;
 pub mod validate;
+pub mod verification;
 
 pub use apply::{
-    accept_candidate, reject_candidate, rollback_scene, show_scene, submit_candidate, ShowReport,
+    accept_candidate, accept_candidate_with_hooks, reject_candidate, rollback_scene, show_scene,
+    submit_candidate, AcceptHooks, ShowReport,
 };
 pub use candidate::{CandidateAction, CandidateOrigin, EditCandidate};
 pub use error::{io_error, EditError};
@@ -45,9 +47,12 @@ pub use obj::{parse_obj, Bbox, ObjError, ObjMesh};
 pub use policy::{EditPolicy, PolicyDecision};
 pub use scene::{
     init_scene, load_current, load_index, load_scene, CurrentPointer, Scene, SceneComponent,
-    SceneStore,
+    SceneStore, SceneVerification,
 };
 pub use validate::{Check, CheckStatus, Decision, DecisionReport, Diagnostic, Severity};
+pub use verification::{
+    SnapshotManifest, StoreLock, UnknownState, SNAPSHOT_SCHEMA, UNKNOWN_STATE_SCHEMA,
+};
 
 /// The schema of a scene document.
 pub const SCENE_SCHEMA: &str = "michelangelo.scene/0";

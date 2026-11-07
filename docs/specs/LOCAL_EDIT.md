@@ -30,16 +30,22 @@ The store lives next to the artifacts of a reconstruction run:
 ```text
 <workspace>/recon/<revision>/run-NNNN/
   scene/
-    s0001/scene.json                      # the initial accepted scene
+    s0001/scene.json                      # the initial accepted scene (+ verification bundle)
     s0001/components/<name>.obj           # one OBJ per component
     s0002/scene.json                      # created only by an accepted candidate
     s0002/components/<name>.obj
+  verification/
+    snapshots/<candidate_id>/manifest.json  # full post-change result at submit (immutable)
+    snapshots/<candidate_id>/geometry/*.obj # full component set (base + change)
+    unknowns/revisions/sNNNN.json          # unknown state referenced by the revision (immutable)
+    run.lock                               # OS advisory lock of the store
   candidates/
     cand-0001/candidate.json              # the submitted candidate
-    cand-0001/decision.json               # the decision of the candidate
-    cand-0001/geometry/<name>.obj         # the geometry of the candidate
+    cand-0001/geometry/<name>.obj         # the submitted bytes (snapshot source only)
+    cand-0001/decisions/NNNN-<kind>.json  # append-only decision history
+    cand-0001/decision.json               # latest-decision mirror
     index.json                            # the ordered index of the candidates
-  current.json                            # the authoritative pointer
+  current.json                            # the authoritative pointer (one bundle)
 ```
 
 * `s0001` is created by `michelangelo edit init --run <run_dir> [--protect <name,...>]`
@@ -48,9 +54,23 @@ The store lives next to the artifacts of a reconstruction run:
   components listed by `--protect` are marked `protected: true` (an author decision taken at
   initialization time, not something a candidate may redefine) and unknown names are rejected.
   Because revisions are immutable, protection cannot be retrofitted into an existing `s0001`.
+  Init also writes the first unknown-state document from the immutable `report.json` (every
+  unknown `open`, stubs flagged; no unknown is closed by a part-id match in this stage).
+* `submit` copies the candidate into `candidates/<id>` **and** creates an immutable full-result
+  snapshot under `verification/snapshots/<id>` with per-file SHA-256, the base geometry digest,
+  candidate/task/package/policy digests and the aggregate digest (§`VERIFICATION_STATE.md`).
+  Publication always uses the snapshot; the candidate geometry folder is never the source of a
+  revision.
+* `current.json`, `candidates/index.json` and the latest mirror are the only mutable files;
+  every decision (including refusals) is appended to `candidates/<id>/decisions/`.
 * The initialization is idempotent: an existing scene is never overwritten and
   an existing `current.json` is never reset.
-* `current.json` and `candidates/index.json` are the only mutable files.
+* Every store mutation takes the exclusive OS advisory lock `verification/run.lock`
+  (`std::fs::File::try_lock`): a busy lock is `STORE_BUSY` (exit 2), the boundary never waits,
+  and the OS releases the lock when the owning process dies (no TTL stealing). Accept
+  re-reads `current.json` under the lock and requires the candidate base to still be current.
+* A refused acceptance (missing snapshot, evidence mismatch, stale base) appends an
+  `accept-refused` record with its diagnostic code; the latest mirror is not rewritten.
 
 ### The scene document
 
@@ -76,13 +96,28 @@ The store lives next to the artifacts of a reconstruction run:
     }
   ],
   "source": {"package_id": "demo-lantern", "package_revision": 1},
+  "verification": {
+    "geometry_digest": "<aggregate sha256 of the component set>",
+    "bindings": [],
+    "unknowns": {"revision": "s0002",
+                 "path": "verification/unknowns/revisions/s0002.json",
+                 "sha256": "<64 hex characters>"},
+    "evaluations": [], "confirmations": [], "resolutions": [],
+    "policies": {"package_sha256": null, "workspace_policy_sha256": null},
+    "tool_versions": {"michelangelo": "0.1.0", "solver": "voxel-carve/1"},
+    "created_at": "2026-01-02T03:04:05Z"
+  },
   "notes": []
 }
 ```
 
 Every listed OBJ exists inside the revision directory and its SHA-256 matches
 the bytes of the file. The document never carries an absolute path: the `obj`
-field is relative to the revision directory.
+field is relative to the revision directory. The `verification` block is the
+bundle of hash-pinned evidence; every referenced document must exist and match
+its digest before the revision can be published. `bindings` is an empty list
+until IT-8C creates the first binding version; `evaluations`, `confirmations`
+and `resolutions` are filled by IT-8B/IT-8C.
 
 ### The pointer
 
@@ -128,18 +163,34 @@ candidate is `proposed`, `accepted` or `rejected`.
 
 ## Immutability and atomicity
 
+* At `submit` the full post-change result is snapshotted under
+  `verification/snapshots/<candidate_id>` (temp dir + rename): unchanged components are
+  copied byte-identically from the base revision, changed/added components come from the
+  candidate; the manifest pins every file, the base digest and the aggregate digest.
 * A revision is written into `scene/<revision>.tmp` and renamed into place.
   A reader never observes a half-written revision and an existing revision is
-  never overwritten.
+  never overwritten. Publication copies the geometry **from the snapshot**, never from
+  `candidates/<id>/geometry`.
 * `current.json` and `candidates/index.json` are published with
-  write-to-temp + rename.
-* The order of an acceptance is: validate → publish the revision → publish the
-  pointer → publish the index → write the decision report. A failure before the
-  pointer is published leaves the previous `current.json` authoritative; the
-  operation can simply be repeated (documented recovery).
+  write-to-temp + rename. All mutations run under the exclusive OS lock
+  `verification/run.lock`; a busy lock is `STORE_BUSY` (exit 2) and the boundary never waits.
+* The order of an acceptance is: validate → lock → re-read the pointer and require the
+  candidate base to still be current → re-verify the snapshot → publish the revision →
+  publish the pointer → publish the index → write the decision history. A failure before the
+  pointer is published leaves the previous `current.json` authoritative; the operation can
+  be repeated and reuses the already published revision of the same candidate.
 * A component that a candidate does not change is copied into the new revision
   **byte-identically**; only the changed components carry new bytes. The base
   revision and the `source/` directory of the run are never modified.
+* A repeated acceptance of an accepted candidate is idempotent: it returns the historical
+  accepted result (same `resulting_scene_revision`, exit 0), appends an `accept-idempotent`
+  history record and never rewrites the accepted decision or the candidate status. After a
+  rollback the same call still returns the historical result and does **not** switch the
+  scene back.
+* Rejecting an accepted candidate is refused (`CANDIDATE_ALREADY_ACCEPTED`, exit 1) without
+  rewriting the history; a repeated rejection is idempotent.
+* A refused acceptance (missing snapshot, evidence mismatch, stale base) appends an
+  `accept-refused` record with the code; the latest mirror is left untouched.
 
 ## The edit candidate
 
@@ -328,9 +379,9 @@ michelangelo edit show     --run <run_dir> [--candidate <id>] [--json]
 
 | Exit code | Meaning |
 |---|---|
-| `0` | the operation succeeded (the candidate was accepted, proposed or rolled back) |
-| `1` | the candidate was rejected by the validator |
-| `2` | usage error, IO error or a candidate that cannot be interpreted |
+| `0` | the operation succeeded (accepted/proposed/rolled back, or an idempotent repeat with the historical result) |
+| `1` | the candidate was rejected or the store refused the operation (`STALE_BASE`, `EVIDENCE_MISMATCH`, `SNAPSHOT_MISSING`, `CANDIDATE_ALREADY_ACCEPTED`, unknown resolution required in IT-8C) |
+| `2` | usage error, IO error, a candidate that cannot be interpreted, or a busy store (`STORE_BUSY`) |
 
 * `submit` copies the candidate into the store (`candidates/<id>/`), validates
   it and decides: the decision is `proposed` (an explicit author acceptance is
@@ -364,9 +415,16 @@ The machine-readable output of `--json`:
 | the publication fails (IO error) | the previous `current.json` stays authoritative, exit code 2 |
 | the candidate is accepted | a new revision is published and the pointer moves, exit code 0 |
 | the rollback target does not exist | error, exit code 2 |
+| the candidate has no snapshot (legacy) | `SNAPSHOT_MISSING`, no revision, `accept-refused` history, exit code 1 |
+| the candidate geometry or the snapshot was tampered after submit | `EVIDENCE_MISMATCH`, no revision, `accept-refused` history, exit code 1 |
+| the candidate base is not current at publication time | `STALE_BASE`, no revision, `accept-refused` history, exit code 1 |
+| the store lock is held by another process | `STORE_BUSY`, no change, exit code 2 |
+| the candidate was already accepted | repeated accept returns the historical result (exit 0); rejecting it is `CANDIDATE_ALREADY_ACCEPTED` (exit 1) |
+| a crash happens between publishing the revision and the pointer | the previous bundle stays authoritative; a retry reuses the published revision |
 
 The rollback is a pointer move, never an inversion: the revisions keep their
-content and their lineage, and the rollback itself is recorded in the index.
+content and their lineage (including the unknown-state document each revision
+references), and the rollback itself is recorded in the index.
 
 ## The limits of v0
 

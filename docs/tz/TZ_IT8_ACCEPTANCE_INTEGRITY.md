@@ -145,10 +145,15 @@ A3. Защита от подмены: accept сверяет файлы сним�
 несовпадение → `EVIDENCE_MISMATCH`. Подмена `candidates/<id>/geometry` после submit не влияет
 на публикацию (публикуется снимок) и обнаруживается отдельной проверкой snapshot-manifest.
 Evaluation digest берётся из Core-реестра `evaluations/index.json`, а не из self-report.
+Отказ в accept (`SNAPSHOT_MISSING`, `EVIDENCE_MISMATCH`, `STALE_BASE`) дописывается в историю
+как `accept-refused` с кодом; latest-зеркало кандидата не перезаписывается (это попытка, не
+новое решение), поэтому подмена остаётся аудируемой.
 A4. Append-only история: `decisions/NNNN-<kind>.json` (`submit|accept|accept-idempotent|reject|
-reject-idempotent|reject-refused`); `decision.json` — latest-зеркало. Повторный accept: exit 0,
-та же ревизия, запись `accept-idempotent`, `index.status` не портится. Reject принятого: exit 1
-`CANDIDATE_ALREADY_ACCEPTED`, история не переписывается. Повторный reject идемпотентен.
+reject-idempotent|reject-refused|accept-refused`); `decision.json` — latest-зеркало. Повторный
+accept: exit 0, та же ревизия, запись `accept-idempotent`, `index.status` не портится.
+Reject принятого: exit 1 `CANDIDATE_ALREADY_ACCEPTED`, история не переписывается. Повторный
+reject идемпотентен. Ошибки store типизированы (`StoreBusy`→2, `EvidenceMismatch`/`SnapshotMissing`/
+`StaleBase`→1); код печатается в stderr.
 A5. Bundle/rollback: при init создаётся `unknowns/revisions/s0001.json` из immutable
 `report.json` (статусы `open|stub_pending`; нет report → пусто); каждая публикация пишет
 immutable снимок unknown-состояния, на который ссылается `scene.json`; rollback под lock
@@ -158,7 +163,8 @@ immutable снимок unknown-состояния, на который ссыл�
 Failure-тесты A: подмена store-геометрии; подмена snapshot; lock занят → BUSY; lock освобождается
 при kill; гонка двух процессов (не более одной публикации из базы); двойной accept; reject-after-
 accept; двойной reject; rollback состояния; crash между publish и pointer; hash historical report;
-accept старого кандидата без snapshot → `SNAPSHOT_MISSING`.
+accept старого кандидата без snapshot → `SNAPSHOT_MISSING`; отказ accept записывается в историю
+(`accept-refused`) без изменения latest-зеркала.
 
 ## 6. IT-8B — Candidate evaluation
 
@@ -325,14 +331,39 @@ reviewer; RED — фикс и повтор. Commit на `dev` после GREEN, 
 ## 11. Evidence
 
 Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 0; A2 race — 3
-принятия из одной базы на старом коде). Evidence блоков A/B/C и демо — заполняется по мере
-выполнения.
+принятия из одной базы на старом коде).
+
+### IT-8A (acceptance integrity)
+
+- Code: `michelangelo_edit` (`verification.rs` snapshot/lock/state, `apply.rs` publish/history,
+  `scene.rs` bundle, typed `error.rs`), CLI exit-code mapping, 27 new crate failure tests
+  (`tests/verification.rs`) + CLI tests (two-process lock, tamper, legacy, idempotence).
+- Independent Lead reproduction: `target/techlead/IT-8/verify_a_fixed.py` → `verify-A.json`,
+  **14/14 checks passed**: full-set hash-verified snapshot; source-candidate tamper ignored;
+  store tamper and snapshot tamper refused `EVIDENCE_MISMATCH` with `accept-refused` history and
+  no revision; idempotent accept (exit 0, same revision, accepted history intact, index accepted);
+  reject-after-accept refused without corrupting the mirror; accept after rollback returns the
+  historical result and does not switch the scene back; bundle/unknown-state refs hash-verified
+  per revision with rollback state selection and unchanged historical report hash; legacy
+  `SNAPSHOT_MISSING`; OS lock busy → exit 2 and recovery after holder death; 12-process
+  concurrency → 1 accepted / 1 revision; crash-before-pointer and injected-race Rust tests pass.
+- Pre-fix audit reproduction re-run on the fixed code: A4 no longer reproduced (second accept
+  accepted, decision unchanged, index accepted); A1/A3 store tamper now refuses (no revision).
+  The pre-fix evidence is preserved as `audit-reproduction-before-A.json`.
+- Reviewer verdict: **GREEN** (child `f21acc57`, route `xiaomi/mimo-v2.6-pro`); three minor
+  findings were fixed before the commit: (1) refused acceptances now write their history under
+  the store lock (lock taken before evidence verification), (2) the dead `CANDIDATE_ALREADY_ACCEPTED`
+  exit-code arm was removed (that code travels as a decision diagnostic, not an `EditError`),
+  (3) the `kinds=['?']` line was a script display issue (kinds are pinned by the unit test).
+  `bindings_sha256` is intentionally null until IT-8C. The reviewer could not re-execute commands
+  (no shell in the preset) and verified code/JSON only; the Lead ladder and `verify-A.json`
+  (14/14 after the fixes) are the command evidence.
 
 ### Review log
 
 | блок | attempt | reviewer | route | verdict | findings |
 |---|---|---|---|---|---|
 | Stage 0 | – | – | – | pending | – |
-| A | – | – | – | pending | – |
+| A | 1 | child `f21acc57` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | MINOR: refusal history written outside the lock (fixed: lock before evidence); dead exit-code arm (fixed); `kinds ?` (script display only). Lead reproduced 14/14 after fixes. |
 | B | – | – | – | pending | – |
 | C | – | – | – | pending | – |

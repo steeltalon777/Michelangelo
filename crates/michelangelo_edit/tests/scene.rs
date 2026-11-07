@@ -28,6 +28,7 @@ fn scene_of(store_components: Vec<SceneComponent>, revision: &str) -> Scene {
             package_revision: 1,
         },
         notes: Vec::new(),
+        verification: None,
     }
 }
 

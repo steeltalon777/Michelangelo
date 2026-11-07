@@ -9,8 +9,13 @@
 //!
 //! * `0` — the operation succeeded (the candidate was accepted, proposed or
 //!   rolled back),
-//! * `1` — the candidate was rejected by the validator,
-//! * `2` — usage error, IO error or a candidate that cannot be interpreted.
+//! * `1` — the candidate was rejected by the validator, the evidence does not
+//!   match (`EVIDENCE_MISMATCH`), the candidate carries no snapshot
+//!   (`SNAPSHOT_MISSING`), the base is not current any more (`STALE_BASE`)
+//!   or the candidate was already accepted
+//!   (`CANDIDATE_ALREADY_ACCEPTED`),
+//! * `2` — usage error, IO error, a candidate that cannot be interpreted or a
+//!   store that is locked by another process (`STORE_BUSY`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -310,6 +315,14 @@ fn print_decision(report: &DecisionReport, json: bool) -> ExitCode {
         println!(
             "decided_by: {}",
             report.decided_by.as_deref().unwrap_or("-")
+        );
+        println!(
+            "snapshot_id: {}",
+            report.snapshot_id.as_deref().unwrap_or("-")
+        );
+        println!(
+            "aggregate_sha256: {}",
+            report.aggregate_sha256.as_deref().unwrap_or("-")
         );
         println!("checks:");
         for check in &report.checks {

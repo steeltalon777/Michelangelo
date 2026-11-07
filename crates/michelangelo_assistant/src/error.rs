@@ -120,7 +120,11 @@ impl From<michelangelo_edit::EditError> for AssistantError {
             }
             michelangelo_edit::EditError::Schema { message }
             | michelangelo_edit::EditError::Scene { message }
-            | michelangelo_edit::EditError::Internal { message } => {
+            | michelangelo_edit::EditError::Internal { message }
+            | michelangelo_edit::EditError::StoreBusy { message }
+            | michelangelo_edit::EditError::EvidenceMismatch { message }
+            | michelangelo_edit::EditError::SnapshotMissing { message }
+            | michelangelo_edit::EditError::StaleBase { message } => {
                 AssistantError::Invalid { message }
             }
         }

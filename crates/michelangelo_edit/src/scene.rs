@@ -50,6 +50,12 @@ pub const INDEX_FILE_NAME: &str = "index.json";
 pub const SOURCE_DIR_NAME: &str = "source";
 /// The name of the reconstruction report of a run.
 pub const REPORT_FILE_NAME: &str = "report.json";
+/// The name of the directory of the copy of the input package of a run.
+pub const PACKAGE_DIR_NAME: &str = "package";
+/// The name of the copy of the input package of a run.
+pub const PACKAGE_FILE_NAME: &str = "package.json";
+/// The name of the directory of the decision history of a candidate.
+pub const DECISIONS_DIR_NAME: &str = "decisions";
 
 /// One component of a scene revision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -101,6 +107,107 @@ pub struct Scene {
     pub source: SceneSource,
     /// Free form notes.
     pub notes: Vec<String>,
+    /// The verification bundle of the revision.
+    ///
+    /// The field is optional: a revision that was published before the
+    /// verification contract carries no bundle and stays readable (it is
+    /// never inferred as verified).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<SceneVerification>,
+}
+
+/// The verification bundle of a scene revision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneVerification {
+    /// The aggregate digest of the components of the revision.
+    pub geometry_digest: String,
+    /// The bindings the revision refers to (empty in IT-8A).
+    #[serde(default)]
+    pub bindings: Vec<BindingRef>,
+    /// The immutable state of the unknowns the revision refers to.
+    #[serde(default)]
+    pub unknowns: Option<UnknownStateRef>,
+    /// The evaluation reports the revision refers to (empty in IT-8A).
+    #[serde(default)]
+    pub evaluations: Vec<EvaluationRef>,
+    /// The author confirmations the revision refers to (empty in IT-8A).
+    #[serde(default)]
+    pub confirmations: Vec<ConfirmationRef>,
+    /// The resolutions the revision refers to (empty in IT-8A).
+    #[serde(default)]
+    pub resolutions: Vec<ResolutionRef>,
+    /// The policies that applied to the revision.
+    pub policies: VerificationPolicies,
+    /// The versions of the tools that produced the revision.
+    pub tool_versions: BTreeMap<String, String>,
+    /// The creation time of the bundle (RFC 3339, UTC).
+    pub created_at: String,
+}
+
+/// A reference to a binding document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BindingRef {
+    /// The version of the bindings.
+    pub version: String,
+    /// The path of the document, relative to the run directory.
+    pub path: String,
+    /// The SHA-256 of the bytes of the document.
+    pub sha256: String,
+}
+
+/// A reference to an immutable state document of the unknowns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnknownStateRef {
+    /// The revision the state belongs to.
+    pub revision: String,
+    /// The path of the document, relative to the run directory.
+    pub path: String,
+    /// The SHA-256 of the bytes of the document.
+    pub sha256: String,
+}
+
+/// A reference to an evaluation report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvaluationRef {
+    /// The identifier of the evaluation.
+    pub evaluation_id: String,
+    /// The path of the document, relative to the run directory.
+    pub path: String,
+    /// The SHA-256 of the bytes of the document.
+    pub sha256: String,
+}
+
+/// A reference to an author confirmation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfirmationRef {
+    /// The identifier of the confirmation.
+    pub confirmation_id: String,
+    /// The path of the document, relative to the run directory.
+    pub path: String,
+    /// The SHA-256 of the bytes of the document.
+    pub sha256: String,
+}
+
+/// A reference to a resolution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolutionRef {
+    /// The identifier of the resolution.
+    pub resolution_id: String,
+    /// The path of the document, relative to the run directory.
+    pub path: String,
+    /// The SHA-256 of the bytes of the document.
+    pub sha256: String,
+}
+
+/// The policies that applied to a scene revision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VerificationPolicies {
+    /// The digest of the copy of the input package (None when the run carries
+    /// no copy of the package).
+    pub package_sha256: Option<String>,
+    /// The digest of the workspace policy (None when the workspace carries no
+    /// policy).
+    pub workspace_policy_sha256: Option<String>,
 }
 
 impl Scene {
@@ -287,6 +394,69 @@ impl SceneStore {
     /// The reconstruction report of the run.
     pub fn report_path(&self) -> PathBuf {
         self.run_dir.join(REPORT_FILE_NAME)
+    }
+
+    /// The verification directory of the store.
+    pub fn verification_dir(&self) -> PathBuf {
+        self.run_dir
+            .join(crate::verification::VERIFICATION_DIR_NAME)
+    }
+
+    /// The snapshots directory of the store.
+    pub fn snapshots_dir(&self) -> PathBuf {
+        self.verification_dir()
+            .join(crate::verification::SNAPSHOTS_DIR_NAME)
+    }
+
+    /// The directory of the snapshot of a candidate.
+    pub fn snapshot_dir(&self, candidate_id: &str) -> PathBuf {
+        self.snapshots_dir().join(candidate_id)
+    }
+
+    /// The manifest of the snapshot of a candidate.
+    pub fn snapshot_manifest_path(&self, candidate_id: &str) -> PathBuf {
+        self.snapshot_dir(candidate_id)
+            .join(crate::verification::MANIFEST_FILE_NAME)
+    }
+
+    /// The unknowns directory of the store.
+    pub fn unknowns_dir(&self) -> PathBuf {
+        self.verification_dir()
+            .join(crate::verification::UNKNOWNS_DIR_NAME)
+    }
+
+    /// The directory of the immutable unknown states of the store.
+    pub fn unknown_revisions_dir(&self) -> PathBuf {
+        self.unknowns_dir()
+            .join(crate::verification::REVISIONS_DIR_NAME)
+    }
+
+    /// The immutable unknown state of a revision.
+    pub fn unknown_state_path(&self, scene_revision: &str) -> PathBuf {
+        self.unknown_revisions_dir()
+            .join(format!("{scene_revision}.json"))
+    }
+
+    /// The append-only event trail of the unknowns.
+    pub fn events_path(&self) -> PathBuf {
+        self.unknowns_dir()
+            .join(crate::verification::EVENTS_FILE_NAME)
+    }
+
+    /// The lock file of the store.
+    pub fn lock_path(&self) -> PathBuf {
+        self.verification_dir()
+            .join(crate::verification::LOCK_FILE_NAME)
+    }
+
+    /// The copy of the input package of the run (the run may carry none).
+    pub fn package_copy_path(&self) -> PathBuf {
+        self.run_dir.join(PACKAGE_DIR_NAME).join(PACKAGE_FILE_NAME)
+    }
+
+    /// The directory of the decision history of a candidate.
+    pub fn decisions_dir(&self, candidate_id: &str) -> PathBuf {
+        self.candidate_dir(candidate_id).join(DECISIONS_DIR_NAME)
     }
 }
 
@@ -496,6 +666,7 @@ pub fn init_scene_with_protection(
         let scene = load_scene(&store, &first)?;
         ensure_current(&store, &first, clock)?;
         ensure_index(&store)?;
+        ensure_unknown_state(&store, &first, clock)?;
         return Ok(scene);
     }
 
@@ -531,6 +702,17 @@ pub fn init_scene_with_protection(
     }
 
     let created_at = clock.now_rfc3339_utc();
+
+    // The immutable state of the unknowns of the first revision: it is seeded
+    // from the immutable report of the run, every unknown stays open.
+    let unknown_state = crate::verification::seed_unknown_state(&store, &first, &created_at);
+    crate::verification::write_unknown_state(&store, &unknown_state)?;
+    let unknown_sha256 = crate::verification::file_sha256(&store.unknown_state_path(&first))?;
+    let component_hashes: Vec<(String, String)> = payloads
+        .iter()
+        .map(|(name, bytes)| (name.clone(), michelangelo_input::sha256::sha256_hex(bytes)))
+        .collect();
+
     let scene = Scene {
         schema: SCENE_SCHEMA.to_string(),
         run_id: run_id_of(run_dir),
@@ -541,6 +723,24 @@ pub fn init_scene_with_protection(
         components,
         source: read_source_identity(&store),
         notes: Vec::new(),
+        verification: Some(SceneVerification {
+            geometry_digest: crate::verification::aggregate_digest(&component_hashes),
+            bindings: Vec::new(),
+            unknowns: Some(UnknownStateRef {
+                revision: first.clone(),
+                path: crate::verification::unknown_state_relative_path(&first),
+                sha256: unknown_sha256,
+            }),
+            evaluations: Vec::new(),
+            confirmations: Vec::new(),
+            resolutions: Vec::new(),
+            policies: VerificationPolicies {
+                package_sha256: crate::verification::package_digest(&store),
+                workspace_policy_sha256: crate::verification::workspace_policy_digest(&store),
+            },
+            tool_versions: crate::verification::tool_versions(&store),
+            created_at: created_at.clone(),
+        }),
     };
 
     publish_revision(&store, &scene, &payloads)?;
@@ -764,4 +964,22 @@ fn ensure_index(store: &SceneStore) -> Result<(), EditError> {
         return Ok(());
     }
     write_index(store, &CandidateIndex::empty())
+}
+
+/// Make sure the revision carries an immutable state document of the unknowns.
+///
+/// A revision that was published before the verification contract carries no
+/// state document: the document is added, the revision itself is never
+/// modified.
+fn ensure_unknown_state(
+    store: &SceneStore,
+    scene_revision: &str,
+    clock: &dyn Clock,
+) -> Result<(), EditError> {
+    if store.unknown_state_path(scene_revision).is_file() {
+        return Ok(());
+    }
+    let state =
+        crate::verification::seed_unknown_state(store, scene_revision, &clock.now_rfc3339_utc());
+    crate::verification::write_unknown_state(store, &state)
 }

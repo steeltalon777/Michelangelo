@@ -7,6 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -79,6 +80,17 @@ impl Scratch {
 fn digest(path: &Path) -> String {
     let bytes = fs::read(path).expect("the file is read");
     michelangelo_input::sha256::sha256_hex(&bytes)
+}
+
+/// A child helper that is always killed and reaped when the test ends, also on
+/// panic: a leaked lock holder would keep the store busy for later tests.
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 #[test]
@@ -167,6 +179,34 @@ fn the_init_prints_the_scene_as_json() {
             .len(),
         2
     );
+    // The bundle of the revision references its immutable unknown state.
+    let unknowns = &value["verification"]["unknowns"];
+    assert_eq!(unknowns["revision"], "s0001");
+    assert_eq!(
+        unknowns["path"],
+        "verification/unknowns/revisions/s0001.json"
+    );
+    let referenced = scratch
+        .run_dir
+        .join(unknowns["path"].as_str().unwrap_or_default());
+    assert!(referenced.is_file(), "the referenced document exists");
+    assert_eq!(unknowns["sha256"], digest(&referenced));
+}
+
+#[test]
+fn the_init_seeds_the_unknown_state() {
+    let scratch = Scratch::new();
+    let output = michelangelo(&["edit", "init", "--run", &scratch.path()]);
+    assert_eq!(code_of(&output), 0, "{}", stderr_of(&output));
+    let path = scratch
+        .run_dir
+        .join("verification/unknowns/revisions/s0001.json");
+    assert!(path.is_file(), "the unknown state is seeded");
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("the state is readable"))
+            .expect("the state is JSON");
+    assert_eq!(value["schema"], "michelangelo.unknown-state/0");
+    assert_eq!(value["revision"], "s0001");
 }
 
 #[test]
@@ -206,6 +246,38 @@ fn a_valid_candidate_is_submitted_and_accepted() {
     .expect("the pointer is JSON");
     assert_eq!(pointer["scene_revision"], "s0002");
     assert_eq!(pointer["candidate_id"], "cand-0001");
+}
+
+#[test]
+fn the_submission_registers_a_snapshot_of_the_full_result() {
+    let scratch = Scratch::new();
+    michelangelo(&["edit", "init", "--run", &scratch.path()]);
+    let candidate = fixtures().join("candidate-valid");
+    michelangelo(&[
+        "edit",
+        "submit",
+        "--run",
+        &scratch.path(),
+        "--candidate",
+        &candidate.display().to_string(),
+    ]);
+    let snapshot = scratch.run_dir.join("verification/snapshots/cand-0001");
+    assert!(snapshot.join("manifest.json").is_file());
+    assert!(snapshot.join("geometry/base.obj").is_file());
+    assert!(snapshot.join("geometry/lid.obj").is_file());
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(snapshot.join("manifest.json")).expect("readable"),
+    )
+    .expect("the manifest is JSON");
+    assert_eq!(manifest["schema"], "michelangelo.geometry-snapshot/0");
+    assert_eq!(manifest["snapshot_id"], "cand-0001");
+    assert_eq!(manifest["base"]["scene_revision"], "s0001");
+    assert_eq!(manifest["files"].as_array().expect("the files").len(), 2);
+    // The unchanged component is copied byte-identically from the base.
+    assert_eq!(
+        digest(&snapshot.join("geometry/base.obj")),
+        digest(&scratch.run_dir.join("scene/s0001/components/base.obj"))
+    );
 }
 
 #[test]
@@ -361,6 +433,13 @@ fn a_rollback_points_back_to_the_previous_revision() {
     )
     .expect("the pointer is JSON");
     assert_eq!(pointer["scene_revision"], "s0001");
+    // The authoritative bundle is the one of the target revision.
+    let scene: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(scratch.run_dir.join("scene/s0001/scene.json"))
+            .expect("the scene is readable"),
+    )
+    .expect("the scene is JSON");
+    assert_eq!(scene["verification"]["unknowns"]["revision"], "s0001");
 }
 
 #[test]
@@ -464,6 +543,11 @@ fn the_decision_report_is_printed_as_json() {
     assert_eq!(value["decision"], "proposed");
     assert_eq!(value["candidate_id"], "cand-0001");
     assert!(value["checks"].as_array().expect("the checks").len() >= 10);
+    assert_eq!(value["snapshot_id"], "cand-0001");
+    assert!(!value["aggregate_sha256"]
+        .as_str()
+        .unwrap_or_default()
+        .is_empty());
 }
 
 #[test]
@@ -474,4 +558,295 @@ fn the_edit_help_is_available() {
     for command in ["init", "submit", "accept", "reject", "rollback", "show"] {
         assert!(text.contains(command), "the help misses '{command}'");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The acceptance integrity of IT-8A
+// ---------------------------------------------------------------------------
+
+/// Submit the valid fixture into a scratch run.
+fn submitted(scratch: &Scratch) {
+    michelangelo(&["edit", "init", "--run", &scratch.path()]);
+    let candidate = fixtures().join("candidate-valid");
+    let output = michelangelo(&[
+        "edit",
+        "submit",
+        "--run",
+        &scratch.path(),
+        "--candidate",
+        &candidate.display().to_string(),
+    ]);
+    assert_eq!(code_of(&output), 0, "{}", stderr_of(&output));
+}
+
+fn accept(scratch: &Scratch) -> Output {
+    michelangelo(&[
+        "edit",
+        "accept",
+        "--run",
+        &scratch.path(),
+        "--candidate",
+        "cand-0001",
+        "--by",
+        "alice",
+    ])
+}
+
+#[test]
+fn a_repeated_acceptance_is_idempotent() {
+    let scratch = Scratch::new();
+    submitted(&scratch);
+    let first = accept(&scratch);
+    assert_eq!(code_of(&first), 0, "{}", stderr_of(&first));
+    assert!(stdout_of(&first).contains("decision: accepted"));
+    assert!(stdout_of(&first).contains("resulting_scene_revision: s0002"));
+
+    let accepted = fs::read(
+        scratch
+            .run_dir
+            .join("candidates/cand-0001/decisions/0002-accept.json"),
+    )
+    .expect("the accepted decision is readable");
+
+    let second = accept(&scratch);
+    assert_eq!(code_of(&second), 0, "{}", stderr_of(&second));
+    assert!(stdout_of(&second).contains("decision: accepted"));
+    assert!(stdout_of(&second).contains("resulting_scene_revision: s0002"));
+
+    assert_eq!(
+        accepted,
+        fs::read(
+            scratch
+                .run_dir
+                .join("candidates/cand-0001/decisions/0002-accept.json")
+        )
+        .expect("the accepted decision is readable"),
+        "the accepted history is never rewritten"
+    );
+    assert!(scratch
+        .run_dir
+        .join("candidates/cand-0001/decisions/0003-accept-idempotent.json")
+        .is_file());
+    let index: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(scratch.run_dir.join("candidates/index.json"))
+            .expect("the index is readable"),
+    )
+    .expect("the index is JSON");
+    assert_eq!(index["candidates"][0]["status"], "accepted");
+    assert_eq!(index["candidates"][0]["scene_revision"], "s0002");
+}
+
+#[test]
+fn a_rejection_of_an_accepted_candidate_is_refused() {
+    let scratch = Scratch::new();
+    submitted(&scratch);
+    let accepted = accept(&scratch);
+    assert_eq!(code_of(&accepted), 0, "{}", stderr_of(&accepted));
+    let history = fs::read(
+        scratch
+            .run_dir
+            .join("candidates/cand-0001/decisions/0002-accept.json"),
+    )
+    .expect("the accepted decision is readable");
+
+    let output = michelangelo(&[
+        "edit",
+        "reject",
+        "--run",
+        &scratch.path(),
+        "--candidate",
+        "cand-0001",
+        "--by",
+        "bob",
+        "--reason",
+        "too late",
+    ]);
+    assert_eq!(code_of(&output), 1, "{}", stderr_of(&output));
+    assert!(stdout_of(&output).contains("CANDIDATE_ALREADY_ACCEPTED"));
+    assert_eq!(
+        history,
+        fs::read(
+            scratch
+                .run_dir
+                .join("candidates/cand-0001/decisions/0002-accept.json")
+        )
+        .expect("the accepted decision is readable"),
+        "the accepted history is never rewritten"
+    );
+    let index: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(scratch.run_dir.join("candidates/index.json"))
+            .expect("the index is readable"),
+    )
+    .expect("the index is JSON");
+    assert_eq!(index["candidates"][0]["status"], "accepted");
+}
+
+#[test]
+fn a_repeated_rejection_is_idempotent() {
+    let scratch = Scratch::new();
+    submitted(&scratch);
+    let reject = || {
+        michelangelo(&[
+            "edit",
+            "reject",
+            "--run",
+            &scratch.path(),
+            "--candidate",
+            "cand-0001",
+            "--by",
+            "bob",
+            "--reason",
+            "the lid is wrong",
+        ])
+    };
+    let first = reject();
+    assert_eq!(code_of(&first), 1, "{}", stderr_of(&first));
+    let history = fs::read(
+        scratch
+            .run_dir
+            .join("candidates/cand-0001/decisions/0002-reject.json"),
+    )
+    .expect("the rejected decision is readable");
+    let second = reject();
+    assert_eq!(code_of(&second), 1, "{}", stderr_of(&second));
+    assert_eq!(
+        history,
+        fs::read(
+            scratch
+                .run_dir
+                .join("candidates/cand-0001/decisions/0002-reject.json")
+        )
+        .expect("the rejected decision is readable"),
+        "the rejected history is never rewritten"
+    );
+    assert!(scratch
+        .run_dir
+        .join("candidates/cand-0001/decisions/0003-reject-idempotent.json")
+        .is_file());
+}
+
+#[test]
+fn a_tampered_candidate_geometry_is_refused() {
+    let scratch = Scratch::new();
+    submitted(&scratch);
+    let geometry = scratch
+        .run_dir
+        .join("candidates/cand-0001/geometry/lid.obj");
+    fs::write(&geometry, "# a tampered lid\n").expect("the geometry is written");
+    let output = accept(&scratch);
+    assert_eq!(code_of(&output), 1, "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("EVIDENCE_MISMATCH"));
+    assert!(!scratch.run_dir.join("scene/s0002").exists());
+}
+
+#[test]
+fn a_tampered_snapshot_is_refused() {
+    let scratch = Scratch::new();
+    submitted(&scratch);
+    let geometry = scratch
+        .run_dir
+        .join("verification/snapshots/cand-0001/geometry/lid.obj");
+    fs::write(&geometry, "# a tampered lid\n").expect("the geometry is written");
+    let output = accept(&scratch);
+    assert_eq!(code_of(&output), 1, "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("EVIDENCE_MISMATCH"));
+    assert!(!scratch.run_dir.join("scene/s0002").exists());
+}
+
+#[test]
+fn a_candidate_without_a_snapshot_cannot_be_accepted() {
+    let scratch = Scratch::new();
+    michelangelo(&["edit", "init", "--run", &scratch.path()]);
+    // A legacy candidate: it is in the store, but it carries no snapshot.
+    let legacy = scratch.run_dir.join("candidates/cand-legacy");
+    fs::create_dir_all(legacy.join("geometry")).expect("the directory is created");
+    let document = fs::read_to_string(fixtures().join("candidate-valid/candidate.json"))
+        .expect("the fixture is readable");
+    let document = document.replace("\"cand-0001\"", "\"cand-legacy\"");
+    fs::write(legacy.join("candidate.json"), document).expect("the document is written");
+    copy_tree(
+        &fixtures().join("candidate-valid/geometry"),
+        &legacy.join("geometry"),
+    );
+    let output = michelangelo(&[
+        "edit",
+        "accept",
+        "--run",
+        &scratch.path(),
+        "--candidate",
+        "cand-legacy",
+        "--by",
+        "alice",
+    ]);
+    assert_eq!(code_of(&output), 1, "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("SNAPSHOT_MISSING"));
+    assert!(!scratch.run_dir.join("scene/s0002").exists());
+}
+
+/// The helper of the two-process test of the lock.
+///
+/// The test does nothing unless the environment asks for it: the parent
+/// process starts a copy of this binary that holds the lock of the store.
+#[test]
+fn the_lock_holder_waits_for_the_lock() {
+    let run = match std::env::var("MICHELANGELO_LOCK_RUN") {
+        Ok(run) => run,
+        Err(_) => return,
+    };
+    let ready = std::env::var("MICHELANGELO_LOCK_READY").unwrap_or_default();
+    let store = michelangelo_edit::scene::SceneStore::new(Path::new(&run));
+    let _lock = michelangelo_edit::verification::StoreLock::acquire(&store, "holder")
+        .expect("the lock is taken");
+    fs::write(&ready, "locked").expect("the ready file is written");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_busy_store_is_refused_and_recovers_when_the_holder_dies() {
+    let scratch = Scratch::new();
+    submitted(&scratch);
+    let ready_path = scratch.run_dir.join("verification/holder.ready");
+
+    let child_log = scratch.run_dir.join("holder.log");
+    let child_error = scratch.run_dir.join("holder.err");
+    let child = ChildGuard(
+        Command::new(std::env::current_exe().expect("the test binary"))
+            .args([
+                "--exact",
+                "the_lock_holder_waits_for_the_lock",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("MICHELANGELO_LOCK_RUN", &scratch.run_dir)
+            .env("MICHELANGELO_LOCK_READY", &ready_path)
+            .stdout(fs::File::create(&child_log).expect("the log is created"))
+            .stderr(fs::File::create(&child_error).expect("the log is created"))
+            .spawn()
+            .expect("the helper starts"),
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready_path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        ready_path.exists(),
+        "the helper holds the lock: {}",
+        fs::read_to_string(&child_error).unwrap_or_default()
+    );
+
+    let output = accept(&scratch);
+    assert_eq!(code_of(&output), 2, "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("STORE_BUSY"));
+    assert!(!scratch.run_dir.join("scene/s0002").exists());
+
+    drop(child);
+    std::thread::sleep(Duration::from_millis(200));
+
+    let output = accept(&scratch);
+    assert_eq!(code_of(&output), 0, "{}", stderr_of(&output));
+    assert!(stdout_of(&output).contains("decision: accepted"));
 }

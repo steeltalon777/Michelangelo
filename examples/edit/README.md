@@ -26,5 +26,22 @@ michelangelo edit show   --run examples/edit/run-0001 --json
 ```
 
 The command writes the scene store into the run directory (`scene/`,
-`candidates/` and `current.json`); copy the run directory to a scratch
-directory before a demo if the repository must stay clean.
+`candidates/`, `verification/` and `current.json`); copy the run directory
+to a scratch directory before a demo if the repository must stay clean.
+
+The store carries the verification evidence of IT-8A:
+
+```text
+<run>/verification/
+  snapshots/<candidate_id>/manifest.json  michelangelo.geometry-snapshot/0
+  snapshots/<candidate_id>/geometry/*.obj # the FULL post-change component set
+  unknowns/revisions/sNNNN.json           michelangelo.unknown-state/0
+  unknowns/events.jsonl                   the append-only audit trail
+  run.lock                                the exclusive OS lock of the store
+<run>/candidates/<id>/decisions/NNNN-<kind>.json  the append-only history
+```
+
+The submission registers the snapshot of the full result (the unchanged
+components are copied byte-identically from the base revision), the acceptance
+publishes the revision from that snapshot under the lock, and a repeated
+acceptance returns the historical result without publishing a second revision.
