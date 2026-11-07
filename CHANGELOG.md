@@ -60,6 +60,31 @@ unchanged — new library crate, Python solver tool, CLI subcommands and a bench
 - ROADMAP Phase 4 Stage B marked done, `docs/ai/AI_CONTEXT.md` (crate, CLI, product direction,
   out of scope) and `TASKS.md` updated for IT-5.
 
+ADR 0004 Stage C (IT-6): local edit boundary. The JSONL wire contract is unchanged — new library
+crate, CLI subcommands and a spec.
+
+### Added (Stage C)
+
+- **`michelangelo_edit` crate**: immutable scene revisions (`scene/sNNNN`) per reconstruction run
+  with atomic publish and an authoritative `current.json`; explicit
+  `michelangelo.edit-candidate/0` (bounded task, allowed region, protected components, provenance,
+  acceptance, budget); deterministic validator (`STALE_BASE`, `PROTECTED_MODIFIED`,
+  `REGION_VIOLATION`, `COMPONENT_UNKNOWN`, `NOT_ALLOWED`, `UNSUPPORTED_ACTION`, `OBJ_PARSE`,
+  `GEOMETRY_INVALID`, `IDENTITY_MISMATCH`, `BUDGET_INVALID`, `ACCEPTANCE_REQUIRED`,
+  `POLICY_DENIED`); atomic applier that keeps untouched/protected components byte-identical;
+  rollback; run-level protection established at `edit init --protect` and not redefinable by a
+  candidate; 122 crate tests.
+- **CLI `michelangelo edit init|submit|accept|reject|rollback|show`** with exit codes 0/1/2 and
+  `--protect` at init; 16 CLI integration tests; spec `docs/specs/LOCAL_EDIT.md`; committed
+  fixtures `examples/edit/`.
+- **Stage C acceptance**: end-to-end on a copy of a real Stage B run — accepted candidate →
+  `s0002`, stale resubmit rejected, protected tamper rejected, out-of-region candidate rejected,
+  rollback to `s0001`; protected components byte-identical.
+
+### Changed (Stage C)
+
+- ROADMAP Phase 4 Stage C marked done, `docs/ai/AI_CONTEXT.md` and `TASKS.md` updated for IT-6.
+
 ### Changed
 
 - README status, ROADMAP Phase 3 (Stage A done), `docs/ai/AI_CONTEXT.md` and `TASKS.md` updated

@@ -123,6 +123,21 @@ TZ: `docs/tz/TZ_RECON_POC_STAGE_B.md` (branch `dev`; evidence in `target/techlea
   authored-supplement variants scored with held-out orthographic control views; blind-recess
   non-observability proven (top-mask IoU 1.0 vs a closed body).
 
+## Completed — ADR 0004 Stage C (Local Edit Boundary)
+
+TZ: `docs/tz/TZ_LOCAL_EDIT_STAGE_C.md` (branch `dev`; evidence in `target/techlead/IT-6/`).
+
+- [x] T-0601 Scene revision store + validator/applier (IT-6, 2026-11-07) — `michelangelo_edit`
+  crate: immutable `scene/sNNNN` revisions with atomic publish, explicit candidate schema,
+  deterministic checks (stale base, identity, task scope, components, protected, geometry,
+  region, budget, acceptance, policy), atomic apply with byte-identical untouched components,
+  rollback, run-level protection established at `edit init --protect`; 122 crate tests.
+- [x] T-0602 CLI `michelangelo edit init|submit|accept|reject|rollback|show` (IT-6) — 16 CLI
+  integration tests, spec `docs/specs/LOCAL_EDIT.md`; JSONL wire contract unchanged.
+- [x] T-0603 Stage C acceptance (IT-6) — end-to-end on a copy of a real Stage B run: accepted
+  candidate publishes `s0002`, stale resubmit rejected, protected tamper rejected, region
+  violation rejected, rollback to `s0001`; protected components byte-identical after accept.
+
 ## Not yet started
 
 - Future Blender ops: `create_reference_planes`, `apply_bevel`, curve/extrusion/boolean ops

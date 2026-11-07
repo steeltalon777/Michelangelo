@@ -325,6 +325,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "michelangelo_core",
+ "michelangelo_edit",
  "michelangelo_input",
  "michelangelo_protocol",
  "michelangelo_recon",
@@ -340,6 +341,17 @@ dependencies = [
  "michelangelo_jobs",
  "michelangelo_protocol",
  "michelangelo_workspace",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "michelangelo_edit"
+version = "0.1.0"
+dependencies = [
+ "michelangelo_input",
+ "michelangelo_recon",
+ "serde",
  "serde_json",
  "tempfile",
 ]

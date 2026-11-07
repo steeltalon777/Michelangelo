@@ -14,7 +14,7 @@ diagnostics. Blender runs as a bounded external batch subprocess driven by the s
   `result.json`/artifact validation, correct job identity and terminal-state ordering,
   deterministic empty scenes, 18 typed safe operations, calibrated orthographic silhouettes,
   assertable camera framing, Workbench-only rendering.
-- Verification at the IT-5 baseline: **454 Rust tests**, **30 Python worker validation checks**,
+- Verification at the IT-6 baseline: **593 Rust tests**, **30 Python worker validation checks**,
   the input-package acceptance checks (fixtures + a package derived from a local PoC dataset) and
   the cross-platform acceptance E2E (`scripts/smoke_blender_scene.py`: 119 checks on
   real Blender, 113 on `--fake`) with a calibrated **16,384 px** silhouette and a framed-scene

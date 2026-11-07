@@ -15,6 +15,7 @@ michelangelo_core = { path = "../michelangelo_core" }
 michelangelo_protocol = { path = "../michelangelo_protocol" }
 michelangelo_input = { path = "../michelangelo_input" }
 michelangelo_recon = { path = "../michelangelo_recon" }
+michelangelo_edit = { path = "../michelangelo_edit" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -86,10 +86,17 @@ Stage B (ADR §13.2) — vertical PoC, no API required — ✅ **done (IT-5, 202
   (`tools/bench/make_synthetic_case.py`), each with hull-only and authored-supplement variants.
   Measured: source-view silhouette IoU 0.94–0.97, held-out orthographic control IoU 0.94–0.95.
 
-Stage C (ADR §13.3) — local edit boundary:
+Stage C (ADR §13.3) — local edit boundary — ✅ **done (IT-6, 2026-11-07)**:
 
-- Manual candidate / test backend first; prove protected-geometry enforcement, stale-revision
-  rejection, failure keeps the previous version, rollback
+- ✅ Immutable scene revisions (`s0001`, `s0002`, …) per reconstruction run, atomic publish and
+  authoritative `current.json`; explicit `michelangelo.edit-candidate/0` with a bounded task
+  (allowed components, allowed region, protected components), provenance, acceptance and budget;
+  deterministic validator (stale base, protected tamper — including run-level protection
+  established at `edit init --protect`, region/geometry/identity checks, acceptance/policy) and
+  atomic applier with rollback; CLI `michelangelo edit init|submit|accept|reject|rollback|show`.
+  Spec: [LOCAL_EDIT.md](docs/specs/LOCAL_EDIT.md), TZ: [TZ](docs/tz/TZ_LOCAL_EDIT_STAGE_C.md).
+  Proven end-to-end on a real Stage B run: accepted candidate → `s0002`, stale resubmit rejected,
+  protected tamper rejected, out-of-region candidate rejected, rollback to `s0001`.
 
 Stage D (ADR §13.4) — optional assistant:
 

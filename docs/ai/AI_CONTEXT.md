@@ -29,6 +29,7 @@ CLI (michelangelo_cli)
 | `michelangelo_cli` | CLI binary, JSONL transport with event streaming | CLI entry point, `stdio::run_loop` with event channel |
 | `michelangelo_input` | Stage A input package: strict manifest, resource safety, levels 1–2 validation | `InputPackage`, `validate_package`, `ValidateOptions`, `InputPackageReport`, `Diagnostic` |
 | `michelangelo_recon` | Stage B reconstruction pipeline (solver → Blender job → IoU report) | `run`, `score`, `ReconstructionReport`, `camera_basis`/`rotation_deg`, run store, `ReconOptions` |
+| `michelangelo_edit` | Stage C local edit boundary (scene revisions, candidates) | `SceneStore`, `init_scene_with_protection`, `submit_candidate`, `accept_candidate`, `rollback_scene`, `DecisionReport` |
 
 ## Protocol Numbers
 
@@ -41,7 +42,8 @@ CLI (michelangelo_cli)
   associated response; `wait` defaults to `false` (queue-only — pass `"wait": true` to execute)
 - CLI-only commands (not JSONL methods, no wire contract impact): `michelangelo input
   validate|describe` (Stage A input package), `michelangelo reconstruct run|score|show` (Stage B
-  reconstruction PoC); `michelangelo core stdio` is the JSONL transport
+  reconstruction PoC), `michelangelo edit init|submit|accept|reject|rollback|show` (Stage C local
+  edit boundary); `michelangelo core stdio` is the JSONL transport
 - Worker ops (18, stable order in `SAFE_WORKER_OPS`): `create_box`, `set_material`,
   `set_camera_set`, `render_views`, `export_glb`, `save_blend`, `get_scene_summary`,
   `create_cylinder`, `create_sphere`, `import_mesh`, `set_transform`, `create_ortho_camera`,
@@ -55,7 +57,7 @@ CLI (michelangelo_cli)
 ## Verification
 
 ```bash
-# Rust (real-Blender tests auto-skip when Blender is absent) — 454 tests
+# Rust (real-Blender tests auto-skip when Blender is absent) — 593 tests
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -116,6 +118,13 @@ the current Windows stand).
   held-out cameras, per-view silhouette IoU/coverage report, editable `.blend`/`.glb` blockout in
   `<workspace>/recon/r%04d/run-%04d/`. Bench harness: `tools/bench/` (dataset conversion, synthetic
   cases, full matrix). No wire changes, no external API.
+- Stage C is implemented (IT-6): [`docs/specs/LOCAL_EDIT.md`](../specs/LOCAL_EDIT.md),
+  `michelangelo_edit` crate + `michelangelo edit init|submit|accept|reject|rollback|show`.
+  Immutable scene revisions per run with atomic publish, explicit edit candidates (bounded task,
+  allowed region, protected components, provenance, acceptance), deterministic validator
+  (stale base, protected tamper, region/geometry/identity, acceptance/policy) and atomic applier
+  with byte-identical untouched components and rollback. Run-level protection is established at
+  `edit init --protect`; candidates cannot redefine it. No wire changes, no Blender, no network.
 
 ## Out of Scope
 

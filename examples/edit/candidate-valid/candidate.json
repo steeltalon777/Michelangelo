@@ -1,0 +1,24 @@
+{
+  "schema": "michelangelo.edit-candidate/0",
+  "candidate_id": "cand-0001",
+  "base": {
+    "package_id": "demo-lantern",
+    "package_revision": 1,
+    "scene_revision": "s0001",
+    "run_id": "run-0001"
+  },
+  "task": {
+    "task_id": "fix-lid",
+    "allowed_components": ["lid"],
+    "allowed_region": {"min": [-0.2, -0.2, -0.2], "max": [0.2, 0.2, 0.2]},
+    "protected": ["base"],
+    "allowed_intersections": [],
+    "require_author_acceptance": true,
+    "max_changed_vertices": 100000
+  },
+  "changes": [
+    {"component": "lid", "action": "replace", "obj": "geometry/lid.obj"}
+  ],
+  "provenance": {"origin": "human", "detail": "a manual repair of the lid"},
+  "budget": {"max_calls": 1, "max_seconds": 120, "max_cost_usd": 0.0}
+}

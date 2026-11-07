@@ -3,6 +3,7 @@
 //! Thin shell over the Core protocol. All human-readable diagnostics
 //! go to stderr; stdout is reserved for protocol JSONL messages.
 
+mod edit_cmd;
 mod input_cmd;
 mod reconstruct_cmd;
 mod stdio;
@@ -34,6 +35,11 @@ enum Commands {
     Reconstruct {
         #[command(subcommand)]
         command: reconstruct_cmd::ReconstructCommand,
+    },
+    /// Edit a reconstruction run through the local edit boundary (Stage C)
+    Edit {
+        #[command(subcommand)]
+        command: edit_cmd::EditCommand,
     },
 }
 
@@ -70,6 +76,11 @@ fn main() -> std::process::ExitCode {
             // The reconstruction subcommands are independent of the protocol
             // mode: stdout carries the summary or the report JSON.
             return reconstruct_cmd::execute(command);
+        }
+        Some(Commands::Edit { command }) => {
+            // The edit subcommands are independent of the protocol mode:
+            // stdout carries the summary or the decision report JSON.
+            return edit_cmd::execute(command);
         }
         None => {
             // No subcommand — show help (--help is handled by clap automatically)
