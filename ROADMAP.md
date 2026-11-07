@@ -49,20 +49,47 @@ calibrated front silhouette, the framed-scene silhouette coverage/margin asserti
 rejection. Only
 Blender 5.2.3 is verified; 4.2 is API-plausible but untested.
 
-## 🔜 Phase 3 (Next) — Asset Pipeline
+## 🔜 Phase 3 (Next) — Validated Input Package & Asset Pipeline (Stage A of ADR 0004)
 
-- Manifest/PNG ingest, alpha masks, bbox, connected components, contours
-- Asset Graph indexing (SQLite FTS/RTree)
-- Thumbnail and mask generation
+Direction fixed by accepted
+[ADR 0004](docs/adr/0004-validated-visual-spec-and-hybrid-reconstruction.md) §13 (Stage A):
+before reconstruction, define and validate the minimal input package — a versioned description
+of the object (images + geometric supplements of hidden shape + explicit unknowns), see ADR §5.
+
+- Minimal input package: manifest/PNG ingest, alpha masks, bbox, connected components,
+  contours (kept from the previous plan, now serving the ADR §5 package structure)
+- Input validation levels per ADR §6: format/safety, sufficiency, geometric compatibility,
+  draft build + back-projection, author acceptance; targeted diagnostics, no silent guessing
+- Provenance and revision policy per ADR §5.3: origin/acceptance of supplements, conflict and
+  revision handling
+- Asset Graph indexing (SQLite FTS/RTree) — kept, serves as the indexed representation of the
+  input package
+- Thumbnail and mask generation — kept
 - Future Blender reference-plane/blockout ops (`create_reference_planes`, `apply_bevel`) require
   their own TZ; they are not accepted by the current worker.
 
-## 🔜 Phase 4 — LLM Orchestration
+## 🔜 Phase 4 — Reconstruction PoC & Optional Assistant (Stages B–D of ADR 0004)
 
-- MCP adapter for LLM clients
+Stage B (ADR §13.2) — vertical PoC, no API required:
+
+- Prepared package → limited deterministic build → render from source cameras → quality report
+  → editable blockout with explicit unknowns (calibrated front-silhouette rendering from
+  Phase 2.5 is the measurement base)
+- Validation cases from ADR §13: control body with a blind recess, an alien plant with
+  overlapping branches, a composite fantastic object
+
+Stage C (ADR §13.3) — local edit boundary:
+
+- Manual candidate / test backend first; prove protected-geometry enforcement, stale-revision
+  rejection, failure keeps the previous version, rollback
+
+Stage D (ADR §13.4) — optional assistant:
+
+- MCP adapter for LLM clients — kept, but only after permissions, budgets, data policy and
+  measurable acceptance criteria are defined (ADR §8)
 - Natural language command interpretation
-- Build plan validation → `BlenderJobSpec`
-- Iterative refinement workflows
+- Build plan validation → `BlenderJobSpec`; iterative refinement as bounded local-change
+  candidates (ADR §8.2), not unrestricted scene ownership
 
 ## 🔜 Phase 5 — GUI/TUI
 

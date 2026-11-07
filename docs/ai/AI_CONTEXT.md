@@ -90,8 +90,21 @@ the current Windows stand).
   untested. Workbench is the supported render engine for this iteration.
 - System Python 3.13 for `blender/worker.py` validation + smoke scripts (stdlib only)
 
+## Product Direction
+
+- Accepted ADR (2026-11-07):
+  [`docs/adr/0004-validated-visual-spec-and-hybrid-reconstruction.md`](../adr/0004-validated-visual-spec-and-hybrid-reconstruction.md)
+  — validated visual spec + hybrid reconstruction: a versioned input package (images +
+  geometric supplements of hidden shape + explicit unknowns), deterministic core, optional
+  local AI-assisted completion. Staged plan (ADR §13): A) minimal input package + validation
+  (ROADMAP Phase 3), B) vertical reconstruction PoC without API, C) local-edit boundary,
+  D) optional assistant (ROADMAP Phase 4).
+
 ## Out of Scope
 
 GUI/TUI, LLM providers, MCP, Asset Graph ingest, PNG decomposition, Qdrant/vector databases,
-network transport, Visual Hull, Parametric Solver, Unreal import, arbitrary Python execution,
-Blender addon/persistent daemon, EEVEE/Cycles render reliability.
+network transport, Unreal import, arbitrary Python execution, Blender addon/persistent daemon,
+EEVEE/Cycles render reliability. Visual Hull and Parametric Solver are not implemented yet, but
+are planned by accepted ADR 0004 (Stage B reconstruction PoC) — they are deferred, not rejected.
+LLM providers/MCP belong to the optional assistant (Stage D) and are not required by the
+deterministic core.
