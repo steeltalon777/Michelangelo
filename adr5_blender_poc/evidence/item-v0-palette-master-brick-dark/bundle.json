@@ -1,0 +1,60 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "variant_blend",
+      "content_kind": "other",
+      "path": "outputs/v0_palette_master_brick-dark/variant.blend",
+      "sha256": "9a4da439cd9d9c6dde7244da63a7b372385a76e8f045c515ce9df6fb5fb0ec3f",
+      "size_bytes": 95515,
+      "source": "generated"
+    },
+    {
+      "artifact_id": "variant_glb",
+      "content_kind": "scene_layout",
+      "path": "outputs/v0_palette_master_brick-dark/variant.glb",
+      "sha256": "366dbcab3ace35f352fc380978c93a15c5981eb950a21570bc3c9312e39dc504",
+      "size_bytes": 5268,
+      "source": "generated"
+    }
+  ],
+  "asset_digest": "5a35b7c36df2af331657efffac093a039f9cb34a8dc1c952c96dbf927af1baab",
+  "asset_id": "v0-house-master-palette",
+  "base_ref": {
+    "id": "house_master",
+    "kind": "source_snapshot",
+    "sha256": "eb985b8d1b2ca388ccc57dae66d342900616258e5b5751e608d058aa2f57d8a5"
+  },
+  "candidate_id": "cand-item-v0-palette-master-brick-dark",
+  "created_at": "2026-11-08T14:05:35Z",
+  "dependency_digests": {
+    "house_master": "eb985b8d1b2ca388ccc57dae66d342900616258e5b5751e608d058aa2f57d8a5",
+    "template_file": "50e69342c30dae9a3ed6ad32f53257adbec7087645e9a427ae1ee27df96846eb",
+    "worker_blender_py": "9c7c24f3311aa0a5cdc168ff0b5d336067ce6c4200d6b2b3ac6f17e53cb96ee3"
+  },
+  "diff_to_base": {
+    "added": [
+      "variant_blend",
+      "variant_glb"
+    ],
+    "changed": [],
+    "removed": []
+  },
+  "item_id": "item-v0-palette-master-brick-dark",
+  "provenance_chain": [
+    {
+      "actor_role": "core",
+      "ref": {
+        "path": "adr5_blender_poc/templates/v0_palette_master.json",
+        "sha256": "50e69342c30dae9a3ed6ad32f53257adbec7087645e9a427ae1ee27df96846eb"
+      },
+      "stage": "variant_generation"
+    }
+  ],
+  "schema": "michelangelo.candidate-asset-bundle/draft-0.1",
+  "status": "proposed",
+  "unresolved_issues": [
+    "PoC: appearance is verified only via glTF baseColorFactor of the exported GLB; no EEVEE/Cycles render validation was performed",
+    "No UE readiness is claimed: no engine import/playback validation exists",
+    "--factory-startup is not a sandbox; only known trusted fixtures were loaded, no untrusted .blend intake is supported"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "registry_schema": "michelangelo.adr5-poc.template-registry/draft-0",
+  "note": "Registered templates for the GLM-5 PoC. sha256 pins the actual template file bytes; the executor refuses a template whose bytes do not match (TEMPLATE_HASH_MISMATCH). Data-only manifests: the registry loader rejects code vectors (F10).",
+  "templates": [
+    {
+      "template_id": "v0_palette_master",
+      "file": "v0_palette_master.json",
+      "sha256": "50e69342c30dae9a3ed6ad32f53257adbec7087645e9a427ae1ee27df96846eb"
+    },
+    {
+      "template_id": "v0_textured_probe",
+      "file": "v0_textured_probe.json",
+      "sha256": "7791381f77b85e7713624e08f8120eaf7eab8d3a17500aa01c47cc81925e45f1"
+    },
+    {
+      "template_id": "v1_roof_assembly",
+      "file": "v1_roof_assembly.json",
+      "sha256": "a47aa9ea89c980ad9c72e9a4d840e46a8644c22bd46339911e5cee568492d731"
+    }
+  ]
+}

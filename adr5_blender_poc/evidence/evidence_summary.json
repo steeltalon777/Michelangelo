@@ -1,0 +1,1285 @@
+{
+  "generated_at": "2026-11-08T14:05:47Z",
+  "blender_bin": "I:\\Tools\\Blender\\blender.EXE",
+  "blender_version": "Blender 5.2.3 LTS",
+  "worker_py_sha256": "9c7c24f3311aa0a5cdc168ff0b5d336067ce6c4200d6b2b3ac6f17e53cb96ee3",
+  "registry": {
+    "v0_palette_master": "50e69342c30dae9a3ed6ad32f53257adbec7087645e9a427ae1ee27df96846eb",
+    "v0_textured_probe": "7791381f77b85e7713624e08f8120eaf7eab8d3a17500aa01c47cc81925e45f1",
+    "v1_roof_assembly": "a47aa9ea89c980ad9c72e9a4d840e46a8644c22bd46339911e5cee568492d731"
+  },
+  "positives": [
+    {
+      "item_id": "item-v0-palette-master-brick-dark",
+      "template_id": "v0_palette_master",
+      "level": "V0",
+      "variant_value": "brick-dark",
+      "status": "executed",
+      "elapsed_s": 0.6,
+      "artifacts": [
+        {
+          "path": "outputs/v0_palette_master_brick-dark/variant.blend",
+          "size_bytes": 95515,
+          "sha256": "9a4da439cd9d9c6dde7244da63a7b372385a76e8f045c515ce9df6fb5fb0ec3f",
+          "type": "blend"
+        },
+        {
+          "path": "outputs/v0_palette_master_brick-dark/variant.glb",
+          "size_bytes": 5268,
+          "sha256": "366dbcab3ace35f352fc380978c93a15c5981eb950a21570bc3c9312e39dc504",
+          "type": "glb"
+        }
+      ],
+      "source_hashes": {
+        "house_master": "eb985b8d1b2ca388ccc57dae66d342900616258e5b5751e608d058aa2f57d8a5"
+      },
+      "source_hashes_unchanged": true,
+      "expected_bounds": [
+        [
+          -2.2,
+          -1.7,
+          0.0
+        ],
+        [
+          2.2,
+          1.7,
+          2.65
+        ]
+      ],
+      "actual_bounds": [
+        [
+          -2.2,
+          -1.7,
+          0.0
+        ],
+        [
+          2.2,
+          1.7,
+          2.65
+        ]
+      ],
+      "scene_summary": {
+        "objects": 3,
+        "meshes": 3,
+        "materials": 3,
+        "cameras": 0,
+        "triangles": 36,
+        "vertices": 72,
+        "components": [],
+        "bounds": {
+          "min": [
+            -2.2,
+            -1.7,
+            0.0
+          ],
+          "max": [
+            2.2,
+            1.7,
+            2.65
+          ]
+        }
+      },
+      "glb_report": {
+        "generator": "Khronos glTF Blender I/O v5.2.41",
+        "glTF_version": "2.0",
+        "nodes": [
+          {
+            "node_name": "door",
+            "mesh_name": "door_mesh",
+            "translation": [
+              0.0,
+              1.0,
+              1.5099999904632568
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 0,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -0.44999998807907104,
+              -1.0,
+              -0.05000000074505806
+            ],
+            "bounds_local_max": [
+              0.44999998807907104,
+              1.0,
+              0.05000000074505806
+            ]
+          },
+          {
+            "node_name": "roof",
+            "mesh_name": "roof_mesh",
+            "translation": [
+              0.0,
+              2.5250000953674316,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 1,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.200000047683716,
+              -0.125,
+              -1.7000000476837158
+            ],
+            "bounds_local_max": [
+              2.200000047683716,
+              0.125,
+              1.7000000476837158
+            ]
+          },
+          {
+            "node_name": "walls",
+            "mesh_name": "walls_mesh",
+            "translation": [
+              0.0,
+              1.2000000476837158,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 2,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.0,
+              -1.2000000476837158,
+              -1.5
+            ],
+            "bounds_local_max": [
+              2.0,
+              1.2000000476837158,
+              1.5
+            ]
+          }
+        ],
+        "meshes_count": 3,
+        "materials": [
+          {
+            "index": 0,
+            "name": "Mat_door",
+            "base_color_factor": [
+              0.14,
+              0.1,
+              0.08,
+              1.0
+            ]
+          },
+          {
+            "index": 1,
+            "name": "Mat_roof",
+            "base_color_factor": [
+              0.24,
+              0.18,
+              0.15,
+              1.0
+            ]
+          },
+          {
+            "index": 2,
+            "name": "Mat_walls",
+            "base_color_factor": [
+              0.3,
+              0.21,
+              0.17,
+              1.0
+            ]
+          }
+        ],
+        "materials_count": 3,
+        "total_vertices": 72,
+        "total_triangles": 36,
+        "bounds_local_min": [
+          -2.0,
+          -1.2000000476837158,
+          -1.5
+        ],
+        "bounds_local_max": [
+          2.0,
+          1.2000000476837158,
+          1.5
+        ],
+        "note": "bounds_local_* are accessor min/max in local mesh coordinates (no node transforms applied); authoritative world bounds come from the worker scene_summary"
+      },
+      "checks": {
+        "geometry_preserved_vs_source": {
+          "equal": true,
+          "reason": "geometry profile identical"
+        }
+      },
+      "bundle_path": "I:\\prog\\michelangelo-adr5-blender\\adr5_blender_poc\\evidence\\item-v0-palette-master-brick-dark\\bundle.json",
+      "bundle_sha256": "908bd7f52c8a194bc344f55ecb249151340e8afa0e6d16a638e0f373317a9791",
+      "resources": {
+        "peak_blender_ram_mib": 206.6,
+        "ram_method": "ctypes psapi GetProcessMemoryInfo PeakWorkingSetSize (polling)",
+        "gpu_used_max_mib": 1443,
+        "vram_method": "nvidia-smi memory.used (GPU total, all processes)",
+        "vram_scope_note": "GPU total across all processes, not Blender-only"
+      },
+      "schema_validation": []
+    },
+    {
+      "item_id": "item-v0-palette-master-plaster-warm",
+      "template_id": "v0_palette_master",
+      "level": "V0",
+      "variant_value": "plaster-warm",
+      "status": "executed",
+      "elapsed_s": 0.6,
+      "artifacts": [
+        {
+          "path": "outputs/v0_palette_master_plaster-warm/variant.blend",
+          "size_bytes": 95522,
+          "sha256": "9bf005d0d096c09d109d95e1b328485ec363f64fb8118ae5b22321c602d6d7aa",
+          "type": "blend"
+        },
+        {
+          "path": "outputs/v0_palette_master_plaster-warm/variant.glb",
+          "size_bytes": 5260,
+          "sha256": "c644cb0443849042a9f65381bcc8b667572c55cc0868485d1f850c3dc698f2d4",
+          "type": "glb"
+        }
+      ],
+      "source_hashes": {
+        "house_master": "eb985b8d1b2ca388ccc57dae66d342900616258e5b5751e608d058aa2f57d8a5"
+      },
+      "source_hashes_unchanged": true,
+      "expected_bounds": [
+        [
+          -2.2,
+          -1.7,
+          0.0
+        ],
+        [
+          2.2,
+          1.7,
+          2.65
+        ]
+      ],
+      "actual_bounds": [
+        [
+          -2.2,
+          -1.7,
+          0.0
+        ],
+        [
+          2.2,
+          1.7,
+          2.65
+        ]
+      ],
+      "scene_summary": {
+        "objects": 3,
+        "meshes": 3,
+        "materials": 3,
+        "cameras": 0,
+        "triangles": 36,
+        "vertices": 72,
+        "components": [],
+        "bounds": {
+          "min": [
+            -2.2,
+            -1.7,
+            0.0
+          ],
+          "max": [
+            2.2,
+            1.7,
+            2.65
+          ]
+        }
+      },
+      "glb_report": {
+        "generator": "Khronos glTF Blender I/O v5.2.41",
+        "glTF_version": "2.0",
+        "nodes": [
+          {
+            "node_name": "door",
+            "mesh_name": "door_mesh",
+            "translation": [
+              0.0,
+              1.0,
+              1.5099999904632568
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 0,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -0.44999998807907104,
+              -1.0,
+              -0.05000000074505806
+            ],
+            "bounds_local_max": [
+              0.44999998807907104,
+              1.0,
+              0.05000000074505806
+            ]
+          },
+          {
+            "node_name": "roof",
+            "mesh_name": "roof_mesh",
+            "translation": [
+              0.0,
+              2.5250000953674316,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 1,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.200000047683716,
+              -0.125,
+              -1.7000000476837158
+            ],
+            "bounds_local_max": [
+              2.200000047683716,
+              0.125,
+              1.7000000476837158
+            ]
+          },
+          {
+            "node_name": "walls",
+            "mesh_name": "walls_mesh",
+            "translation": [
+              0.0,
+              1.2000000476837158,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 2,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.0,
+              -1.2000000476837158,
+              -1.5
+            ],
+            "bounds_local_max": [
+              2.0,
+              1.2000000476837158,
+              1.5
+            ]
+          }
+        ],
+        "meshes_count": 3,
+        "materials": [
+          {
+            "index": 0,
+            "name": "Mat_door",
+            "base_color_factor": [
+              0.35,
+              0.22,
+              0.14,
+              1.0
+            ]
+          },
+          {
+            "index": 1,
+            "name": "Mat_roof",
+            "base_color_factor": [
+              0.45,
+              0.3,
+              0.22,
+              1.0
+            ]
+          },
+          {
+            "index": 2,
+            "name": "Mat_walls",
+            "base_color_factor": [
+              0.87,
+              0.8,
+              0.68,
+              1.0
+            ]
+          }
+        ],
+        "materials_count": 3,
+        "total_vertices": 72,
+        "total_triangles": 36,
+        "bounds_local_min": [
+          -2.0,
+          -1.2000000476837158,
+          -1.5
+        ],
+        "bounds_local_max": [
+          2.0,
+          1.2000000476837158,
+          1.5
+        ],
+        "note": "bounds_local_* are accessor min/max in local mesh coordinates (no node transforms applied); authoritative world bounds come from the worker scene_summary"
+      },
+      "checks": {
+        "geometry_preserved_vs_source": {
+          "equal": true,
+          "reason": "geometry profile identical"
+        },
+        "materials_distinct_vs_prev": {
+          "distinct": true,
+          "reason": "2 variants have pairwise distinct materials"
+        }
+      },
+      "bundle_path": "I:\\prog\\michelangelo-adr5-blender\\adr5_blender_poc\\evidence\\item-v0-palette-master-plaster-warm\\bundle.json",
+      "bundle_sha256": "e2fc6678af31b65aa931b993f3777c7c23de25185343af73fa82f99e0a748c79",
+      "resources": {
+        "peak_blender_ram_mib": 206.1,
+        "ram_method": "ctypes psapi GetProcessMemoryInfo PeakWorkingSetSize (polling)",
+        "gpu_used_max_mib": 1482,
+        "vram_method": "nvidia-smi memory.used (GPU total, all processes)",
+        "vram_scope_note": "GPU total across all processes, not Blender-only"
+      },
+      "schema_validation": []
+    },
+    {
+      "item_id": "item-v0-palette-master-paint-teal",
+      "template_id": "v0_palette_master",
+      "level": "V0",
+      "variant_value": "paint-teal",
+      "status": "executed",
+      "elapsed_s": 0.8,
+      "artifacts": [
+        {
+          "path": "outputs/v0_palette_master_paint-teal/variant.blend",
+          "size_bytes": 95514,
+          "sha256": "7a66014deb498bfeb4ec8904e38b60598e2bcca8f7b75f7a70cd23ffa4f09dfd",
+          "type": "blend"
+        },
+        {
+          "path": "outputs/v0_palette_master_paint-teal/variant.glb",
+          "size_bytes": 5248,
+          "sha256": "a453ae3854303af23245d2602842779cee333a62b589f09693aae8246d4cd1bd",
+          "type": "glb"
+        }
+      ],
+      "source_hashes": {
+        "house_master": "eb985b8d1b2ca388ccc57dae66d342900616258e5b5751e608d058aa2f57d8a5"
+      },
+      "source_hashes_unchanged": true,
+      "expected_bounds": [
+        [
+          -2.2,
+          -1.7,
+          0.0
+        ],
+        [
+          2.2,
+          1.7,
+          2.65
+        ]
+      ],
+      "actual_bounds": [
+        [
+          -2.2,
+          -1.7,
+          0.0
+        ],
+        [
+          2.2,
+          1.7,
+          2.65
+        ]
+      ],
+      "scene_summary": {
+        "objects": 3,
+        "meshes": 3,
+        "materials": 3,
+        "cameras": 0,
+        "triangles": 36,
+        "vertices": 72,
+        "components": [],
+        "bounds": {
+          "min": [
+            -2.2,
+            -1.7,
+            0.0
+          ],
+          "max": [
+            2.2,
+            1.7,
+            2.65
+          ]
+        }
+      },
+      "glb_report": {
+        "generator": "Khronos glTF Blender I/O v5.2.41",
+        "glTF_version": "2.0",
+        "nodes": [
+          {
+            "node_name": "door",
+            "mesh_name": "door_mesh",
+            "translation": [
+              0.0,
+              1.0,
+              1.5099999904632568
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 0,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -0.44999998807907104,
+              -1.0,
+              -0.05000000074505806
+            ],
+            "bounds_local_max": [
+              0.44999998807907104,
+              1.0,
+              0.05000000074505806
+            ]
+          },
+          {
+            "node_name": "roof",
+            "mesh_name": "roof_mesh",
+            "translation": [
+              0.0,
+              2.5250000953674316,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 1,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.200000047683716,
+              -0.125,
+              -1.7000000476837158
+            ],
+            "bounds_local_max": [
+              2.200000047683716,
+              0.125,
+              1.7000000476837158
+            ]
+          },
+          {
+            "node_name": "walls",
+            "mesh_name": "walls_mesh",
+            "translation": [
+              0.0,
+              1.2000000476837158,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": 2,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.0,
+              -1.2000000476837158,
+              -1.5
+            ],
+            "bounds_local_max": [
+              2.0,
+              1.2000000476837158,
+              1.5
+            ]
+          }
+        ],
+        "meshes_count": 3,
+        "materials": [
+          {
+            "index": 0,
+            "name": "Mat_door",
+            "base_color_factor": [
+              0.2,
+              0.25,
+              0.28,
+              1.0
+            ]
+          },
+          {
+            "index": 1,
+            "name": "Mat_roof",
+            "base_color_factor": [
+              0.9,
+              0.88,
+              0.84,
+              1.0
+            ]
+          },
+          {
+            "index": 2,
+            "name": "Mat_walls",
+            "base_color_factor": [
+              0.16,
+              0.45,
+              0.44,
+              1.0
+            ]
+          }
+        ],
+        "materials_count": 3,
+        "total_vertices": 72,
+        "total_triangles": 36,
+        "bounds_local_min": [
+          -2.0,
+          -1.2000000476837158,
+          -1.5
+        ],
+        "bounds_local_max": [
+          2.0,
+          1.2000000476837158,
+          1.5
+        ],
+        "note": "bounds_local_* are accessor min/max in local mesh coordinates (no node transforms applied); authoritative world bounds come from the worker scene_summary"
+      },
+      "checks": {
+        "geometry_preserved_vs_source": {
+          "equal": true,
+          "reason": "geometry profile identical"
+        },
+        "materials_distinct_vs_prev": {
+          "distinct": true,
+          "reason": "2 variants have pairwise distinct materials"
+        }
+      },
+      "bundle_path": "I:\\prog\\michelangelo-adr5-blender\\adr5_blender_poc\\evidence\\item-v0-palette-master-paint-teal\\bundle.json",
+      "bundle_sha256": "177c781ebfd88294c336c2736acd0280de4623b4342fa54151318eb6cb659b3c",
+      "resources": {
+        "peak_blender_ram_mib": 160.4,
+        "ram_method": "ctypes psapi GetProcessMemoryInfo PeakWorkingSetSize (polling)",
+        "gpu_used_max_mib": 1458,
+        "vram_method": "nvidia-smi memory.used (GPU total, all processes)",
+        "vram_scope_note": "GPU total across all processes, not Blender-only"
+      },
+      "schema_validation": []
+    },
+    {
+      "item_id": "item-v1-roof-assembly-flat",
+      "template_id": "v1_roof_assembly",
+      "level": "V1",
+      "variant_value": "flat",
+      "status": "executed",
+      "elapsed_s": 0.6,
+      "artifacts": [
+        {
+          "path": "outputs/v1_roof_assembly_flat/variant.blend",
+          "size_bytes": 91114,
+          "sha256": "06a193370cc25d6f6aa19f5cf44804e1ed46a7c0a48c30f8548d201306490b67",
+          "type": "blend"
+        },
+        {
+          "path": "outputs/v1_roof_assembly_flat/variant.glb",
+          "size_bytes": 3256,
+          "sha256": "ea58a42c1eb276d0aa63e75eb7385b4a7dad01ea05ac4a67c910985f9dc8d79c",
+          "type": "glb"
+        }
+      ],
+      "source_hashes": {
+        "walls_module": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e"
+      },
+      "source_hashes_unchanged": true,
+      "expected_bounds": [
+        [
+          -2.2,
+          -1.7,
+          0.0
+        ],
+        [
+          2.2,
+          1.7,
+          2.65
+        ]
+      ],
+      "actual_bounds": [
+        [
+          -2.2,
+          -1.7,
+          0.0
+        ],
+        [
+          2.2,
+          1.7,
+          2.65
+        ]
+      ],
+      "scene_summary": {
+        "objects": 2,
+        "meshes": 2,
+        "materials": 0,
+        "cameras": 0,
+        "triangles": 24,
+        "vertices": 32,
+        "components": [],
+        "bounds": {
+          "min": [
+            -2.2,
+            -1.7,
+            0.0
+          ],
+          "max": [
+            2.2,
+            1.7,
+            2.65
+          ]
+        }
+      },
+      "glb_report": {
+        "generator": "Khronos glTF Blender I/O v5.2.41",
+        "glTF_version": "2.0",
+        "nodes": [
+          {
+            "node_name": "roof_slab",
+            "mesh_name": "roof_slab_mesh",
+            "translation": [
+              0.0,
+              2.5250000953674316,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": null,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.200000047683716,
+              -0.125,
+              -1.7000000476837158
+            ],
+            "bounds_local_max": [
+              2.200000047683716,
+              0.125,
+              1.7000000476837158
+            ]
+          },
+          {
+            "node_name": "walls_base",
+            "mesh_name": "walls_base_mesh",
+            "translation": [
+              0.0,
+              1.2000000476837158,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": null,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.0,
+              -1.2000000476837158,
+              -1.5
+            ],
+            "bounds_local_max": [
+              2.0,
+              1.2000000476837158,
+              1.5
+            ]
+          }
+        ],
+        "meshes_count": 2,
+        "materials": [],
+        "materials_count": 0,
+        "total_vertices": 48,
+        "total_triangles": 24,
+        "bounds_local_min": [
+          -2.0,
+          -1.2000000476837158,
+          -1.5
+        ],
+        "bounds_local_max": [
+          2.0,
+          1.2000000476837158,
+          1.5
+        ],
+        "note": "bounds_local_* are accessor min/max in local mesh coordinates (no node transforms applied); authoritative world bounds come from the worker scene_summary"
+      },
+      "checks": {},
+      "bundle_path": "I:\\prog\\michelangelo-adr5-blender\\adr5_blender_poc\\evidence\\item-v1-roof-assembly-flat\\bundle.json",
+      "bundle_sha256": "5fd7448d9df12946a490494079fe0c3d101e764169ea587bdbf934cd83e948bd",
+      "resources": {
+        "peak_blender_ram_mib": 205.5,
+        "ram_method": "ctypes psapi GetProcessMemoryInfo PeakWorkingSetSize (polling)",
+        "gpu_used_max_mib": 1451,
+        "vram_method": "nvidia-smi memory.used (GPU total, all processes)",
+        "vram_scope_note": "GPU total across all processes, not Blender-only"
+      },
+      "schema_validation": []
+    },
+    {
+      "item_id": "item-v1-roof-assembly-gable",
+      "template_id": "v1_roof_assembly",
+      "level": "V1",
+      "variant_value": "gable",
+      "status": "executed",
+      "elapsed_s": 0.6,
+      "artifacts": [
+        {
+          "path": "outputs/v1_roof_assembly_gable/variant.blend",
+          "size_bytes": 91579,
+          "sha256": "d8016bf7c5797782af286b5f3751e517395a226096416db2cc3f1e0441b787d6",
+          "type": "blend"
+        },
+        {
+          "path": "outputs/v1_roof_assembly_gable/variant.glb",
+          "size_bytes": 4912,
+          "sha256": "ccbfdd8b8315601619fde5f689c2c0e8afa1505ab89f1ebd91edfb949b498b71",
+          "type": "glb"
+        }
+      ],
+      "source_hashes": {
+        "walls_module": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e"
+      },
+      "source_hashes_unchanged": true,
+      "expected_bounds": [
+        [
+          -2.3,
+          -1.76,
+          0.0
+        ],
+        [
+          2.3,
+          1.76,
+          3.485423
+        ]
+      ],
+      "actual_bounds": [
+        [
+          -2.3,
+          -1.760009,
+          0.0
+        ],
+        [
+          2.3,
+          1.760009,
+          3.485423
+        ]
+      ],
+      "scene_summary": {
+        "objects": 3,
+        "meshes": 3,
+        "materials": 0,
+        "cameras": 0,
+        "triangles": 36,
+        "vertices": 40,
+        "components": [],
+        "bounds": {
+          "min": [
+            -2.3,
+            -1.760009,
+            0.0
+          ],
+          "max": [
+            2.3,
+            1.760009,
+            3.485423
+          ]
+        }
+      },
+      "glb_report": {
+        "generator": "Khronos glTF Blender I/O v5.2.41",
+        "glTF_version": "2.0",
+        "nodes": [
+          {
+            "node_name": "roof_panel_north",
+            "mesh_name": "roof_panel_north_mesh",
+            "translation": [
+              0.0,
+              2.942708969116211,
+              -0.8799999952316284
+            ],
+            "rotation_present": true,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": null,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.299999952316284,
+              -0.05999999865889549,
+              -0.9815055131912231
+            ],
+            "bounds_local_max": [
+              2.299999952316284,
+              0.05999999865889549,
+              0.9815055131912231
+            ]
+          },
+          {
+            "node_name": "roof_panel_south",
+            "mesh_name": "roof_panel_south_mesh",
+            "translation": [
+              0.0,
+              2.942708969116211,
+              0.8799999952316284
+            ],
+            "rotation_present": true,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": null,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.299999952316284,
+              -0.05999999865889549,
+              -0.9815055131912231
+            ],
+            "bounds_local_max": [
+              2.299999952316284,
+              0.05999999865889549,
+              0.9815055131912231
+            ]
+          },
+          {
+            "node_name": "walls_base",
+            "mesh_name": "walls_base_mesh",
+            "translation": [
+              0.0,
+              1.2000000476837158,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": null,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.0,
+              -1.2000000476837158,
+              -1.5
+            ],
+            "bounds_local_max": [
+              2.0,
+              1.2000000476837158,
+              1.5
+            ]
+          }
+        ],
+        "meshes_count": 3,
+        "materials": [],
+        "materials_count": 0,
+        "total_vertices": 72,
+        "total_triangles": 36,
+        "bounds_local_min": [
+          -2.0,
+          -1.2000000476837158,
+          -1.5
+        ],
+        "bounds_local_max": [
+          2.0,
+          1.2000000476837158,
+          1.5
+        ],
+        "note": "bounds_local_* are accessor min/max in local mesh coordinates (no node transforms applied); authoritative world bounds come from the worker scene_summary"
+      },
+      "checks": {},
+      "bundle_path": "I:\\prog\\michelangelo-adr5-blender\\adr5_blender_poc\\evidence\\item-v1-roof-assembly-gable\\bundle.json",
+      "bundle_sha256": "dead67c8354dd1dfc7b64ada5f6b022ec4c16b982146c3979f467f6b3eb98611",
+      "resources": {
+        "peak_blender_ram_mib": 206.0,
+        "ram_method": "ctypes psapi GetProcessMemoryInfo PeakWorkingSetSize (polling)",
+        "gpu_used_max_mib": 1521,
+        "vram_method": "nvidia-smi memory.used (GPU total, all processes)",
+        "vram_scope_note": "GPU total across all processes, not Blender-only"
+      },
+      "schema_validation": []
+    },
+    {
+      "item_id": "item-v1-roof-assembly-none",
+      "template_id": "v1_roof_assembly",
+      "level": "V1",
+      "variant_value": "none",
+      "status": "executed",
+      "elapsed_s": 0.6,
+      "artifacts": [
+        {
+          "path": "outputs/v1_roof_assembly_none/variant.blend",
+          "size_bytes": 90452,
+          "sha256": "b445de9dc4156e9ebafe8220671f83b5352c52b491ae53f7f069f96bd6352594",
+          "type": "blend"
+        },
+        {
+          "path": "outputs/v1_roof_assembly_none/variant.glb",
+          "size_bytes": 1824,
+          "sha256": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e",
+          "type": "glb"
+        }
+      ],
+      "source_hashes": {
+        "walls_module": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e"
+      },
+      "source_hashes_unchanged": true,
+      "expected_bounds": [
+        [
+          -2.0,
+          -1.5,
+          0.0
+        ],
+        [
+          2.0,
+          1.5,
+          2.4
+        ]
+      ],
+      "actual_bounds": [
+        [
+          -2.0,
+          -1.5,
+          0.0
+        ],
+        [
+          2.0,
+          1.5,
+          2.4
+        ]
+      ],
+      "scene_summary": {
+        "objects": 1,
+        "meshes": 1,
+        "materials": 0,
+        "cameras": 0,
+        "triangles": 12,
+        "vertices": 24,
+        "components": [],
+        "bounds": {
+          "min": [
+            -2.0,
+            -1.5,
+            0.0
+          ],
+          "max": [
+            2.0,
+            1.5,
+            2.4
+          ]
+        }
+      },
+      "glb_report": {
+        "generator": "Khronos glTF Blender I/O v5.2.41",
+        "glTF_version": "2.0",
+        "nodes": [
+          {
+            "node_name": "walls_base",
+            "mesh_name": "walls_base_mesh",
+            "translation": [
+              0.0,
+              1.2000000476837158,
+              0.0
+            ],
+            "rotation_present": false,
+            "primitives": [
+              {
+                "vertices": 24,
+                "triangles": 12,
+                "has_uv_texcoord_0": true,
+                "material_index": null,
+                "mode": 4
+              }
+            ],
+            "vertices_total": 24,
+            "triangles_total": 12,
+            "has_uv_all_primitives": true,
+            "bounds_local_min": [
+              -2.0,
+              -1.2000000476837158,
+              -1.5
+            ],
+            "bounds_local_max": [
+              2.0,
+              1.2000000476837158,
+              1.5
+            ]
+          }
+        ],
+        "meshes_count": 1,
+        "materials": [],
+        "materials_count": 0,
+        "total_vertices": 24,
+        "total_triangles": 12,
+        "bounds_local_min": [
+          -2.0,
+          -1.2000000476837158,
+          -1.5
+        ],
+        "bounds_local_max": [
+          2.0,
+          1.2000000476837158,
+          1.5
+        ],
+        "note": "bounds_local_* are accessor min/max in local mesh coordinates (no node transforms applied); authoritative world bounds come from the worker scene_summary"
+      },
+      "checks": {},
+      "bundle_path": "I:\\prog\\michelangelo-adr5-blender\\adr5_blender_poc\\evidence\\item-v1-roof-assembly-none\\bundle.json",
+      "bundle_sha256": "135dad09385b3aab57b01193d0deaecdc934d962fd96c37cb1edd98b0492f558",
+      "resources": {
+        "peak_blender_ram_mib": 204.4,
+        "ram_method": "ctypes psapi GetProcessMemoryInfo PeakWorkingSetSize (polling)",
+        "gpu_used_max_mib": 1499,
+        "vram_method": "nvidia-smi memory.used (GPU total, all processes)",
+        "vram_scope_note": "GPU total across all processes, not Blender-only"
+      },
+      "schema_validation": []
+    }
+  ],
+  "negatives": [
+    {
+      "negative": "F18_capability_unavailable",
+      "expected_code": "CAPABILITY_UNAVAILABLE",
+      "actual_code": "CAPABILITY_UNAVAILABLE",
+      "ok": true,
+      "message": "template 'v0_textured_probe' requires capabilities ['texture_binding'] that are not available in this execution context; item is blocked (other items continue)"
+    },
+    {
+      "negative": "missing_texture",
+      "expected_code": "MISSING_TEXTURE",
+      "actual_code": "MISSING_TEXTURE",
+      "ok": true,
+      "message": "template requires texture 'facade_diffuse' which is not available: I:\\prog\\michelangelo-adr5-blender\\adr5_blender_poc\\fixtures\\facade_diffuse.png"
+    },
+    {
+      "negative": "template_hash_mismatch",
+      "expected_code": "TEMPLATE_HASH_MISMATCH",
+      "actual_code": "TEMPLATE_HASH_MISMATCH",
+      "ok": true,
+      "message": "template 'v0_palette_master' bytes do not match the registry (expected 50e69342c30dae9a3ed6ad32f53257adbec7087645e9a427ae1ee27df96846eb, actual 0bdf513578a4a6c98cea10a3e7f323d680e7894e21a35ba130ecf51f48c52a2e)"
+    },
+    {
+      "negative": "source_hash_mismatch",
+      "expected_code": "SOURCE_HASH_MISMATCH",
+      "actual_code": "SOURCE_HASH_MISMATCH",
+      "ok": true,
+      "message": "source fixture 'house_master' does not match the pinned hash (expected eb985b8d1b2ca388ccc57dae66d342900616258e5b5751e608d058aa2f57d8a5, actual dfb074b330ece87f789064f446712698aadcd30a015095dc565e4a7fd888e3fd); execution refused"
+    },
+    {
+      "negative": "missing_module",
+      "expected_code": "MISSING_MODULE",
+      "actual_code": "MISSING_MODULE",
+      "ok": true,
+      "message": "source fixture 'house_master' is missing: C:\\Users\\4D88~1\\AppData\\Local\\Temp\\tmp1lkrdwl3\\fixtures\\house_master.glb"
+    },
+    {
+      "negative": "F_invalid_socket",
+      "expected_code": "INVALID_SOCKET",
+      "actual_code": "INVALID_SOCKET",
+      "ok": true,
+      "message": "component 'narrow_flat' vs socket 'walls_top': component footprint 2.0x1.5 does not cover the socket 4.0x3.0 (socket coverage required)"
+    },
+    {
+      "negative": "worker_failed_nonzero",
+      "expected_code": "WORKER_FAILED",
+      "actual_code": "WORKER_FAILED",
+      "ok": true,
+      "message": "worker reported status='failed' exit=1: Operation 'import_mesh' failed: Error: Bad glTF: json error: Expecting value: line 1 column 1 (char 0)\n"
+    }
+  ],
+  "all_negatives_ok": true
+}

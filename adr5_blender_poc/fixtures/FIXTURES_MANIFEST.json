@@ -1,0 +1,65 @@
+{
+  "fixtures": {
+    "house_master": {
+      "file_glb": "house_master.glb",
+      "glb_sha256": "eb985b8d1b2ca388ccc57dae66d342900616258e5b5751e608d058aa2f57d8a5",
+      "glb_size_bytes": 4652,
+      "file_blend": "house_master.blend",
+      "blend_sha256": "4f5251317b98d9a09465b5ef34aaa76a8b0c51da330b537aad26e29607f909c2",
+      "blend_size_bytes": 91126,
+      "scene_summary": {
+        "objects": 3,
+        "meshes": 3,
+        "materials": 0,
+        "cameras": 0,
+        "triangles": 36,
+        "vertices": 24,
+        "components": [],
+        "bounds": {
+          "min": [
+            -2.2,
+            -1.7,
+            0.0
+          ],
+          "max": [
+            2.2,
+            1.7,
+            2.65
+          ]
+        }
+      },
+      "blender_version": "Blender 5.2.3 LTS"
+    },
+    "walls_module": {
+      "file_glb": "walls_module.glb",
+      "glb_sha256": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e",
+      "glb_size_bytes": 1824,
+      "file_blend": "walls_module.blend",
+      "blend_sha256": "26612f594b1684b81dd8f24327591d46674d028809afd98338d32f1f5909925d",
+      "blend_size_bytes": 90268,
+      "scene_summary": {
+        "objects": 1,
+        "meshes": 1,
+        "materials": 0,
+        "cameras": 0,
+        "triangles": 12,
+        "vertices": 8,
+        "components": [],
+        "bounds": {
+          "min": [
+            -2.0,
+            -1.5,
+            0.0
+          ],
+          "max": [
+            2.0,
+            1.5,
+            2.4
+          ]
+        }
+      },
+      "blender_version": "Blender 5.2.3 LTS"
+    }
+  },
+  "manifest_note": "Pinned source fixtures for the GLM-5 PoC; hashes are over the actual file bytes. .blend byte-reproducibility is not claimed."
+}

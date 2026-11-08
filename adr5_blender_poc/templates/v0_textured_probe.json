@@ -1,0 +1,40 @@
+{
+  "template_schema": "michelangelo.adr5-poc.template/draft-0",
+  "template_id": "v0_textured_probe",
+  "revision": 1,
+  "level": "V0",
+  "description": "Негативный probe: требует capability 'texture_binding' (в PoC-наборе отсутствует -> CAPABILITY_UNAVAILABLE, F18) и текстуру textures/facade_diffuse.png (файл не поставляется -> MISSING_TEXTURE). Используется ТОЛЬКО в негативных тестах до запуска Blender; job_plan для реального исполнения не предназначен (в 18 ops нет текстурной операции).",
+  "capabilities_required": [
+    "worker_job",
+    "texture_binding"
+  ],
+  "sources": [],
+  "textures": [
+    {
+      "texture_id": "facade_diffuse",
+      "file": "textures/facade_diffuse.png"
+    }
+  ],
+  "protected_objects": [],
+  "parameters": {},
+  "source_bounds": {
+    "min": [0.0, 0.0, 0.0],
+    "max": [0.0, 0.0, 0.0]
+  },
+  "source_counts": { "vertices": 0, "triangles": 0 },
+  "job_plan": {
+    "base_operations": [
+      {
+        "op": "create_box",
+        "name": "probe_panel",
+        "size": [1.0, 1.0, 0.1],
+        "location": [0.0, 0.0, 0.05]
+      }
+    ],
+    "component_blocks": {},
+    "tail_operations": [
+      { "op": "export_glb", "path": "outputs/@stem@/probe.glb" }
+    ]
+  },
+  "slots": []
+}

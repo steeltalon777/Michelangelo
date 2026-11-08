@@ -1,0 +1,216 @@
+{
+  "template_schema": "michelangelo.adr5-poc.template/draft-0",
+  "template_id": "v1_roof_assembly",
+  "revision": 1,
+  "level": "V1",
+  "description": "V1 Assembly: сборки из заранее размеченных компонентов по сокету walls_top (стены из source walls_module.glb + выбор крыши flat/gable/none). Коннектор компонента обязан накрывать сокет (INVALID_SOCKET иначе). Эффективный результат сверяется с плановыми bounds/counts (BOUNDS_MISMATCH). Стены — защищённая роль: слоты материалов на walls_base запрещены (в шаблоне их нет вовсе).",
+  "geometry_notes": "Gable: угол 30°, полупролёт 1.5+0.2 свес, L=1.7/cos30=1.963011, толщина 0.12, подъём на полтолщины по нормали; центры панелей (0,∓0.88,2.942709), rotation_deg X=±30. Ожидаемые bounds выведены из этой геометрии и сверяются фактом после прогона.",
+  "capabilities_required": [
+    "worker_job",
+    "gltf_export",
+    "blend_save",
+    "module_assembly",
+    "scene_summary"
+  ],
+  "sources": [
+    {
+      "source_id": "walls_module",
+      "file": "fixtures/walls_module.glb",
+      "sha256": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e",
+      "role": "module_donor"
+    }
+  ],
+  "textures": [],
+  "protected_objects": [
+    "walls_base"
+  ],
+  "sockets": {
+    "walls_top": {
+      "z": 2.4,
+      "footprint": {
+        "width": 4.0,
+        "depth": 3.0
+      },
+      "description": "Верх стен 4x3 на z=2.4; крыша обязана накрывать footprint"
+    }
+  },
+  "component_choice_parameters": {
+    "roof_variant": "walls_top"
+  },
+  "parameters": {
+    "roof_variant": {
+      "type": "enum",
+      "values": [
+        "flat",
+        "gable",
+        "none"
+      ],
+      "description": "Компонент крыши, стыкуемый с сокетом walls_top"
+    }
+  },
+  "source_bounds": {
+    "min": [
+      -2.0,
+      -1.5,
+      0.0
+    ],
+    "max": [
+      2.0,
+      1.5,
+      2.4
+    ]
+  },
+  "source_counts": {
+    "vertices": 24,
+    "triangles": 12,
+    "note": "scene-side counts for the VARIANT job: the imported walls cube arrives triangulated with UV-split vertices (24/12); each primitive block adds 8 verts / 12 tris"
+  },
+  "job_plan": {
+    "base_operations": [
+      {
+        "op": "import_mesh",
+        "path": "inputs/walls_module.glb"
+      },
+      {
+        "op": "get_scene_summary"
+      }
+    ],
+    "component_blocks": {
+      "flat": {
+        "insert_at_index": 1,
+        "connector": {
+          "width": 4.4,
+          "depth": 3.4,
+          "base_z": 2.4
+        },
+        "expected_bounds": {
+          "min": [
+            -2.2,
+            -1.7,
+            0.0
+          ],
+          "max": [
+            2.2,
+            1.7,
+            2.65
+          ]
+        },
+        "expected_counts": {
+          "vertices": 8,
+          "triangles": 12
+        },
+        "operations": [
+          {
+            "op": "create_box",
+            "name": "roof_slab",
+            "size": [
+              4.4,
+              3.4,
+              0.25
+            ],
+            "location": [
+              0.0,
+              0.0,
+              2.525
+            ]
+          }
+        ]
+      },
+      "gable": {
+        "insert_at_index": 1,
+        "connector": {
+          "width": 4.6,
+          "depth": 3.52,
+          "base_z": 2.4
+        },
+        "expected_bounds": {
+          "min": [
+            -2.3,
+            -1.76,
+            0.0
+          ],
+          "max": [
+            2.3,
+            1.76,
+            3.485423
+          ]
+        },
+        "expected_counts": {
+          "vertices": 16,
+          "triangles": 24
+        },
+        "operations": [
+          {
+            "op": "create_box",
+            "name": "roof_panel_south",
+            "size": [
+              4.6,
+              1.963011,
+              0.12
+            ],
+            "location": [
+              0.0,
+              -0.88,
+              2.942709
+            ],
+            "rotation_deg": [
+              30.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "op": "create_box",
+            "name": "roof_panel_north",
+            "size": [
+              4.6,
+              1.963011,
+              0.12
+            ],
+            "location": [
+              0.0,
+              0.88,
+              2.942709
+            ],
+            "rotation_deg": [
+              -30.0,
+              0.0,
+              0.0
+            ]
+          }
+        ]
+      },
+      "none": {
+        "insert_at_index": 1,
+        "expected_bounds": {
+          "min": [
+            -2.0,
+            -1.5,
+            0.0
+          ],
+          "max": [
+            2.0,
+            1.5,
+            2.4
+          ]
+        },
+        "expected_counts": {
+          "vertices": 0,
+          "triangles": 0
+        },
+        "operations": []
+      }
+    },
+    "tail_operations": [
+      {
+        "op": "save_blend",
+        "path": "outputs/@stem@/variant.blend"
+      },
+      {
+        "op": "export_glb",
+        "path": "outputs/@stem@/variant.glb"
+      }
+    ]
+  },
+  "slots": []
+}

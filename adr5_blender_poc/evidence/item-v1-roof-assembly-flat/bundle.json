@@ -1,0 +1,61 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "variant_blend",
+      "content_kind": "other",
+      "path": "outputs/v1_roof_assembly_flat/variant.blend",
+      "sha256": "06a193370cc25d6f6aa19f5cf44804e1ed46a7c0a48c30f8548d201306490b67",
+      "size_bytes": 91114,
+      "source": "generated"
+    },
+    {
+      "artifact_id": "variant_glb",
+      "content_kind": "scene_layout",
+      "path": "outputs/v1_roof_assembly_flat/variant.glb",
+      "sha256": "ea58a42c1eb276d0aa63e75eb7385b4a7dad01ea05ac4a67c910985f9dc8d79c",
+      "size_bytes": 3256,
+      "source": "generated"
+    }
+  ],
+  "asset_digest": "2374a4c7af93518e051efa1e99f011b00eff73b4edc0b0931d200f7ffdfa4f74",
+  "asset_id": "v1-walls-roof-assembly",
+  "base_ref": {
+    "id": "walls_module",
+    "kind": "source_snapshot",
+    "sha256": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e"
+  },
+  "candidate_id": "cand-item-v1-roof-assembly-flat",
+  "created_at": "2026-11-08T14:05:42Z",
+  "dependency_digests": {
+    "template_file": "a47aa9ea89c980ad9c72e9a4d840e46a8644c22bd46339911e5cee568492d731",
+    "walls_module": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e",
+    "worker_blender_py": "9c7c24f3311aa0a5cdc168ff0b5d336067ce6c4200d6b2b3ac6f17e53cb96ee3"
+  },
+  "diff_to_base": {
+    "added": [
+      "variant_blend",
+      "variant_glb"
+    ],
+    "changed": [],
+    "removed": []
+  },
+  "item_id": "item-v1-roof-assembly-flat",
+  "provenance_chain": [
+    {
+      "actor_role": "core",
+      "ref": {
+        "path": "adr5_blender_poc/templates/v1_roof_assembly.json",
+        "sha256": "a47aa9ea89c980ad9c72e9a4d840e46a8644c22bd46339911e5cee568492d731"
+      },
+      "stage": "variant_generation"
+    }
+  ],
+  "schema": "michelangelo.candidate-asset-bundle/draft-0.1",
+  "status": "proposed",
+  "unresolved_issues": [
+    "PoC: appearance is verified only via glTF baseColorFactor of the exported GLB; no EEVEE/Cycles render validation was performed",
+    "No UE readiness is claimed: no engine import/playback validation exists",
+    "--factory-startup is not a sandbox; only known trusted fixtures were loaded, no untrusted .blend intake is supported",
+    "V1 socket compatibility is verified statically from registered template data plus a planned-bounds runtime check; not a physics/fit simulation"
+  ]
+}
