@@ -123,7 +123,12 @@ Stage D (ADR §13.4) — optional assistant — ✅ **done (IT-7, 2026-11-07)**:
   completion rules, accepted-author precedence). ✅ Demo (2026-11-08): an external DSH subagent
   over MCP authored a meaningful flame replacement for a solver stub; real-Blender evaluation
   passed, the owner confirmation resolved the unknown in the accepted bundle, and an arbitrary
-  cube control was accepted only as geometry (it did not close the unknown).
+  cube control was accepted only as geometry (it did not close the unknown). ✅ Corrective pass
+  IT-8D (owner audit): snapshot identity + full diff, actual mask/package hashes, atomic
+  evaluation reservation/no-overwrite, full bundle verification before the pointer, locked
+  accept/reject and crash-after-pointer recovery, held-out independence corrected, surviving
+  resolution evidence refs, historical bundle bindings, non-expandable `--unknown` scope and
+  accepted-author policy override; negative reproduction 8/8.
 - Natural language command interpretation — future (needs a provider under the same bounded-task /
   data-policy rules)
 - Build plan validation → `BlenderJobSpec`; iterative refinement as bounded local-change

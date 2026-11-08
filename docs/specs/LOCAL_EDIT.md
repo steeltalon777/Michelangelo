@@ -390,7 +390,7 @@ michelangelo unknown resolve --run <run_dir> --unknown <id> [--candidate <id>] [
 | Exit code | Meaning |
 |---|---|
 | `0` | the operation succeeded (accepted/proposed/rolled back/resolved, or an idempotent repeat) |
-| `1` | the candidate was rejected; the evaluation gate refused it (`EVALUATION_MISSING`, `EVALUATION_UNREGISTERED`, `EVALUATION_STALE`, `INPUT_CHANGED`, `VISIBLE_FAILED`, `AUTHOR_CONDITION_FAILED`, `REGRESSION`, `NO_GROUND_TRUTH`); the unknown state machine refused it (`BINDING_MISSING`, `BINDING_MISMATCH`, `CONFIRMATION_MISSING`, `CONFIRMATION_STALE`, `AGENT_CONFIRMATION_REFUSED`); or the store refused the operation (`STALE_BASE`, `EVIDENCE_MISMATCH`, `SNAPSHOT_MISSING`, `CANDIDATE_ALREADY_ACCEPTED`) |
+| `1` | the candidate was rejected; the evaluation gate refused it (`EVALUATION_MISSING`, `EVALUATION_UNREGISTERED`, `EVALUATION_STALE`, `EVALUATION_ALREADY_REGISTERED`, `INPUT_CHANGED`, `VISIBLE_FAILED`, `AUTHOR_CONDITION_FAILED`, `REGRESSION`, `NO_GROUND_TRUTH`); the unknown state machine refused it (`BINDING_MISSING`, `BINDING_MISMATCH`, `CONFIRMATION_MISSING`, `CONFIRMATION_STALE`, `AGENT_CONFIRMATION_REFUSED`); or the store refused the operation (`STALE_BASE`, `EVIDENCE_MISMATCH`, `SNAPSHOT_MISSING`, `SNAPSHOT_MISMATCH`, `CANDIDATE_ALREADY_ACCEPTED`) |
 | `2` | usage error, IO error, a candidate that cannot be interpreted, or a busy store (`STORE_BUSY`) |
 
 * `submit` copies the candidate into the store (`candidates/<id>/`), validates
@@ -399,12 +399,20 @@ michelangelo unknown resolve --run <run_dir> --unknown <id> [--candidate <id>] [
 * `accept` re-validates the candidate against the **current** revision, then runs
   the evaluation gate on the registered `--evaluation` report (see
   `docs/specs/EVALUATION.md`): target aggregate, base revision, pinned inputs, visible
-  conformance, required author geometric conditions and per-view regression. Only then a new
-  revision is published and its bundle references the evaluation. A candidate that became
-  stale is refused with `STALE_BASE`; a missing/invalid evaluation is refused with the gate
-  code and an `accept-refused` history record. `--resolve <unknown>` additionally closes that
-  unknown in the new bundle (see `docs/specs/UNKNOWNS.md`); without it the geometry is accepted
-  and every unknown stays open (partial acceptance).
+  conformance, required author geometric conditions and per-view regression. Before the
+  evaluation can pass, the snapshot must be the one pinned by the immutable submit decision
+  (manifest digest, candidate/task/package/base digests) and the full diff against the base is
+  re-checked: the manifest file set equals base ∪ declared changes, unchanged components are
+  byte-identical to the base, changed components equal the declared candidate bytes and
+  protected components are unchanged (`SNAPSHOT_MISMATCH` otherwise; a coordinated tamper of
+  geometry **and** manifest is refused). Immediately before the pointer switch every document
+  the new bundle references is loaded by path and its SHA-256 is re-checked; accept and reject
+  take the store lock before reading the transition state, so a stale reject cannot overwrite a
+  concurrent acceptance. A candidate that became stale is refused with `STALE_BASE`; a
+  missing/invalid evaluation is refused with the gate code and an `accept-refused` history
+  record. `--resolve <unknown>` additionally closes that unknown in the new bundle (see
+  `docs/specs/UNKNOWNS.md`); without it the geometry is accepted and every unknown stays open
+  (partial acceptance).
 * `unknown` manages the explicit bindings, author confirmations and resolutions of the run.
   Closure is never automatic and never based on a `part_id` match; it is materialised only by a
   revision whose bundle references the resolution. A later change of the bound geometry,

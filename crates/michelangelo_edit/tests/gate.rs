@@ -40,6 +40,12 @@ impl Fixture {
         std::fs::create_dir_all(run_dir.join("package")).expect("the package directory is created");
         std::fs::write(run_dir.join("package/package.json"), package_json())
             .expect("the package copy is written");
+        // The copy of the package carries the mask of the view: the pins of
+        // an evaluation are the digests of the bytes that are on the disk.
+        std::fs::create_dir_all(run_dir.join("package/masks"))
+            .expect("the mask directory is created");
+        std::fs::write(run_dir.join("package/masks/front.png"), b"mask")
+            .expect("the mask is written");
         let candidate_dir = directory.path().join("cand-0001");
         write_candidate(
             &candidate_dir,
@@ -328,6 +334,57 @@ fn a_claim_without_a_ground_truth_is_refused() {
     )
     .expect_err("the acceptance is refused");
     assert_eq!(error.code(), NO_GROUND_TRUTH);
+}
+
+#[test]
+fn a_changed_mask_after_the_evaluation_is_refused() {
+    // The pin of a view is the digest of the bytes of the mask file: a mask
+    // that changes after the evaluation is an input that changed.
+    let fixture = Fixture::new();
+    let path = register(&fixture.run_dir, "cand-0001", |_| {});
+
+    let mask = fixture.run_dir.join("package/masks/front.png");
+    std::fs::write(&mask, b"another mask").expect("the mask is written");
+
+    let error = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(path),
+            ..Default::default()
+        },
+    )
+    .expect_err("the acceptance is refused");
+    assert_eq!(error.code(), INPUT_CHANGED);
+    assert!(
+        !fixture.run_dir.join("scene/s0002").exists(),
+        "no revision is published"
+    );
+}
+
+#[test]
+fn a_missing_mask_after_the_evaluation_is_refused() {
+    let fixture = Fixture::new();
+    let path = register(&fixture.run_dir, "cand-0001", |_| {});
+
+    let mask = fixture.run_dir.join("package/masks/front.png");
+    std::fs::remove_file(&mask).expect("the mask is removed");
+
+    let error = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(path),
+            ..Default::default()
+        },
+    )
+    .expect_err("the acceptance is refused");
+    assert_eq!(error.code(), INPUT_CHANGED);
+    assert!(!fixture.run_dir.join("scene/s0002").exists());
 }
 
 #[test]

@@ -273,12 +273,16 @@ fn evaluate(
         message: format!("the package copy of the run is not usable: {err}"),
     })?;
 
-    let source_views = michelangelo_evidence::report::package_views(&package);
+    let mut source_views = michelangelo_evidence::report::package_views(&package);
     if source_views.is_empty() {
         return Err(EvalError::Missing {
             message: String::from("the package copy of the run has no calibrated view"),
         });
     }
+    // The evaluation pins the bytes it really reads: the digest of every mask
+    // file is computed and compared with the digest the package declares. A
+    // package that does not match its own files is refused.
+    pin_actual_masks(&package_dir, &package, &mut source_views)?;
     let view_set = ViewSet {
         units: units_of(&package),
         views: source_views.iter().map(view_spec).collect(),
@@ -296,13 +300,10 @@ fn evaluate(
         }
     }
 
-    // The work area of the evaluation.
-    let registry = load_registry(run_dir).map_err(|err| EvalError::Invalid {
-        message: err.message().to_string(),
-    })?;
-    let evaluation_id = registry.next_evaluation_id();
-    let work =
-        michelangelo_evidence::registry::evaluation_dir(run_dir, &evaluation_id).join("work");
+    // The work area of the evaluation: the identifier is reserved with an
+    // atomic create (no overwrite) under the short lock of the store, so two
+    // concurrent evaluations never share a directory.
+    let (evaluation_id, work) = reserve_evaluation(run_dir, &store)?;
     let target_dir = work.join("target");
     let base_dir = work.join("base");
     stage_geometry(&target.components, &target_dir)?;
@@ -429,11 +430,142 @@ fn evaluate(
 
     // The report is registered under the lock of the store: the registry
     // never carries the digest of bytes that are not on the disk.
-    let _lock = StoreLock::acquire(&store, "evaluate")?;
+    let _lock = lock_store(&store, "evaluate")?;
     write_and_register(run_dir, &report).map_err(|err| EvalError::Invalid {
         message: err.message().to_string(),
     })?;
     Ok(report)
+}
+
+/// Take the lock of the store for a short section of an evaluation.
+///
+/// The lock of the store is exclusive and is never stolen: the evaluator waits
+/// a short moment for it (the sections are short) instead of refusing the
+/// evaluation. Two concurrent evaluations therefore both succeed, with
+/// distinct identifiers.
+fn lock_store(store: &SceneStore, operation: &str) -> Result<StoreLock, EvalError> {
+    let mut waited = 0_u32;
+    loop {
+        match StoreLock::acquire(store, operation) {
+            Ok(lock) => return Ok(lock),
+            Err(error) => {
+                if error.code() != michelangelo_edit::error::STORE_BUSY {
+                    return Err(EvalError::Evidence {
+                        message: error.message().to_string(),
+                    });
+                }
+                if waited >= 100 {
+                    return Err(EvalError::Evidence {
+                        message: error.message().to_string(),
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                waited += 1;
+            }
+        }
+    }
+}
+
+/// Reserve the directory of an evaluation.
+///
+/// The reservation is an atomic create (no overwrite) under the short lock of
+/// the store: two concurrent evaluations get distinct identifiers and both
+/// reports stay intact. The render happens outside of the lock.
+fn reserve_evaluation(run_dir: &Path, store: &SceneStore) -> Result<(String, PathBuf), EvalError> {
+    let _lock = lock_store(store, "evaluate-reserve")?;
+    let registry = load_registry(run_dir).map_err(|err| EvalError::Invalid {
+        message: err.message().to_string(),
+    })?;
+    let mut number = registry
+        .next_evaluation_id()
+        .strip_prefix("ev-")
+        .and_then(|text| text.parse::<u32>().ok())
+        .unwrap_or(1);
+    let evaluations_dir = run_dir
+        .join(michelangelo_evidence::registry::VERIFICATION_DIR_NAME)
+        .join(michelangelo_evidence::registry::EVALUATIONS_DIR_NAME);
+    std::fs::create_dir_all(&evaluations_dir).map_err(|err| {
+        EvalError::io(
+            &evaluations_dir,
+            format!("the evaluations directory cannot be created: {err}"),
+        )
+    })?;
+    loop {
+        let evaluation_id = format!("ev-{number:04}");
+        let directory = michelangelo_evidence::registry::evaluation_dir(run_dir, &evaluation_id);
+        match std::fs::create_dir(&directory) {
+            Ok(()) => {
+                let work = directory.join("work");
+                std::fs::create_dir_all(&work).map_err(|err| {
+                    EvalError::io(
+                        &work,
+                        format!("the work directory of the evaluation cannot be created: {err}"),
+                    )
+                })?;
+                return Ok((evaluation_id, work));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                number += 1;
+                if number > 1_000_000 {
+                    return Err(EvalError::Invalid {
+                        message: String::from(
+                            "the run carries too many evaluations: no identifier is free",
+                        ),
+                    });
+                }
+            }
+            Err(err) => {
+                return Err(EvalError::io(
+                    &directory,
+                    format!("the evaluation cannot be reserved: {err}"),
+                ))
+            }
+        }
+    }
+}
+
+/// Pin the bytes of the mask files a package really carries.
+///
+/// The digests of the mask files are computed and compared with the digests
+/// the package declares: the evaluation measures against the masks of the
+/// disk, and a package that does not match its own files is refused.
+fn pin_actual_masks(
+    package_dir: &Path,
+    package: &Value,
+    views: &mut [PackageView],
+) -> Result<(), EvalError> {
+    let separator = std::path::MAIN_SEPARATOR.to_string();
+    for (view_id, relative) in michelangelo_evidence::report::package_mask_paths(package) {
+        let path = package_dir.join(relative.replace('/', &separator));
+        if !path.is_file() {
+            return Err(EvalError::Missing {
+                message: format!(
+                    "the mask file of the view '{view_id}' is missing: '{}'",
+                    path.display()
+                ),
+            });
+        }
+        let actual = michelangelo_evidence::digest::file_sha256(&path)
+            .map_err(|err| EvalError::io(&path, format!("the mask file cannot be read: {err}")))?;
+        let declared = views
+            .iter()
+            .find(|view| view.view_id == view_id)
+            .map(|view| view.mask_sha256.clone())
+            .unwrap_or_default();
+        if !declared.is_empty() && declared != actual {
+            return Err(EvalError::Invalid {
+                message: format!(
+                    "the package declares the mask {declared} of the view '{view_id}' but the file carries {actual}: the package does not match its own files"
+                ),
+            });
+        }
+        for view in views.iter_mut() {
+            if view.view_id == view_id {
+                view.mask_sha256 = actual.clone();
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Stage the components of a geometry into the work area of the evaluation.
@@ -519,10 +651,18 @@ fn held_out_set(evaluation_package: &Path, source: &ViewSet) -> Result<HoldOut, 
             package_path.display()
         )
     })?;
-    let views = michelangelo_evidence::report::package_views(&package);
+    let mut views = michelangelo_evidence::report::package_views(&package);
     if views.is_empty() {
         return Err(String::from(
             "the evaluation package has no calibrated view: the held-out result is unavailable",
+        ));
+    }
+    // The held-out set is pinned against the bytes it really reads: a package
+    // that does not match its own mask files cannot be used.
+    if let Err(error) = pin_actual_masks(evaluation_package, &package, &mut views) {
+        return Err(format!(
+            "the held-out package does not match its own files: {}",
+            error.message()
         ));
     }
     let package_sha256 = michelangelo_evidence::digest::file_sha256(&package_path)
@@ -535,13 +675,15 @@ fn held_out_set(evaluation_package: &Path, source: &ViewSet) -> Result<HoldOut, 
         let direction = direction_of(held_out_view);
         for source_view in &source.views {
             let dot = dot(direction, direction_of(source_view));
-            // A view looking in the same direction as a source view adds no
-            // silhouette constraint. Opposite orthographic views (dot ~ -1)
-            // are allowed: they see the mirrored silhouette, an independent
-            // constraint, and are the held-out controls of the proof datasets.
-            if dot > HELD_OUT_MAX_DOT {
+            // A view that looks in the same direction as a source view adds no
+            // silhouette constraint. An opposite orthographic view (dot ~ -1)
+            // is not independent either: for a full opaque silhouette it is
+            // the mirrored occupancy, not a new shape constraint. Only a view
+            // whose direction is far from every source direction (|dot| <=
+            // 0.9) adds an independent constraint.
+            if dot.abs() > HELD_OUT_MAX_DOT {
                 return Err(format!(
-                    "the held-out view '{}' is not distinct from the source view '{}': it looks in the same direction (the scalar product of the directions is {dot:.4}, the limit is {HELD_OUT_MAX_DOT:.2}): the held-out result is unavailable",
+                    "the held-out view '{}' is not independent of the source view '{}': the scalar product of the directions is {dot:.4} (the limit is {HELD_OUT_MAX_DOT:.2} in absolute value): an opposite orthographic view is the mirrored silhouette and not an independent shape constraint, so the held-out result is unavailable",
                     held_out_view.view_id, source_view.view_id
                 ));
             }

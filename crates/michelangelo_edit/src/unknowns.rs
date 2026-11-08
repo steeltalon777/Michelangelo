@@ -256,9 +256,20 @@ pub struct UnknownView {
     pub run_id: String,
     /// The revision the view describes.
     pub scene_revision: String,
-    /// The version of the binding document that is current.
+    /// The most recent version of the bindings the bundle of the revision
+    /// refers to.
+    ///
+    /// The field stays optional: a revision that refers to no binding has no
+    /// active binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding_version: Option<String>,
+    /// Every version of the bindings the bundle of the revision refers to.
+    ///
+    /// The list is empty when the bundle of the revision refers to no
+    /// binding: the active bindings are the ones the revision references
+    /// (contract section 3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub binding_versions: Vec<String>,
     /// The unknowns of the revision, sorted by the identifier.
     pub unknowns: Vec<UnknownEntryView>,
     /// The identifiers of the unknowns that are not resolved.
@@ -607,6 +618,41 @@ pub fn latest_resolution(
         .rfind(|resolution| resolution.unknown_id == unknown_id))
 }
 
+/// The resolutions of the resolved entries of a state.
+///
+/// The function returns the immutable resolution documents the resolved
+/// unknowns of the state refer to, sorted by the identifier of the
+/// resolution. A resolution whose document does not exist is an evidence
+/// mismatch: a bundle may never reference a document that is missing.
+pub fn resolved_resolutions(
+    store: &SceneStore,
+    state: &UnknownState,
+) -> Result<Vec<Resolution>, EditError> {
+    let documents = list_resolutions(store)?;
+    let mut resolutions: Vec<Resolution> = Vec::new();
+    for entry in &state.unknowns {
+        if entry.status != STATUS_RESOLVED {
+            continue;
+        }
+        let resolution_id = match &entry.resolution_id {
+            Some(id) => id,
+            None => continue,
+        };
+        let document = documents
+            .iter()
+            .find(|item| &item.resolution_id == resolution_id)
+            .ok_or_else(|| EditError::EvidenceMismatch {
+                message: format!(
+                    "the unknown '{}' is resolved by the resolution '{resolution_id}' but the document does not exist",
+                    entry.unknown_id
+                ),
+            })?;
+        resolutions.push(document.clone());
+    }
+    resolutions.sort_by(|left, right| left.resolution_id.cmp(&right.resolution_id));
+    Ok(resolutions)
+}
+
 /// The policy of the package copy of the run (the default when the run
 /// carries no copy).
 pub fn package_policy(store: &SceneStore) -> PackagePolicy {
@@ -666,20 +712,76 @@ pub fn list_unknowns(
     Ok(state_of(store, revision)?.1.unknowns)
 }
 
+/// The versions of the bindings a revision refers to.
+///
+/// The bundle of the revision is the authority (contract section 3): the
+/// active bindings are the ones the revision references. A revision that
+/// refers to no binding has no active binding; the globally latest binding
+/// document is never used instead.
+pub fn bundle_binding_versions(
+    store: &SceneStore,
+    scene_revision: &str,
+) -> Result<Vec<String>, EditError> {
+    if !store.scene_path(scene_revision).is_file() {
+        return Ok(Vec::new());
+    }
+    let scene = crate::scene::load_scene(store, scene_revision)?;
+    let bundle = match &scene.verification {
+        Some(bundle) => bundle,
+        None => return Ok(Vec::new()),
+    };
+    let mut versions: Vec<String> = bundle
+        .bindings
+        .iter()
+        .map(|binding| binding.version.clone())
+        .collect();
+    versions.sort();
+    versions.dedup();
+    Ok(versions)
+}
+
+/// The binding of an unknown in the bundle of a revision.
+///
+/// The binding of a resolved unknown is the version its resolution refers to;
+/// the binding of an unknown that is not resolved is the most recent version
+/// of the bundle that carries it.
+fn binding_of_entry(
+    documents: &[(String, BindingDocument)],
+    entry: &UnknownStateEntry,
+) -> (Option<UnknownBinding>, Option<String>) {
+    if let Some(version) = &entry.binding_version {
+        if let Some((_, document)) = documents.iter().find(|(name, _)| name == version) {
+            if let Some(binding) = document.binding(&entry.unknown_id) {
+                return (Some(binding.clone()), Some(version.clone()));
+            }
+        }
+    }
+    for (version, document) in documents.iter().rev() {
+        if let Some(binding) = document.binding(&entry.unknown_id) {
+            return (Some(binding.clone()), Some(version.clone()));
+        }
+    }
+    (None, None)
+}
+
 /// The view of the unknowns of a revision.
 pub fn show_unknowns(store: &SceneStore, revision: Option<&str>) -> Result<UnknownView, EditError> {
     let (revision, state) = state_of(store, revision)?;
-    let binding_document = latest_binding_document(store)?;
+    // The active bindings are the ones the bundle of the revision refers to.
+    let versions = bundle_binding_versions(store, &revision)?;
+    let mut documents: Vec<(String, BindingDocument)> = Vec::new();
+    for version in &versions {
+        if let Some(document) = load_binding_document(store, version)? {
+            documents.push((version.clone(), document));
+        }
+    }
     let confirmations = list_confirmations(store)?;
     let resolutions = list_resolutions(store)?;
 
     let mut unknowns = Vec::new();
     let mut unresolved = Vec::new();
     for entry in &state.unknowns {
-        let binding = binding_document
-            .as_ref()
-            .and_then(|document| document.binding(&entry.unknown_id))
-            .cloned();
+        let (binding, binding_version) = binding_of_entry(&documents, entry);
         let resolution = entry
             .resolution_id
             .as_ref()
@@ -713,7 +815,7 @@ pub fn show_unknowns(store: &SceneStore, revision: Option<&str>) -> Result<Unkno
             solver_status: entry.solver_status.clone(),
             detail: entry.detail.clone(),
             binding,
-            binding_version: entry.binding_version.clone(),
+            binding_version: binding_version.or_else(|| entry.binding_version.clone()),
             resolution,
             confirmations: own,
             evidence_refs,
@@ -725,7 +827,8 @@ pub fn show_unknowns(store: &SceneStore, revision: Option<&str>) -> Result<Unkno
         schema: UNKNOWN_VIEW_SCHEMA.to_string(),
         run_id: crate::scene::run_id_of(&store.run_dir),
         scene_revision: revision,
-        binding_version: binding_document.map(|document| document.version),
+        binding_version: versions.last().cloned(),
+        binding_versions: versions,
         unknowns,
         unresolved,
     })
@@ -1243,17 +1346,27 @@ fn check_package_policy(
     }
 
     // The completion rules of the package limit the kinds that may resolve an
-    // unknown.
+    // unknown. An accepted author decision of the package has the highest
+    // precedence (contract section 8): it satisfies the restriction of the
+    // rules for the element the decision names. The security constraints and
+    // the other rules of the policy are untouched.
+    let mut overridden: Vec<String> = Vec::new();
     if solver_status.as_deref() == Some("resolved") {
         let rules = applied_rules_for(store, unknown_id);
-        for rule in rules {
-            if !policy.rule_is_allowed(&rule) {
-                return Err(EditError::UnknownPolicyViolation {
-                    message: format!(
-                        "the unknown '{unknown_id}' was resolved by the rule '{rule}' which the package does not allow"
-                    ),
-                });
+        let unknown_accepted = policy.accepts_unknown(unknown_id);
+        for (supplement_id, rule) in rules {
+            if policy.rule_is_allowed(&rule) {
+                continue;
             }
+            if unknown_accepted || policy.accepts_supplement(&supplement_id) {
+                overridden.push(rule);
+                continue;
+            }
+            return Err(EditError::UnknownPolicyViolation {
+                message: format!(
+                    "the unknown '{unknown_id}' was resolved by the rule '{rule}' which the package does not allow"
+                ),
+            });
         }
     }
 
@@ -1277,6 +1390,10 @@ fn check_package_policy(
     } else {
         "forbidden"
     });
+    if !overridden.is_empty() {
+        detail.push_str("; the accepted author decision of the package overrides the rules ");
+        detail.push_str(&overridden.join(", "));
+    }
     checks.push(ResolutionCheck {
         id: String::from("package_policy"),
         status: String::from("pass"),
@@ -1305,7 +1422,11 @@ fn solver_status_of(store: &SceneStore, unknown_id: &str) -> Option<String> {
 
 /// The rules of the supplements that the solver applied to the parts of an
 /// unknown.
-fn applied_rules_for(store: &SceneStore, unknown_id: &str) -> Vec<String> {
+///
+/// Every entry carries the identifier of the supplement and the kind of the
+/// rule: an accepted author decision of the package names the supplement (or
+/// the unknown) and not the rule.
+fn applied_rules_for(store: &SceneStore, unknown_id: &str) -> Vec<(String, String)> {
     let text = match std::fs::read_to_string(store.report_path()) {
         Ok(text) => text,
         Err(_) => return Vec::new(),
@@ -1377,7 +1498,7 @@ fn applied_rules_for(store: &SceneStore, unknown_id: &str) -> Vec<String> {
             continue;
         }
         if let Some(rule) = supplement.get("kind").and_then(|value| value.as_str()) {
-            rules.push(rule.to_string());
+            rules.push((supplement_id.to_string(), rule.to_string()));
         }
     }
     rules.sort();

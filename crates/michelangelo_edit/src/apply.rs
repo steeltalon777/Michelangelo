@@ -20,6 +20,7 @@
 //! returns the historical result, appends an `accept-idempotent` record and
 //! does not switch the scene back (also after a rollback).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -42,9 +43,10 @@ use crate::validate::{
 };
 use crate::verification::{
     aggregate_digest, canonical_json, file_sha256, load_snapshot, package_digest,
-    package_policy_digest, snapshot_file_path, tool_versions, unknown_state_relative_path,
-    verify_snapshot, workspace_policy_digest, write_bytes_new, write_unknown_state, SnapshotFile,
-    SnapshotManifest, SnapshotSource, StoreLock,
+    package_policy_digest, snapshot_file_path, snapshot_identity, tool_versions,
+    unknown_state_relative_path, verify_revision_bundle, verify_snapshot, verify_snapshot_diff,
+    verify_snapshot_identity, workspace_policy_digest, write_bytes_new, write_unknown_state,
+    SnapshotFile, SnapshotIdentity, SnapshotManifest, SnapshotSource, StoreLock, UnknownState,
 };
 use crate::{Clock, INDEX_SCHEMA};
 
@@ -103,6 +105,7 @@ fn refuse_accept(
 fn coded_edit_error(code: &str, message: String) -> EditError {
     match code {
         crate::error::SNAPSHOT_MISSING => EditError::SnapshotMissing { message },
+        crate::error::SNAPSHOT_MISMATCH => EditError::SnapshotMismatch { message },
         crate::error::EVIDENCE_MISMATCH => EditError::EvidenceMismatch { message },
         crate::error::STALE_BASE => EditError::StaleBase { message },
         crate::error::EVALUATION_MISSING => EditError::EvaluationMissing { message },
@@ -202,6 +205,10 @@ pub struct AcceptHooks<'a> {
     /// pointer is switched (a crash here leaves the old bundle
     /// authoritative).
     pub before_publish: Option<&'a mut dyn FnMut() -> Result<(), EditError>>,
+    /// Called after the pointer is switched and before the history and the
+    /// index are written (a crash here leaves the pointer on the new
+    /// revision: the next attempt completes the same operation).
+    pub after_pointer: Option<&'a mut dyn FnMut() -> Result<(), EditError>>,
 }
 
 /// Submit a candidate into the store of a run.
@@ -322,6 +329,17 @@ pub fn submit_candidate(
     report.snapshot_id = Some(manifest.snapshot_id.clone());
     report.aggregate_sha256 = Some(manifest.aggregate_sha256.clone());
 
+    // The decision pins the identity of the snapshot: the digest of the
+    // manifest, of the candidate document, of the task, of the package and of
+    // the base revision. The acceptance verifies them before it publishes
+    // anything.
+    let identity = snapshot_identity(&store, &manifest)?;
+    report.snapshot_manifest_sha256 = Some(identity.manifest_sha256.clone());
+    report.candidate_sha256 = identity.candidate_sha256.clone();
+    report.task_sha256 = identity.task_sha256.clone();
+    report.package_sha256 = identity.package_sha256.clone();
+    report.base_aggregate_sha256 = identity.base_aggregate_sha256.clone();
+
     if outcome.auto_accept {
         // The automatic acceptance of the workspace policy cannot publish a
         // revision: an acceptance always needs a registered evaluation
@@ -423,12 +441,17 @@ pub fn accept_candidate_with_hooks_and_options(
     let store = SceneStore::new(run_dir);
     let candidate = load_stored_candidate(&store, candidate_id)?;
 
+    // The lock is taken before any state of the store is read: the transition
+    // checks, the verification of the evidence and the writes of the decision
+    // all happen under the same lock. A concurrent rejection can never read a
+    // stale status and overwrite an acceptance.
+    let _lock = StoreLock::acquire(&store, "accept")?;
+
     // An accepted candidate is never applied twice: the historical result is
     // returned, the scene is not switched back (also after a rollback).
     if let Some(historical) = historical_acceptance(&store, candidate_id)? {
         let mut report = historical;
         report.decided_at = clock.now_rfc3339_utc();
-        let _lock = StoreLock::acquire(&store, "accept")?;
         write_decision(&store, &report, DECISION_ACCEPT_IDEMPOTENT)?;
         return Ok(report);
     }
@@ -438,33 +461,9 @@ pub fn accept_candidate_with_hooks_and_options(
     // completed here.
     if let Some(pointer) = load_current(&store)? {
         if pointer.candidate_id.as_deref() == Some(candidate_id) {
-            let mut report = DecisionReport::empty(
-                candidate_id.to_string(),
-                Decision::Accepted,
-                pointer.accepted_at.clone(),
-            );
-            report.base_scene_revision = None;
-            report.resulting_scene_revision = Some(pointer.scene_revision.clone());
-            report.decided_by = Some(by.to_string());
-            report.checks.push(Check {
-                check: "recovery".to_string(),
-                status: CheckStatus::Pass,
-                detail: format!(
-                    "the store already points to the revision '{}' of the candidate",
-                    pointer.scene_revision
-                ),
-            });
-            let _lock = StoreLock::acquire(&store, "accept")?;
-            write_decision(&store, &report, DECISION_ACCEPT)?;
-            record_index(&store, &report, Some(pointer.scene_revision.clone()))?;
-            return Ok(report);
+            return complete_acceptance(&store, candidate_id, by, clock, &options, &pointer);
         }
     }
-
-    // The lock is taken before the evidence is verified: every refusal is
-    // appended to the history under the same lock, so concurrent refusals
-    // cannot race on the decision sequence.
-    let _lock = StoreLock::acquire(&store, "accept")?;
 
     // The evidence of the candidate: without a snapshot the candidate cannot
     // be accepted (a legacy candidate stays readable, it is never accepted).
@@ -485,6 +484,47 @@ pub fn accept_candidate_with_hooks_and_options(
         }
     };
     if let Err(error) = verify_snapshot(&store, &manifest) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+    // The identity of the snapshot must be the one the submit decision
+    // pinned: a manifest that was rewritten after the submission (even
+    // together with its geometry) is refused.
+    let identity = match identity_of_decision(&store, candidate_id) {
+        Ok(identity) => identity,
+        Err(error) => {
+            return refuse_accept(
+                &store,
+                candidate_id,
+                by,
+                clock,
+                error.code(),
+                error.message().to_string(),
+            );
+        }
+    };
+    if let Err(error) = verify_snapshot_identity(&store, &manifest, &identity) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+    // The full difference of the snapshot: the file set against the base
+    // revision and the declared changes, the unchanged components against the
+    // bytes of the base revision and the changed components against the bytes
+    // the candidate declares.
+    let base_of_snapshot = load_scene(&store, &manifest.base.scene_revision)?;
+    if let Err(error) = verify_snapshot_diff(&store, &manifest, &base_of_snapshot, &candidate) {
         return refuse_accept(
             &store,
             candidate_id,
@@ -587,6 +627,26 @@ pub fn accept_candidate_with_hooks_and_options(
             error.message().to_string(),
         );
     }
+    if let Err(error) = verify_snapshot_identity(&store, &manifest, &identity) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+    if let Err(error) = verify_snapshot_diff(&store, &manifest, &base_of_snapshot, &candidate) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
 
     // The accept gate: the acceptance needs a registered evaluation whose
     // digest, target aggregate, base revision and pinned inputs match the
@@ -650,9 +710,37 @@ pub fn accept_candidate_with_hooks_and_options(
     report.resulting_scene_revision = Some(revision.clone());
     report.snapshot_id = Some(manifest.snapshot_id.clone());
     report.aggregate_sha256 = Some(manifest.aggregate_sha256.clone());
+    report.snapshot_manifest_sha256 = Some(identity.manifest_sha256.clone());
+    report.candidate_sha256 = identity.candidate_sha256.clone();
+    report.task_sha256 = identity.task_sha256.clone();
+    report.package_sha256 = identity.package_sha256.clone();
+    report.base_aggregate_sha256 = identity.base_aggregate_sha256.clone();
     report.evaluation_id = Some(binding.evaluation_id.clone());
     report.evaluation_sha256 = Some(binding.sha256.clone());
+
+    // Every document the new bundle refers to is loaded by its path and its
+    // digest is re-computed before the pointer is switched: a bundle that does
+    // not hold never becomes authoritative.
+    if let Err(error) = verify_revision_bundle(&store, &revision) {
+        return refuse_accept(
+            &store,
+            candidate_id,
+            by,
+            clock,
+            error.code(),
+            error.message().to_string(),
+        );
+    }
+
     set_current(&store, &revision, Some(candidate_id.to_string()), clock)?;
+
+    // The hook runs after the switch of the pointer and before the history
+    // and the index are written: a crash here leaves the pointer on the new
+    // revision and the next attempt completes the same operation.
+    if let Some(hook) = hooks.after_pointer.as_mut() {
+        hook()?;
+    }
+
     write_decision(&store, &report, DECISION_ACCEPT)?;
     record_index(&store, &report, Some(revision.clone()))?;
     Ok(report)
@@ -668,6 +756,12 @@ pub fn reject_candidate(
 ) -> Result<DecisionReport, EditError> {
     let store = SceneStore::new(run_dir);
     let candidate = load_stored_candidate(&store, candidate_id)?;
+
+    // The lock is taken before the status of the candidate is read: the
+    // transition is checked and written under the same lock. A rejection can
+    // never overwrite an acceptance that won the race.
+    let _lock = StoreLock::acquire(&store, "reject")?;
+
     let decided_at = clock.now_rfc3339_utc();
     let index = load_index(&store)?;
     let status = index
@@ -697,7 +791,6 @@ pub fn reject_candidate(
             ),
             address: None,
         });
-        let _lock = StoreLock::acquire(&store, "reject")?;
         write_history(&store, &report, DECISION_REJECT_REFUSED)?;
         return Ok(report);
     }
@@ -709,13 +802,11 @@ pub fn reject_candidate(
             None => rejection_report(&candidate, candidate_id, by, reason, &decided_at),
         };
         report.decided_at = decided_at;
-        let _lock = StoreLock::acquire(&store, "reject")?;
         write_decision(&store, &report, DECISION_REJECT_IDEMPOTENT)?;
         return Ok(report);
     }
 
     let report = rejection_report(&candidate, candidate_id, by, reason, &decided_at);
-    let _lock = StoreLock::acquire(&store, "reject")?;
     write_decision(&store, &report, DECISION_REJECT)?;
     record_index(&store, &report, None)?;
     Ok(report)
@@ -1033,6 +1124,114 @@ fn verify_candidate_geometry(
     Ok(())
 }
 
+/// The documents a new revision refers to.
+///
+/// The bundle of a revision is the set of the immutable documents it is
+/// based on: the evaluation, the bindings, the confirmations and the
+/// resolutions.
+#[derive(Debug, Clone, Default)]
+struct BundleRefs {
+    evaluations: Vec<EvaluationRef>,
+    bindings: Vec<BindingRef>,
+    confirmations: Vec<ConfirmationRef>,
+    resolutions: Vec<ResolutionRef>,
+}
+
+/// Build the references of the bundle of a new revision.
+///
+/// The bundle references the evaluation of the acceptance, the binding
+/// documents, the author confirmations and the resolutions. Every resolved
+/// unknown of the recomputed state contributes its resolution, its
+/// confirmation and the version of the bindings it used: a resolution that
+/// survives a later revision keeps its evidence in the new bundle. Every
+/// document is verified: it must exist and it is hashed.
+fn bundle_refs(
+    store: &SceneStore,
+    state: &UnknownState,
+    evaluation: Option<&EvaluationRef>,
+    material: Option<&ResolutionMaterial>,
+) -> Result<BundleRefs, EditError> {
+    let evaluations = match evaluation {
+        Some(reference) => vec![reference.clone()],
+        None => Vec::new(),
+    };
+
+    // The resolutions of the resolved unknowns of the state: the new one and
+    // the ones that survive the revision.
+    let mut documents = unknowns::resolved_resolutions(store, state)?;
+    if let Some(material) = material {
+        if !documents
+            .iter()
+            .any(|document| document.resolution_id == material.resolution.resolution_id)
+        {
+            documents.push(material.resolution.clone());
+            documents.sort_by(|left, right| left.resolution_id.cmp(&right.resolution_id));
+        }
+    }
+
+    // The binding document of the run is referenced as well: it is the
+    // binding the revision is based on.
+    let mut versions: Vec<String> = match unknowns::latest_binding_document(store)? {
+        Some(document) => vec![document.version.clone()],
+        None => Vec::new(),
+    };
+    let mut confirmations: BTreeMap<String, ConfirmationRef> = BTreeMap::new();
+    let mut resolutions: Vec<ResolutionRef> = Vec::new();
+    for document in &documents {
+        versions.push(document.binding_version.clone());
+        let path = store.resolution_path(&document.resolution_id);
+        let sha256 = hash_document(&path, &document.resolution_id, "resolution")?;
+        resolutions.push(ResolutionRef {
+            resolution_id: document.resolution_id.clone(),
+            path: unknowns::resolution_relative_path(&document.resolution_id),
+            sha256,
+        });
+        let path = store.confirmation_path(&document.confirmation_id);
+        let sha256 = hash_document(&path, &document.confirmation_id, "confirmation")?;
+        confirmations.insert(
+            document.confirmation_id.clone(),
+            ConfirmationRef {
+                confirmation_id: document.confirmation_id.clone(),
+                path: unknowns::confirmation_relative_path(&document.confirmation_id),
+                sha256,
+            },
+        );
+    }
+
+    versions.sort();
+    versions.dedup();
+    let mut bindings: Vec<BindingRef> = Vec::new();
+    for version in &versions {
+        let path = store.binding_path(version);
+        let sha256 = hash_document(&path, version, "binding")?;
+        bindings.push(BindingRef {
+            version: version.clone(),
+            path: unknowns::binding_relative_path(version),
+            sha256,
+        });
+    }
+
+    Ok(BundleRefs {
+        evaluations,
+        bindings,
+        confirmations: confirmations.into_values().collect(),
+        resolutions,
+    })
+}
+
+/// The digest of a document the bundle refers to.
+///
+/// The document must exist: a bundle never references a document that is
+/// missing.
+fn hash_document(path: &Path, id: &str, kind: &str) -> Result<String, EditError> {
+    if !path.is_file() {
+        return Err(EditError::EvidenceMismatch {
+            message: format!("the {kind} '{id}' is missing: '{}'", path.display()),
+        });
+    }
+    file_sha256(path)
+}
+
 /// Publish a new scene revision from the snapshot of a candidate.
 ///
 /// The components of the revision are copied from the snapshot, never from
@@ -1048,16 +1247,6 @@ fn publish_snapshot(
     evaluation: Option<&EvaluationRef>,
     resolution: Option<&ResolutionMaterial>,
 ) -> Result<String, EditError> {
-    if let Some(revision) = find_revision_of_candidate(
-        store,
-        &candidate.candidate_id,
-        &base_scene.scene_revision,
-        &manifest.aggregate_sha256,
-    )? {
-        return Ok(revision);
-    }
-    let revision = next_revision(store)?;
-
     let mut components: Vec<SceneComponent> = Vec::new();
     let mut payloads: Vec<(String, Vec<u8>)> = Vec::new();
     for file in &manifest.files {
@@ -1097,6 +1286,7 @@ fn publish_snapshot(
     // state is recomputed: a resolution whose dependencies changed is not
     // carried forward (the unknown becomes 'open' with the reason
     // 'evidence_stale').
+    let revision = next_revision(store)?;
     let created_at = clock.now_rfc3339_utc();
     let digests: Vec<(String, String)> = components
         .iter()
@@ -1111,44 +1301,30 @@ fn publish_snapshot(
         resolution.map(|material| &material.resolution),
         &created_at,
     )?;
-    write_unknown_state(store, &state)?;
-    let unknown_sha256 = file_sha256(&store.unknown_state_path(&revision))?;
 
     // The bundle of the revision references the documents of the evidence it
-    // is based on: the bindings, the confirmation and the resolution.
-    let bindings = match unknowns::latest_binding_document(store)? {
-        Some(document) => {
-            let path = store.binding_path(&document.version);
-            vec![BindingRef {
-                version: document.version.clone(),
-                path: unknowns::binding_relative_path(&document.version),
-                sha256: file_sha256(&path)?,
-            }]
-        }
-        None => Vec::new(),
-    };
-    let confirmations = match resolution {
-        Some(material) => {
-            let path = store.confirmation_path(&material.confirmation.confirmation_id);
-            vec![ConfirmationRef {
-                confirmation_id: material.confirmation.confirmation_id.clone(),
-                path: unknowns::confirmation_relative_path(&material.confirmation.confirmation_id),
-                sha256: file_sha256(&path)?,
-            }]
-        }
-        None => Vec::new(),
-    };
-    let resolutions = match resolution {
-        Some(material) => {
-            let path = store.resolution_path(&material.resolution.resolution_id);
-            vec![ResolutionRef {
-                resolution_id: material.resolution.resolution_id.clone(),
-                path: unknowns::resolution_relative_path(&material.resolution.resolution_id),
-                sha256: file_sha256(&path)?,
-            }]
-        }
-        None => Vec::new(),
-    };
+    // is based on: the evaluation, the bindings, the confirmations and the
+    // resolutions. Every resolved unknown of the recomputed state keeps its
+    // references: a resolution that survives a later revision carries its
+    // confirmation and its binding into the new bundle.
+    let refs = bundle_refs(store, &state, evaluation, resolution)?;
+
+    // A revision that a previous attempt published is reused only when the
+    // whole intended result matches: the candidate, the base revision, the
+    // geometry, the evaluation and the resolution. A retry with another
+    // evaluation or another resolution never reuses the old bundle.
+    if let Some(revision) = find_revision_of_candidate(
+        store,
+        &candidate.candidate_id,
+        &base_scene.scene_revision,
+        &manifest.aggregate_sha256,
+        &refs,
+    )? {
+        return Ok(revision);
+    }
+
+    write_unknown_state(store, &state)?;
+    let unknown_sha256 = file_sha256(&store.unknown_state_path(&revision))?;
 
     let scene = Scene {
         schema: crate::SCENE_SCHEMA.to_string(),
@@ -1162,18 +1338,15 @@ fn publish_snapshot(
         notes: base_scene.notes.clone(),
         verification: Some(SceneVerification {
             geometry_digest: manifest.aggregate_sha256.clone(),
-            bindings,
+            bindings: refs.bindings.clone(),
             unknowns: Some(UnknownStateRef {
                 revision: revision.clone(),
                 path: unknown_state_relative_path(&revision),
                 sha256: unknown_sha256,
             }),
-            evaluations: match evaluation {
-                Some(reference) => vec![reference.clone()],
-                None => Vec::new(),
-            },
-            confirmations,
-            resolutions,
+            evaluations: refs.evaluations.clone(),
+            confirmations: refs.confirmations.clone(),
+            resolutions: refs.resolutions.clone(),
             policies: VerificationPolicies {
                 package_sha256: manifest.package_sha256.clone(),
                 workspace_policy_sha256: workspace_policy_digest(store),
@@ -1196,6 +1369,7 @@ fn find_revision_of_candidate(
     candidate_id: &str,
     base_revision: &str,
     aggregate_sha256: &str,
+    intended: &BundleRefs,
 ) -> Result<Option<String>, EditError> {
     for revision in list_revisions(store)? {
         let scene = match load_scene(store, &revision) {
@@ -1213,11 +1387,155 @@ fn find_revision_of_candidate(
             .iter()
             .map(|component| (component.name.clone(), component.sha256.clone()))
             .collect();
-        if aggregate_digest(&components) == aggregate_sha256 {
-            return Ok(Some(revision));
+        if aggregate_digest(&components) != aggregate_sha256 {
+            continue;
         }
+        // The whole intended result must match: the evaluation, the
+        // bindings, the confirmations and the resolutions. A revision of
+        // another evaluation is never reused.
+        let bundle = match &scene.verification {
+            Some(bundle) => bundle,
+            None => continue,
+        };
+        if bundle.evaluations != intended.evaluations {
+            continue;
+        }
+        if bundle.bindings != intended.bindings {
+            continue;
+        }
+        if bundle.confirmations != intended.confirmations {
+            continue;
+        }
+        if bundle.resolutions != intended.resolutions {
+            continue;
+        }
+        return Ok(Some(revision));
     }
     Ok(None)
+}
+
+/// The identity of the snapshot, as the submit decision pinned it.
+///
+/// A decision that does not pin the identity of its snapshot cannot be
+/// accepted: the acceptance would trust a snapshot that was never registered.
+fn identity_of_decision(
+    store: &SceneStore,
+    candidate_id: &str,
+) -> Result<SnapshotIdentity, EditError> {
+    let report = last_history(store, candidate_id, DECISION_SUBMIT)?.ok_or_else(|| {
+        EditError::SnapshotMismatch {
+            message: format!(
+                "the candidate '{candidate_id}' carries no submission decision: the identity of its snapshot is not pinned"
+            ),
+        }
+    })?;
+    let snapshot_id = report
+        .snapshot_id
+        .clone()
+        .ok_or_else(|| EditError::SnapshotMismatch {
+            message: format!(
+                "the submission decision of the candidate '{candidate_id}' pins no snapshot"
+            ),
+        })?;
+    let aggregate_sha256 =
+        report
+            .aggregate_sha256
+            .clone()
+            .ok_or_else(|| EditError::SnapshotMismatch {
+                message: format!(
+                "the submission decision of the candidate '{candidate_id}' pins no aggregate digest"
+            ),
+            })?;
+    let manifest_sha256 = report.snapshot_manifest_sha256.clone().ok_or_else(|| {
+        EditError::SnapshotMismatch {
+            message: format!(
+                "the submission decision of the candidate '{candidate_id}' pins no digest of the manifest of its snapshot: the identity of the snapshot cannot be verified"
+            ),
+        }
+    })?;
+    Ok(SnapshotIdentity {
+        snapshot_id,
+        aggregate_sha256,
+        manifest_sha256,
+        candidate_sha256: report.candidate_sha256.clone(),
+        task_sha256: report.task_sha256.clone(),
+        package_sha256: report.package_sha256.clone(),
+        base_aggregate_sha256: report.base_aggregate_sha256.clone(),
+    })
+}
+
+/// Complete an acceptance that was interrupted after the switch of the
+/// pointer.
+///
+/// The revision the pointer refers to must be the one the acceptance
+/// intended: the same evaluation and a bundle that still holds. A retry with
+/// another evaluation is refused: the bundle of a published revision is never
+/// rewritten.
+fn complete_acceptance(
+    store: &SceneStore,
+    candidate_id: &str,
+    by: &str,
+    _clock: &dyn Clock,
+    options: &AcceptOptions,
+    pointer: &CurrentPointer,
+) -> Result<DecisionReport, EditError> {
+    let scene = load_scene(store, &pointer.scene_revision)?;
+    let bundle = scene
+        .verification
+        .as_ref()
+        .ok_or_else(|| EditError::EvidenceMismatch {
+            message: format!(
+            "the revision '{}' carries no verification bundle: the acceptance cannot be completed",
+            pointer.scene_revision
+        ),
+        })?;
+    let binding = gate::resolve_evaluation(store, candidate_id, options)?;
+    let evaluation = bundle
+        .evaluations
+        .first()
+        .ok_or_else(|| EditError::EvaluationMissing {
+            message: format!(
+                "the revision '{}' refers to no evaluation: the acceptance cannot be completed",
+                pointer.scene_revision
+            ),
+        })?;
+    if evaluation.evaluation_id != binding.evaluation_id || evaluation.sha256 != binding.sha256 {
+        return Err(EditError::EvaluationStale {
+            message: format!(
+                "the revision '{}' is based on the evaluation '{}' (the digest {}) but the acceptance is based on '{}' (the digest {})",
+                pointer.scene_revision,
+                evaluation.evaluation_id,
+                evaluation.sha256,
+                binding.evaluation_id,
+                binding.sha256
+            ),
+        });
+    }
+    verify_revision_bundle(store, &pointer.scene_revision)?;
+
+    let mut report = DecisionReport::empty(
+        candidate_id.to_string(),
+        Decision::Accepted,
+        pointer.accepted_at.clone(),
+    );
+    report.base_scene_revision = scene.base_scene_revision.clone();
+    report.resulting_scene_revision = Some(pointer.scene_revision.clone());
+    report.decided_by = Some(by.to_string());
+    report.snapshot_id = Some(candidate_id.to_string());
+    report.aggregate_sha256 = Some(bundle.geometry_digest.clone());
+    report.evaluation_id = Some(binding.evaluation_id.clone());
+    report.evaluation_sha256 = Some(binding.sha256.clone());
+    report.checks.push(Check {
+        check: "recovery".to_string(),
+        status: CheckStatus::Pass,
+        detail: format!(
+            "the store already points to the revision '{}' of the candidate",
+            pointer.scene_revision
+        ),
+    });
+    write_decision(store, &report, DECISION_ACCEPT)?;
+    record_index(store, &report, Some(pointer.scene_revision.clone()))?;
+    Ok(report)
 }
 
 /// The historical acceptance of a candidate (None when the candidate was

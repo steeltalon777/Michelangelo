@@ -183,6 +183,102 @@ fn a_task_of_an_unknown_is_narrowed_to_the_binding() -> Result<(), Box<dyn std::
 }
 
 #[test]
+fn a_narrowed_task_may_not_widen_the_components_of_the_binding(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    bind(&fixture, "u_lid_inside", &["lid"])?;
+    let request = TaskRequest {
+        allowed: Some(vec!["base".to_string()]),
+        region: None,
+        unknown: Some("u_lid_inside".to_string()),
+    };
+    let error = task_of(&fixture, &request).expect_err("the widening is refused");
+    match error {
+        AssistantError::TaskInvalid { message } => {
+            assert!(message.contains("SCOPE_DENIED"), "{message}");
+            assert!(message.contains("base"), "{message}");
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn a_narrowed_task_may_narrow_the_components_of_the_binding(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    bind(&fixture, "u_lid_inside", &["lid", "base"])?;
+    let request = TaskRequest {
+        allowed: Some(vec!["lid".to_string()]),
+        region: None,
+        unknown: Some("u_lid_inside".to_string()),
+    };
+    let task = task_of(&fixture, &request)?;
+    assert_eq!(task.allowed_components, vec!["lid".to_string()]);
+    assert_eq!(task.protected, vec!["base".to_string()]);
+    let criteria = task
+        .unknown_criteria
+        .clone()
+        .expect("the criteria of the unknown are present");
+    assert_eq!(
+        criteria.components,
+        vec!["lid".to_string()],
+        "the criteria carry the narrowed scope"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_narrowed_task_may_not_widen_the_region_of_the_binding(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    bind(&fixture, "u_lid_inside", &["lid"])?;
+    let request = TaskRequest {
+        allowed: None,
+        region: Some(Region {
+            min: [-0.2, -0.2, -0.2],
+            max: [0.2, 0.2, 0.2],
+        }),
+        unknown: Some("u_lid_inside".to_string()),
+    };
+    let error = task_of(&fixture, &request).expect_err("the widening is refused");
+    match error {
+        AssistantError::TaskInvalid { message } => {
+            assert!(message.contains("SCOPE_DENIED"), "{message}");
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn a_narrowed_task_may_narrow_the_region_of_the_binding() -> Result<(), Box<dyn std::error::Error>>
+{
+    let fixture = fixture()?;
+    bind(&fixture, "u_lid_inside", &["lid"])?;
+    let region = Region {
+        min: [-0.04, 0.05, -0.04],
+        max: [0.04, 0.09, 0.04],
+    };
+    let request = TaskRequest {
+        allowed: None,
+        region: Some(region),
+        unknown: Some("u_lid_inside".to_string()),
+    };
+    let task = task_of(&fixture, &request)?;
+    assert_eq!(task.allowed_region, region);
+    let criteria = task
+        .unknown_criteria
+        .clone()
+        .expect("the criteria of the unknown are present");
+    assert_eq!(
+        criteria.region, region,
+        "the criteria carry the narrowed region"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_task_of_an_unknown_without_a_binding_is_refused() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = fixture()?;
     let error = task_of(&fixture, &TaskRequest::with_unknown("u_lid_inside"))

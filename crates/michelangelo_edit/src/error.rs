@@ -8,6 +8,9 @@ pub const STORE_BUSY: &str = "STORE_BUSY";
 pub const EVIDENCE_MISMATCH: &str = "EVIDENCE_MISMATCH";
 /// The diagnostic code of a candidate without a snapshot.
 pub const SNAPSHOT_MISSING: &str = "SNAPSHOT_MISSING";
+/// The diagnostic code of a snapshot that does not match the identity the
+/// decision of the candidate pinned.
+pub const SNAPSHOT_MISMATCH: &str = "SNAPSHOT_MISMATCH";
 /// The diagnostic code of a candidate whose base is not current any more.
 pub const STALE_BASE: &str = "STALE_BASE";
 /// The diagnostic code of a candidate that was already accepted.
@@ -90,6 +93,12 @@ pub enum EditError {
     },
     /// A candidate without a snapshot cannot be accepted (`SNAPSHOT_MISSING`).
     SnapshotMissing {
+        /// The human readable reason.
+        message: String,
+    },
+    /// The snapshot does not match the identity the decision pinned
+    /// (`SNAPSHOT_MISMATCH`).
+    SnapshotMismatch {
         /// The human readable reason.
         message: String,
     },
@@ -199,6 +208,7 @@ impl EditError {
             | EditError::StoreBusy { message }
             | EditError::EvidenceMismatch { message }
             | EditError::SnapshotMissing { message }
+            | EditError::SnapshotMismatch { message }
             | EditError::StaleBase { message }
             | EditError::EvaluationMissing { message }
             | EditError::EvaluationStale { message }
@@ -231,6 +241,7 @@ impl EditError {
             EditError::StoreBusy { .. } => STORE_BUSY,
             EditError::EvidenceMismatch { .. } => EVIDENCE_MISMATCH,
             EditError::SnapshotMissing { .. } => SNAPSHOT_MISSING,
+            EditError::SnapshotMismatch { .. } => SNAPSHOT_MISMATCH,
             EditError::StaleBase { .. } => STALE_BASE,
             EditError::EvaluationMissing { .. } => EVALUATION_MISSING,
             EditError::EvaluationStale { .. } => EVALUATION_STALE,
@@ -259,7 +270,7 @@ impl EditError {
     pub fn exit_code(&self) -> u8 {
         match self.code() {
             STORE_BUSY => 2,
-            EVIDENCE_MISMATCH | SNAPSHOT_MISSING | STALE_BASE => 1,
+            EVIDENCE_MISMATCH | SNAPSHOT_MISSING | SNAPSHOT_MISMATCH | STALE_BASE => 1,
             EVALUATION_MISSING
             | EVALUATION_STALE
             | EVALUATION_UNREGISTERED
@@ -303,6 +314,9 @@ impl std::fmt::Display for EditError {
             }
             EditError::SnapshotMissing { message } => {
                 write!(formatter, "{SNAPSHOT_MISSING}: {message}")
+            }
+            EditError::SnapshotMismatch { message } => {
+                write!(formatter, "{SNAPSHOT_MISMATCH}: {message}")
             }
             EditError::StaleBase { message } => {
                 write!(formatter, "{STALE_BASE}: {message}")

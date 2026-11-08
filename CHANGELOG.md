@@ -164,7 +164,7 @@ library crates plus CLI subcommands and an accept gate.
   (`PACKAGE_POLICY_STRICTER`); no `uncertainty_policy` object keeps the Stage B behaviour.
   19 edit unknown tests + 17 solver policy tests.
 
-### Added (IT-8C)
+### Added (IT-8 demo)
 
 - **IT-8 mandatory demo (2026-11-08)**: an external DSH subagent authored a meaningful candle-flame
   part for the solver stub `stub_u_flame_shape` and submitted it through the MCP stdio surface;
@@ -181,11 +181,40 @@ library crates plus CLI subcommands and an accept gate.
   `std::path::absolute` before building the job; regression test
   `a_relative_run_directory_is_resolved_before_the_render`.
 
+### Fixed (IT-8D corrective pass, owner audit 2026-11-08)
+
+The demo was accepted but the acceptance-integrity guarantees were reopened; the corrective
+pass closes the audit findings without an architecture change:
+
+- **Snapshot identity and full diff**: the submit decision pins the snapshot manifest digest and
+  candidate/task/package/base digests; accept refuses a rewritten manifest, a changed base-only or
+  protected component, an undeclared/omitted component and a candidate whose bytes differ
+  (`SNAPSHOT_MISMATCH`/`EVIDENCE_MISMATCH`). A coordinated geometry+manifest tamper cannot be
+  legitimised by a new evaluation.
+- **Actual inputs**: accept re-hashes the actual package copy and mask files; a PNG changed after
+  the evaluation is `INPUT_CHANGED`; the evaluator pins the bytes it really read.
+- **Evaluation reservation**: the `ev-id`/directory is reserved atomically before rendering,
+  reports are never overwritten and the registry never clobbers an entry; concurrent evaluations
+  get distinct ids and both stay intact.
+- **Bundle verification and recovery**: every document referenced by the new bundle is loaded by
+  path and hashed before the pointer switch; a valid copy cannot mask a corrupted registered
+  report; recovery reuses an unfinished revision only for the full intended result.
+- **Locked decisions**: accept/reject read transition state and write under one lock; crash after
+  the pointer completes the same operation.
+- **Held-out independence**: `|dot| > 0.9` (same or opposite) is `unavailable`, not an independent
+  shape constraint; the demo's 0.9450 is no longer cited as independent.
+- **Unknown lifecycle**: surviving resolutions keep all evidence references in later bundles;
+  `unknown show --revision` reads that revision's bundle bindings; `assistant task --unknown`
+  can only narrow the binding (`SCOPE_DENIED`); the Core honours the accepted-author completion
+  rule override consistently with the solver.
+- Negative evidence: `target/techlead/IT-8D/verify-D.json` 8/8; 837 Rust tests + 86 solver tests.
+
 ### Changed (IT-8A/IT-8B)
 
 - `docs/specs/LOCAL_EDIT.md`, `docs/specs/VERIFICATION_STATE.md`, `docs/specs/RECONSTRUCTION.md`,
   `docs/specs/EVALUATION.md`, TZ `TZ_IT8_ACCEPTANCE_INTEGRITY.md` and ROADMAP/TASKS/AI_CONTEXT
-  updated for A/B/C and the demo; test count baseline 817 Rust tests + 86 solver tests.
+  updated for A/B/C, the demo and the IT-8D corrective pass; test count baseline 837 Rust tests +
+  86 solver tests.
 
 ## [0.1.0] — 2026-11-07
 

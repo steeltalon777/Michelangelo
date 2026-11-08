@@ -49,10 +49,12 @@ Baseline: dev `36f1bac` (IT-7). Depends on ADR 0004 stages A–D2 (IT-4…IT-7).
    - идемпотентный повтор `accept` **после rollback**: возвращает исторический результат
      принятия, но сцену обратно не переключает;
    - отсутствие контрольных данных (held-out камер/GT) → статус `unavailable`, не `pass`;
-   - held-out камера должна добавлять независимое ограничение: вид в том же направлении, что
-     source-вид (`dot(dir_i, dir_j) > 0.9`), не даёт ограничения → `unavailable` с диагностикой;
-     противоположные ортографические виды (`dot ≈ -1`, зеркальный силуэт) допустимы — именно они
-     служат held-out контролями proof-датасетов.
+   - held-out камера должна добавлять **независимое** ограничение: для полного непрозрачного
+     силуэта вид, параллельный source-виду (`|dot(dir_i, dir_j)| > 0.9`), не даёт независимого
+     ограничения — ни в том же направлении, ни в противоположном (противоположный вид — это
+     зеркальная занятость). Такой held-out → `unavailable`; независимыми считаются только косые
+     направления. Противоположные виды допустимы лишь как проверка рендера. (Правило уточнено
+     corrective-проходом IT-8D по аудиту владельца.)
 2. Уточнённый reproduction «до» (§0) с постусловиями по каждому сценарию и ненулевым кодом при
    расхождении — уже выполнено; скрипт/отчёт в `target/techlead/IT-8/`.
 3. Матрица failure-тестов: инвариант → тест → ожидаемый код/состояние (A/B/C), включая
@@ -372,7 +374,9 @@ Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 
 - Lead real-Blender reproduction (`target/techlead/IT-8B/real_eval.py`, copy of a real IT-5
   harbor run, Blender 5.2.3 LTS): `edit init` → `edit submit` (proposed) → `evaluate --candidate
   --evaluation <held-out pkg>` exit 0, source mean IoU **0.9584**, held-out `control_left` IoU
-  **0.9450**, `projection_conformance=pass`, `author_geometric_conditions=pass`,
+  **0.9450** (measured under the old rule; it is the **mirrored** silhouette, not independent
+  shape conformance — corrected by IT-8D, where it becomes `unavailable`),
+  `projection_conformance=pass`, `author_geometric_conditions=pass`,
   `independent_ground_truth=unavailable`, `author_hidden_decision=pending`; the report was
   registered (`ev-0001`) and `edit accept --evaluation <report>` published `s0002` with a
   hash-pinned evaluation reference in the bundle. Negative: tampering the registered report →
@@ -386,10 +390,11 @@ Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 
   (`EVALUATION_REQUIRED` diagnostic) because the evaluation can only run after the snapshot
   exists; documented in `LOCAL_EDIT.md`. Schema extensions over the TZ sketch are documented in
   `EVALUATION.md`: `target.base_scene_revision`, `visible.held_out`, `checks[]`.
-- Held-out direction rule corrected during Lead verification: a held-out view looking in the
-  **same** direction (`dot > 0.9`) adds no constraint; opposite orthographic views (dot ≈ -1) are
-  independent and are the held-out controls of the proof datasets. Code, contract, TZ and spec
-  updated; a regression test (`opposite_orthographic_held_out_cameras_are_allowed`) added.
+- Held-out direction rule: the initial Lead correction treated opposite orthographic views as
+  independent; the owner audit showed this is mathematically wrong for a full opaque silhouette
+  (mirrored occupancy). **Corrected in IT-8D**: `|dot| > 0.9` (same or opposite) makes the
+  held-out result `unavailable`; only oblique directions count. The test is now
+  `an_opposite_held_out_view_is_not_independent`; the demo's 0.9450 is not cited as independent.
 - Reviewer verdict: **GREEN** (child `3788f634`, route `xiaomi/mimo-v2.6-pro`). Minor findings
   fixed before the commit: (1) the gate now sorts the current view list before pin comparison
   (a valid acceptance is no longer refused because of package view order), (2) the per-view
@@ -462,3 +467,86 @@ Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 
 | B | 1 | child `3788f634` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | MINOR: view-order-sensitive pin comparison (fixed + test); regression limit taken from the report (fixed: pinned to 0.01 + test). NITs: public testing helpers/fakes, guarded `unreachable!()` in the binary. Lead reproduced real-Blender evaluation/accept and tamper refusal. |
 | C | 1 | child `3bb78488` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | LOW: stale solver `detail` after invalidation (fixed); doc wording of the no-policy default (fixed); omitted-`require_author_acceptance` default pin test (added). Lead reproduced partial accept → resolve → invalidation with real Blender and the solver policy suite. |
 | Demo | 1 | external DSH child `bf5d23b9` (authoring agent) + Lead verification | `minimax-cn/MiniMax-M3.1-Flash`, preset `worker` | GREEN | Meaningful flame via MCP → evaluation pass → owner confirmation/resolution; cube control accepted as geometry but `CONFIRMATION_MISSING` prevents closure; relative-run evaluation bug fixed + regression test. |
+| D (corrective) | 1 | child `0a68c574` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | D1/D2 implemented; two LOW cleanup/semantics notes (dead protected-base guard removed; Delete unsupported in v0 documented). Lead negative verification 8/8 + selected Rust tests. |
+
+## 12. Corrective pass IT-8D — owner audit 2026-11-08 (reopened guarantees)
+
+The owner accepted the demo but not the acceptance-integrity guarantee. These are **not new
+requirements**: they close gaps between the agreed contract and the active code. A narrow pass is
+required; no architecture rewrite, no provider.
+
+### D1. Acceptance integrity (blocking)
+
+1. **Snapshot identity + full diff.** Submit records the snapshot manifest digest in the submit
+   decision and the candidate/task/package/base digests. Accept must verify the manifest digest
+   against the immutable submit decision, the manifest file set against the base + declared
+   changes, every unchanged component against the base bytes, every changed component against the
+   declared candidate bytes, protected components unchanged, and the candidate store against the
+   recorded candidate digest. Coordinated tampering of a protected component **and** the manifest
+   must be refused (`EVIDENCE_MISMATCH`/`SNAPSHOT_MISMATCH`), never legitimised by a new evaluation.
+2. **Actual input resources.** Accept must recompute the SHA-256 of the actual package copy
+   (`package/package.json`, every pinned mask) and compare them with the evaluation pins; a PNG
+   changed after the evaluation is `INPUT_CHANGED`, not a pass. The evaluator also pins the bytes
+   it actually read.
+3. **Evaluation reservation and immutability.** Reserve `<evaluations>/<ev-id>` with an atomic
+   create/no-overwrite under a short lock before rendering; render outside the lock; write the
+   report with no-overwrite semantics; register it under the lock. Two concurrent evaluations must
+   get distinct ids and both reports must stay intact; no process may overwrite a published report.
+4. **Full bundle verification before commit.** Immediately before the pointer switch, load every
+   document referenced by the bundle (geometry, unknown state, bindings, evaluation, confirmations,
+   resolutions) by its path and verify its SHA-256. Accepting with a valid copy while the
+   registered original is corrupted must fail; recovery may reuse an incomplete revision only when
+   the full result matches (candidate, base, aggregate, evaluation id+sha, resolution material),
+   not merely the geometry.
+5. **Decisions under lock.** Accept/reject transition checks (double accept, reject-after-accept,
+   repeated reject, recovery) are performed under the same lock that writes them; add an
+   interleaving test where reject reads a stale state while accept wins, and a crash test after the
+   pointer switch but before history/index, including a rollback+retry.
+6. **Held-out independence.** For full opaque silhouettes an opposite orthographic view is the
+   mirrored occupancy, not an independent shape constraint. Restore the independence rule
+   (`|dot| <= 0.9`); opposite/same directions make the held-out result `unavailable` (render check
+   only). The demo's `0.9450` held-out number is not evidence of independent shape conformance.
+
+### D2. Unknown lifecycle and scope (blocking)
+
+7. **Carry evidence references.** A resolved unknown that survives a later revision must keep its
+   confirmation/resolution/binding references in the new bundle (hash-pinned), not only the new
+   resolution's documents.
+8. **Historical bindings.** `unknown show --revision sNNNN` must read the binding version referenced
+   by that revision's bundle, not the globally latest binding (rebind + rollback must show the old
+   claim/scope).
+9. **Narrowed task cannot widen.** `assistant task --unknown` must intersect, never expand,
+   `--allowed`/`--region` with the binding; a request outside the binding is refused.
+10. **Policy override consistency.** The Core resolution policy must honour the same accepted
+    author override of `allowed_completion_rules` that the solver honours; otherwise the solver
+    applies an accepted supplement and the Core refuses the resolution.
+
+### Required negative tests
+
+Coordinated snapshot+manifest tamper of a protected component; PNG change between evaluation and
+accept; two concurrent evaluations (distinct ids, both intact); corrupted registered report +
+valid copy; accept/reject interleaving; crash after pointer before history; preserved resolution
+with all evidence refs; rebind+rollback historical show; `--unknown` + expanding `--allowed`/
+`--region`; accepted-author override resolution; opposite held-out view unavailable.
+
+### IT-8D evidence (corrective pass)
+
+- Code: `michelangelo_edit` snapshot identity/full diff/bundle verification/lock transitions,
+  `michelangelo_evidence` no-clobber registry + actual mask pins, `michelangelo_eval` atomic
+  evaluation reservation + held-out independence, `michelangelo_edit` bundle refs/view and
+  `michelangelo_assistant` scope intersection/policy override.
+- Lead negative reproduction: `target/techlead/IT-8D/verify-D.json` — **8/8 PASS**:
+  coordinated snapshot+manifest tamper → `SNAPSHOT_MISMATCH`, no revision; PNG changed after
+  evaluation → `INPUT_CHANGED`; two concurrent evaluations → distinct `ev-0002`/`ev-0003`, both
+  registered and intact; corrupted registered report + valid copy → `EVALUATION_STALE`; opposite
+  held-out → `unavailable`; happy path still publishes `s0002`; assistant widening refused
+  (`SCOPE_DENIED`) and subset/inner region accepted; rebind+rollback shows the historical claim.
+- Selected Rust tests pass: crash-after-pointer completion, reject-vs-accept race, retry with a
+  different evaluation refuses old-bundle reuse, published report never overwritten, surviving
+  resolution keeps all refs, historical binding view, accepted-author policy override, opposite
+  held-out independence rejection.
+- Reviewer child `0a68c574` GREEN; its two LOW notes are addressed (dead protected-base guard
+  removed; `Delete` documented as unsupported in v0). Full ladder: 837 Rust tests + 86 solver
+  tests, fmt/clippy/build green.
+- The earlier demo's held-out `0.9450` is **not** independent conformance; it was the mirrored
+  occupancy under the old rule (see §11).

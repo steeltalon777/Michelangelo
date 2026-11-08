@@ -119,9 +119,9 @@ unknown:
 
 ## The state machine
 
-States: `open`, `stub_pending`, `resolution_proposed`, `resolved`,
-`rejected`. Events (append-only in `unknowns/events.jsonl`): `sync`,
-`bind`, `confirm`, `propose`, `resolve`, `rollback`.
+States: `open`, `stub_pending`, `resolved`. Events (append-only in
+`unknowns/events.jsonl`): `sync`, `bind`, `confirm`, `propose`, `resolve`,
+`rollback`. A proposal is a document, not a state.
 
 Rules:
 
@@ -145,7 +145,9 @@ Rules:
 6. **The closure happens only in the bundle.** The unknown becomes
    `resolved` only in the revision whose bundle references the resolution
    (the bundle lists the bindings, the confirmation and the resolution with
-   their digests).
+   their digests). A resolution that survives a later revision keeps its
+   confirmation, resolution and binding references in that later bundle;
+   `verification.bindings` lists every binding version those resolutions use.
 7. **Invalidation is mandatory.** Every new bundle recomputes the validity of
    the carried resolutions. A resolution is carried forward only when all of
    its dependencies still hold: the bound components, the binding version and
@@ -155,6 +157,10 @@ Rules:
 8. **A rollback restores the state of the target bundle.** The revisions keep
    their own immutable state document, including the resolutions that were
    current in that bundle.
+9. **`unknown show --revision` reads the bindings of that revision's bundle.**
+   It never substitutes the globally latest binding; after a rebind and a
+   rollback the old claim/scope is shown. The current view follows the current
+   bundle.
 
 ## The CLI
 
@@ -197,7 +203,9 @@ the latest proposal of the unknown.
 task to the binding of the unknown:
 
 * `allowed_components` are the components of the binding, `allowed_region`
-  is the region of the binding,
+  is the region of the binding; a caller-supplied `--allowed`/`--region` may only
+  **narrow** them (subset/inside), never widen them. A request outside the binding
+  is refused (`SCOPE_DENIED`, task invalid),
 * the task carries `unknown_id` and `unknown_criteria` (the components, the
   region, the claim, the binding version, the requirement of a confirmation
   and of a registered evaluation, the flag of the package and the conditions

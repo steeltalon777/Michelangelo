@@ -16,10 +16,10 @@ use serde_json::Value;
 use crate::digest::file_sha256;
 use crate::error::EvidenceError;
 use crate::report::{
-    package_measurement_ids, package_views, AuthorDecision, EvaluationCheck, EvaluationInputs,
-    EvaluationReport, EvaluationResults, EvaluationTarget, EvaluationThresholds, GroundTruthState,
-    HiddenSection, ReportIntegrity, TargetKind, TriState, VisibleSection, VisibleView,
-    EVALUATION_REPORT_SCHEMA,
+    package_mask_paths, package_measurement_ids, package_views, AuthorDecision, EvaluationCheck,
+    EvaluationInputs, EvaluationReport, EvaluationResults, EvaluationTarget, EvaluationThresholds,
+    GroundTruthState, HiddenSection, ReportIntegrity, TargetKind, TriState, ViewPin,
+    VisibleSection, VisibleView, EVALUATION_REPORT_SCHEMA,
 };
 
 /// The IoU the synthetic report claims for every view.
@@ -62,6 +62,7 @@ pub fn synthetic_evaluation(
         .map(|value| value.to_string());
 
     let package_path = run_dir.join("package").join("package.json");
+    let package_dir = run_dir.join("package");
     let (package_sha256, views, measurements) = if package_path.is_file() {
         let digest = file_sha256(&package_path)?;
         let text = std::fs::read_to_string(&package_path).map_err(|err| {
@@ -73,10 +74,24 @@ pub fn synthetic_evaluation(
         let package: Value = serde_json::from_str(&text).map_err(|err| EvidenceError::Invalid {
             message: format!("the package copy is not usable: {err}"),
         })?;
-        let views = package_views(&package)
+        let mut views = package_views(&package)
             .iter()
             .map(|view| view.pin(false))
-            .collect();
+            .collect::<Vec<ViewPin>>();
+        // The pin is the digest of the bytes of the mask file the run really
+        // carries: a mask that changes after the evaluation is detected.
+        for (view_id, relative) in package_mask_paths(&package) {
+            let path = package_dir.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let actual = match file_sha256(&path) {
+                Ok(actual) => actual,
+                Err(_) => continue,
+            };
+            for view in views.iter_mut() {
+                if view.view_id == view_id {
+                    view.mask_sha256 = actual.clone();
+                }
+            }
+        }
         let measurements = package_measurement_ids(&package);
         (Some(digest), views, measurements)
     } else {

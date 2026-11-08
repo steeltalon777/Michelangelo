@@ -127,6 +127,11 @@ impl From<michelangelo_edit::EditError> for AssistantError {
             | michelangelo_edit::EditError::StaleBase { message } => {
                 AssistantError::Invalid { message }
             }
+            // The refusal of a snapshot that does not match the identity the
+            // decision pinned keeps its diagnostic code.
+            michelangelo_edit::EditError::SnapshotMismatch { message } => AssistantError::Invalid {
+                message: format!("SNAPSHOT_MISMATCH: {message}"),
+            },
             // The refusals of the accept gate keep their diagnostic code.
             michelangelo_edit::EditError::EvaluationMissing { message } => {
                 AssistantError::Invalid {

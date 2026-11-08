@@ -166,6 +166,24 @@ pub struct DecisionReport {
     /// The aggregate digest of the geometry of the snapshot of the candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregate_sha256: Option<String>,
+    /// The digest of the bytes of the manifest of the snapshot.
+    ///
+    /// The field pins the identity of the snapshot: a manifest that was
+    /// rewritten after the submission does not match it any more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_manifest_sha256: Option<String>,
+    /// The digest of the bytes of the candidate document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_sha256: Option<String>,
+    /// The digest of the canonical JSON of the task of the candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_sha256: Option<String>,
+    /// The digest of the copy of the input package of the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_sha256: Option<String>,
+    /// The aggregate digest of the components of the base revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_aggregate_sha256: Option<String>,
     /// The identifier of the evaluation report the decision is based on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_id: Option<String>,
@@ -193,6 +211,11 @@ impl DecisionReport {
             decided_by: None,
             snapshot_id: None,
             aggregate_sha256: None,
+            snapshot_manifest_sha256: None,
+            candidate_sha256: None,
+            task_sha256: None,
+            package_sha256: None,
+            base_aggregate_sha256: None,
             evaluation_id: None,
             evaluation_sha256: None,
         }

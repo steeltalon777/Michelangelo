@@ -158,9 +158,11 @@ pub struct DataPolicy {
 pub struct UnknownCriteria {
     /// The identifier of the unknown.
     pub unknown_id: String,
-    /// The components the binding of the unknown covers.
+    /// The components the task may change (a subset of the components of the
+    /// binding of the unknown).
     pub components: Vec<String>,
-    /// The region the binding of the unknown covers.
+    /// The region the task may touch (inside the region of the binding of the
+    /// unknown).
     pub region: Region,
     /// The version of the binding document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -410,13 +412,7 @@ pub fn generate_task(
         None => None,
     };
     let (allowed, protected) = resolve_scope(&scene, request, binding.as_ref())?;
-    let allowed_region = resolve_region(
-        &scene,
-        &allowed,
-        request
-            .region
-            .or_else(|| binding.as_ref().map(|binding| binding.region)),
-    )?;
+    let allowed_region = resolve_region(&scene, &allowed, request.region, binding.as_ref())?;
 
     let references = collect_references(run_dir, package.as_ref());
     let mut unknowns = collect_unknowns(&report, package.as_ref());
@@ -450,6 +446,12 @@ pub fn generate_task(
             .collect(),
     };
 
+    // The criteria of a narrowed unknown carry the effective scope of the
+    // task: the components and the region it may touch.
+    let criteria = binding
+        .as_ref()
+        .map(|binding| unknown_criteria(binding, &store, &allowed, &allowed_region));
+
     Ok(AssistantTask {
         schema: TASK_SCHEMA.to_string(),
         task_id: task_id.to_string(),
@@ -474,9 +476,7 @@ pub fn generate_task(
             detail: format!("bounded task generated from run '{}'", scene.run_id),
         },
         unknown_id: request.unknown.clone(),
-        unknown_criteria: binding
-            .as_ref()
-            .map(|binding| unknown_criteria(binding, &store)),
+        unknown_criteria: criteria,
     })
 }
 
@@ -513,7 +513,8 @@ fn binding_of(
 /// The allowed set is a non-empty subset of the components of the scene; the
 /// protected set is every other component of the scene, so the two sets are
 /// always disjoint. A task that is narrowed to an unknown is bound to the
-/// components of its binding.
+/// components of its binding: an explicit set of components may only
+/// **narrow** the binding, never widen it.
 fn resolve_scope(
     scene: &Scene,
     request: &TaskRequest,
@@ -532,7 +533,23 @@ fn resolve_scope(
         .collect();
 
     let mut allowed: Vec<String> = match (&request.allowed, binding) {
-        (Some(names), _) => names.clone(),
+        (Some(names), Some(binding)) => {
+            // The scope of a narrowed task may only be narrowed: a component
+            // that the binding does not cover is refused.
+            for name in names {
+                if !binding.components.contains(name) {
+                    return Err(AssistantError::TaskInvalid {
+                        message: format!(
+                            "SCOPE_DENIED: the component '{name}' is not covered by the binding of the unknown '{}' (the binding covers {}): the scope of a narrowed task may only be narrowed",
+                            binding.unknown_id,
+                            binding.components.join(", ")
+                        ),
+                    });
+                }
+            }
+            names.clone()
+        }
+        (Some(names), None) => names.clone(),
         (None, Some(binding)) => binding.components.clone(),
         (None, None) => all
             .iter()
@@ -576,15 +593,37 @@ fn resolve_scope(
 /// The region of a task.
 ///
 /// The default is the bounding box of the allowed components with a margin of
-/// 5 % on every axis. A region must intersect every allowed component.
+/// 5 % on every axis. A region must intersect every allowed component. The
+/// region of a task that is narrowed to an unknown is the region of its
+/// binding: an explicit region may only **narrow** it, never widen it.
 fn resolve_region(
     scene: &Scene,
     allowed: &[String],
     requested: Option<Region>,
+    binding: Option<&michelangelo_edit::unknowns::UnknownBinding>,
 ) -> Result<Region, AssistantError> {
     let region = match requested {
-        Some(region) => region,
-        None => default_region(scene, allowed)?,
+        Some(region) => {
+            // The scope of a narrowed task may only be narrowed: the region
+            // must lie inside the region of the binding.
+            if let Some(binding) = binding {
+                if !region_is_inside(&region, &binding.region) {
+                    return Err(AssistantError::TaskInvalid {
+                        message: format!(
+                            "SCOPE_DENIED: the region {} is not inside the region of the binding of the unknown '{}' ({}): the scope of a narrowed task may only be narrowed",
+                            region_text(&region),
+                            binding.unknown_id,
+                            region_text(&binding.region),
+                        ),
+                    });
+                }
+            }
+            region
+        }
+        None => match binding {
+            Some(binding) => binding.region,
+            None => default_region(scene, allowed)?,
+        },
     };
     if !region.is_valid() {
         return Err(AssistantError::TaskInvalid {
@@ -654,6 +693,19 @@ fn round(value: f64) -> f64 {
 /// True when a region and a bounding box overlap.
 fn intersects(region: &Region, bbox_min: &[f64; 3], bbox_max: &[f64; 3]) -> bool {
     (0..3).all(|axis| region.min[axis] <= bbox_max[axis] && bbox_min[axis] <= region.max[axis])
+}
+
+/// True when a region lies inside another one.
+fn region_is_inside(region: &Region, outer: &Region) -> bool {
+    (0..3).all(|axis| outer.min[axis] <= region.min[axis] && region.max[axis] <= outer.max[axis])
+}
+
+/// The text of a region (`[x, y, z]..[x, y, z]`).
+fn region_text(region: &Region) -> String {
+    format!(
+        "[{}, {}, {}]..[{}, {}, {}]",
+        region.min[0], region.min[1], region.min[2], region.max[0], region.max[1], region.max[2],
+    )
 }
 
 /// The manifest of the package of a run (None when the run carries none).
@@ -809,15 +861,21 @@ fn collect_supplements(report: &ReconstructionReport) -> Vec<TaskSupplement> {
 }
 
 /// The acceptance criteria of a task that is narrowed to one unknown.
+///
+/// The criteria carry the effective scope of the task: the components and
+/// the region the task may touch. The scope is always a subset of the
+/// binding of the unknown.
 fn unknown_criteria(
     binding: &michelangelo_edit::unknowns::UnknownBinding,
     store: &michelangelo_edit::scene::SceneStore,
+    components: &[String],
+    region: &Region,
 ) -> UnknownCriteria {
     let policy = michelangelo_edit::unknowns::package_policy(store);
     UnknownCriteria {
         unknown_id: binding.unknown_id.clone(),
-        components: binding.components.clone(),
-        region: binding.region,
+        components: components.to_vec(),
+        region: *region,
         binding_version: michelangelo_edit::unknowns::latest_binding_document(store)
             .ok()
             .flatten()

@@ -17,7 +17,7 @@ use michelangelo_edit::apply::{accept_candidate_with_options, rollback_scene, su
 use michelangelo_edit::candidate::Region;
 use michelangelo_edit::error::{
     AGENT_CONFIRMATION_REFUSED, BINDING_MISMATCH, BINDING_MISSING, CONFIRMATION_MISSING,
-    EVALUATION_UNREGISTERED, UNKNOWN_NOT_FOUND,
+    EVALUATION_UNREGISTERED, UNKNOWN_NOT_FOUND, UNKNOWN_POLICY_VIOLATION,
 };
 use michelangelo_edit::gate::{resolve_evaluation_by_id, AcceptOptions};
 use michelangelo_edit::scene::{load_scene, SceneStore};
@@ -671,6 +671,225 @@ fn an_untouched_resolution_survives_a_later_revision() {
         "resolved"
     );
     assert_eq!(fixture.status(Some("s0003"), "u_flame_shape"), "resolved");
+
+    // The bundle of the later revision keeps the references of the
+    // resolution that survived: the resolution, the confirmation and the
+    // binding it used.
+    let scene = load_scene(&fixture.store(), "s0003").expect("the scene is read");
+    let bundle = scene.verification.expect("the scene carries a bundle");
+    assert_eq!(
+        bundle.resolutions.len(),
+        2,
+        "both resolutions are referenced: {:?}",
+        bundle.resolutions
+    );
+    assert_eq!(
+        bundle.confirmations.len(),
+        2,
+        "both confirmations are referenced: {:?}",
+        bundle.confirmations
+    );
+    assert!(
+        !bundle.bindings.is_empty(),
+        "the bundle references the bindings of the resolutions"
+    );
+    assert_bundle_documents(&fixture, &bundle);
+}
+
+#[test]
+fn a_later_revision_keeps_the_evidence_of_a_surviving_resolution() {
+    let fixture = Fixture::new();
+    fixture.bind("u_glass_thickness", Some("the glass is 2 mm"));
+    fixture.submit();
+    let (report_path, evaluation_id) = fixture.evaluate();
+    assert!(report_path.is_file(), "the report of the evaluation exists");
+    fixture.confirm("u_glass_thickness", &evaluation_id, "alice");
+    let revision = fixture.accept_candidate("cand-0001", report_path, Some("u_glass_thickness"));
+    assert_eq!(revision, "s0002");
+
+    // The bundle of the first revision references the evidence of the
+    // closure: the resolution, the confirmation and the binding.
+    let scene = load_scene(&fixture.store(), "s0002").expect("the scene is read");
+    let bundle = scene.verification.expect("the scene carries a bundle");
+    assert_eq!(bundle.resolutions.len(), 1);
+    assert_eq!(bundle.confirmations.len(), 1);
+    assert_eq!(bundle.bindings.len(), 1);
+    let resolution_id = bundle.resolutions[0].resolution_id.clone();
+    let confirmation_id = bundle.confirmations[0].confirmation_id.clone();
+    let binding_version = bundle.bindings[0].version.clone();
+
+    // A second binding of another unknown writes a new version of the
+    // binding document: the resolution of the first unknown stays valid.
+    bind_unknown(
+        &fixture.store(),
+        "u_flame_shape",
+        &["base".to_string()],
+        region(),
+        "alice",
+        None,
+        &fixture.clock(),
+    )
+    .expect("the unknown is bound");
+
+    // A later revision changes another component: the resolution of the lid
+    // survives and the new bundle keeps its references.
+    let directory = fixture.write_second_candidate("s0002", "base", 0.1);
+    fixture.submit_directory(&directory);
+    let (report_path, _) = fixture.evaluate_second();
+    let revision = fixture.accept_candidate("cand-0002", report_path, None);
+    assert_eq!(revision, "s0003");
+    assert_eq!(
+        fixture.status(Some("s0003"), "u_glass_thickness"),
+        "resolved"
+    );
+
+    let scene = load_scene(&fixture.store(), "s0003").expect("the scene is read");
+    let bundle = scene.verification.expect("the scene carries a bundle");
+    assert!(
+        bundle
+            .resolutions
+            .iter()
+            .any(|reference| reference.resolution_id == resolution_id),
+        "the bundle of the later revision references the surviving resolution"
+    );
+    assert!(
+        bundle
+            .confirmations
+            .iter()
+            .any(|reference| reference.confirmation_id == confirmation_id),
+        "the bundle of the later revision references the confirmation"
+    );
+    assert!(
+        bundle
+            .bindings
+            .iter()
+            .any(|reference| reference.version == binding_version),
+        "the bundle of the later revision references the binding of the resolution"
+    );
+    // Every distinct binding version the resolutions refer to is referenced.
+    assert!(
+        bundle.bindings.len() >= 2,
+        "the bundle references every binding version: {:?}",
+        bundle.bindings
+    );
+    assert_bundle_documents(&fixture, &bundle);
+}
+
+#[test]
+fn the_view_of_a_revision_reads_the_binding_of_its_bundle() {
+    let fixture = Fixture::new();
+    fixture.bind("u_glass_thickness", Some("the glass is 2 mm"));
+    fixture.submit();
+    let (report_path, evaluation_id) = fixture.evaluate();
+    assert!(report_path.is_file(), "the report of the evaluation exists");
+    fixture.confirm("u_glass_thickness", &evaluation_id, "alice");
+    let revision = fixture.accept_candidate("cand-0001", report_path, Some("u_glass_thickness"));
+    assert_eq!(revision, "s0002");
+
+    // The author rebinds the unknown with another claim and another scope.
+    let other_region = Region {
+        min: [-0.1, -0.1, -0.1],
+        max: [0.1, 0.1, 0.1],
+    };
+    bind_unknown(
+        &fixture.store(),
+        "u_glass_thickness",
+        &["lid".to_string()],
+        other_region,
+        "bob",
+        Some("the glass is 3 mm"),
+        &fixture.clock(),
+    )
+    .expect("the unknown is rebound");
+
+    // A later revision is published with the new binding.
+    let directory = fixture.write_second_candidate("s0002", "base", 0.1);
+    fixture.submit_directory(&directory);
+    let (report_path, _) = fixture.evaluate_second();
+    let revision = fixture.accept_candidate("cand-0002", report_path, None);
+    assert_eq!(revision, "s0003");
+
+    // The historical revision shows the binding of its own bundle: the old
+    // claim and the old scope.
+    let entry = binding_of(&fixture, Some("s0002"), "u_glass_thickness");
+    assert_eq!(
+        entry.0.and_then(|binding| binding.claim.clone()),
+        Some("the glass is 2 mm".to_string()),
+        "the historical revision shows the claim of its own binding"
+    );
+    assert_eq!(entry.1, Some(region()), "the historical scope is shown");
+    assert_eq!(entry.2.as_deref(), Some("b0001"));
+
+    // The current revision shows the binding of its own bundle.
+    let entry = binding_of(&fixture, None, "u_glass_thickness");
+    assert_eq!(
+        entry.0.and_then(|binding| binding.claim.clone()),
+        Some("the glass is 3 mm".to_string()),
+        "the current revision shows the claim of its own binding"
+    );
+    assert_eq!(entry.1, Some(other_region), "the current scope is shown");
+
+    // The rollback selects the historical bundle again.
+    rollback_scene(&fixture.run_dir, "s0002", "alice", &fixture.clock())
+        .expect("the scene is rolled back");
+    let entry = binding_of(&fixture, None, "u_glass_thickness");
+    assert_eq!(
+        entry.0.and_then(|binding| binding.claim.clone()),
+        Some("the glass is 2 mm".to_string()),
+        "the rolled back scene shows the claim of the historical binding"
+    );
+    assert_eq!(entry.1, Some(region()), "the rolled back scope is shown");
+}
+
+/// Check that every document the bundle of a revision refers to exists and
+/// carries the digest the bundle pins.
+fn assert_bundle_documents(
+    fixture: &Fixture,
+    bundle: &michelangelo_edit::scene::SceneVerification,
+) {
+    let mut references: Vec<(String, String)> = Vec::new();
+    for reference in &bundle.bindings {
+        references.push((reference.path.clone(), reference.sha256.clone()));
+    }
+    for reference in &bundle.confirmations {
+        references.push((reference.path.clone(), reference.sha256.clone()));
+    }
+    for reference in &bundle.resolutions {
+        references.push((reference.path.clone(), reference.sha256.clone()));
+    }
+    for (path, sha256) in references {
+        let file = fixture.run_dir.join(&path);
+        assert!(file.is_file(), "the document '{path}' exists");
+        assert_eq!(
+            common::digest(&file),
+            sha256,
+            "the digest of '{path}' matches the bundle"
+        );
+    }
+}
+
+/// The binding of an unknown in the view of a revision: the binding, its
+/// region and its version.
+fn binding_of(
+    fixture: &Fixture,
+    revision: Option<&str>,
+    unknown_id: &str,
+) -> (
+    Option<michelangelo_edit::unknowns::UnknownBinding>,
+    Option<Region>,
+    Option<String>,
+) {
+    let view = show_unknowns(&fixture.store(), revision).expect("the view is read");
+    let entry = view
+        .unknowns
+        .iter()
+        .find(|entry| entry.unknown_id == unknown_id)
+        .expect("the unknown is listed");
+    (
+        entry.binding.clone(),
+        entry.binding.as_ref().map(|binding| binding.region),
+        entry.binding_version.clone(),
+    )
 }
 
 #[test]
@@ -820,4 +1039,161 @@ fn the_policy_of_the_package_keeps_the_confirmation_mandatory() {
     )
     .expect_err("the resolution is refused");
     assert_eq!(error.code(), CONFIRMATION_MISSING);
+}
+
+/// The report of a run whose supplement closed an unknown.
+fn report_with_a_resolved_unknown() -> String {
+    json!({
+        "schema": "michelangelo.reconstruction-report/0",
+        "run": {
+            "run_id": "recon_0001_0001",
+            "run_dir": "recon/r0001/run-0001",
+            "created_at": "2026-01-01T00:00:00Z"
+        },
+        "package": {
+            "package_id": "demo-package",
+            "revision": 1,
+            "validation_status": "valid_complete",
+            "calibrated_views": ["front"]
+        },
+        "build": {
+            "components": [],
+            "supplements": [
+                {"supplement_id": "sup-0001", "status": "applied", "rule": "thickness"}
+            ],
+            "unknowns": [
+                {"id": "u_glass_thickness", "status": "resolved",
+                 "detail": "the supplement closed the unknown"}
+            ],
+            "measurements": []
+        }
+    })
+    .to_string()
+}
+
+/// The copy of a package whose policy does not allow the rule of the
+/// supplement that closed the unknown.
+///
+/// The parameter tells whether the package carries an accepted author
+/// decision for the supplement: an accepted decision has the highest
+/// precedence and satisfies the restriction of the rules.
+fn package_with_a_forbidden_rule(accepted: bool) -> String {
+    let mut acceptance: Vec<serde_json::Value> = Vec::new();
+    if accepted {
+        acceptance.push(json!({
+            "target": "supplements:sup-0001",
+            "status": "accepted",
+            "by": "owner",
+            "at": "2026-01-01T00:00:00Z"
+        }));
+    }
+    json!({
+        "uncertainty_policy": {
+            "require_author_acceptance": true,
+            "allowed_completion_rules": ["cavity"],
+            "stub_policy": "allowed"
+        },
+        "unknowns": [
+            {"id": "u_glass_thickness", "description": "the thickness is unknown",
+             "affected_parts": ["lid-part"], "policy": "rule_allowed"}
+        ],
+        "supplements": [
+            {"supplement_id": "sup-0001", "part_id": "lid-part", "kind": "thickness",
+             "geometry": {"value_m": 0.02},
+             "provenance": {"origin": "ai_author", "detail": "the solver"}}
+        ],
+        "acceptance": acceptance
+    })
+    .to_string()
+}
+
+/// The candidate, the snapshot and the evaluation of a resolution.
+fn resolution_inputs(
+    fixture: &Fixture,
+    candidate_id: &str,
+    evaluation_id: &str,
+) -> (
+    michelangelo_edit::candidate::EditCandidate,
+    michelangelo_edit::verification::SnapshotManifest,
+    michelangelo_edit::gate::EvaluationBinding,
+) {
+    let store = fixture.store();
+    let evaluation =
+        resolve_evaluation_by_id(&store, evaluation_id).expect("the evaluation is known");
+    let manifest = michelangelo_edit::verification::load_snapshot(&store, candidate_id)
+        .expect("the snapshot is read")
+        .expect("the snapshot exists");
+    let document: michelangelo_edit::candidate::EditCandidate = serde_json::from_str(
+        &std::fs::read_to_string(store.candidate_dir(candidate_id).join("candidate.json"))
+            .expect("the candidate is read"),
+    )
+    .expect("the candidate parses");
+    (document, manifest, evaluation)
+}
+
+#[test]
+fn an_accepted_author_decision_satisfies_the_completion_rule_of_the_package() {
+    let fixture = Fixture::new();
+    write_file(
+        &fixture.run_dir.join("report.json"),
+        &report_with_a_resolved_unknown(),
+    );
+    write_file(
+        &fixture.run_dir.join("package/package.json"),
+        &package_with_a_forbidden_rule(true),
+    );
+    fixture.submit();
+    let (_report_path, evaluation_id) = fixture.evaluate();
+    fixture.bind("u_glass_thickness", Some("the glass is 2 mm"));
+    fixture.confirm("u_glass_thickness", &evaluation_id, "alice");
+    let (document, manifest, evaluation) = resolution_inputs(&fixture, "cand-0001", &evaluation_id);
+    let resolution = propose_resolution(
+        &fixture.store(),
+        "u_glass_thickness",
+        &document,
+        &manifest,
+        &evaluation,
+        "alice",
+        &fixture.clock(),
+    )
+    .expect("the accepted decision of the author satisfies the rule");
+    let check = resolution
+        .checks
+        .iter()
+        .find(|check| check.id == "package_policy")
+        .expect("the policy of the package is checked");
+    assert!(
+        check.detail.contains("thickness"),
+        "the check names the rule the decision overrides: {}",
+        check.detail
+    );
+}
+
+#[test]
+fn a_completion_rule_the_package_does_not_allow_is_refused_without_a_decision() {
+    let fixture = Fixture::new();
+    write_file(
+        &fixture.run_dir.join("report.json"),
+        &report_with_a_resolved_unknown(),
+    );
+    write_file(
+        &fixture.run_dir.join("package/package.json"),
+        &package_with_a_forbidden_rule(false),
+    );
+    fixture.submit();
+    let (_report_path, evaluation_id) = fixture.evaluate();
+    fixture.bind("u_glass_thickness", Some("the glass is 2 mm"));
+    fixture.confirm("u_glass_thickness", &evaluation_id, "alice");
+    let (document, manifest, evaluation) = resolution_inputs(&fixture, "cand-0001", &evaluation_id);
+    let error = propose_resolution(
+        &fixture.store(),
+        "u_glass_thickness",
+        &document,
+        &manifest,
+        &evaluation,
+        "alice",
+        &fixture.clock(),
+    )
+    .expect_err("the rule the package does not allow is refused");
+    assert_eq!(error.code(), UNKNOWN_POLICY_VIOLATION);
 }

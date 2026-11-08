@@ -4,6 +4,7 @@
 //! report. The report itself never self-certifies: the accept gate
 //! re-computes the digest of the file and compares it with the registry.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -227,9 +228,76 @@ pub fn write_and_register(
 "
     )
     .into_bytes();
-    std::fs::write(&path, &bytes)
-        .map_err(|err| EvidenceError::io(&path, format!("the file cannot be written: {err}")))?;
     let digest = crate::digest::sha256_hex(&bytes);
+
+    // A published report is never overwritten. The registry entry and the
+    // file are checked before anything is written: the registration of the
+    // same evaluation with the same digest is a no-op, everything else is
+    // refused.
+    let mut registry = load_registry(run_dir)?;
+    if let Some(existing) = registry.entry(&report.evaluation_id) {
+        if existing.sha256 == digest
+            && existing.report_path == report_relative_path(&report.evaluation_id)
+        {
+            return Ok(existing.clone());
+        }
+        return Err(EvidenceError::AlreadyRegistered {
+            message: format!(
+                "the evaluation '{}' is already registered with the digest {}",
+                report.evaluation_id, existing.sha256
+            ),
+        });
+    }
+    if path.exists() {
+        return Err(EvidenceError::AlreadyRegistered {
+            message: format!(
+                "the report of the evaluation '{}' already exists and is never overwritten: '{}'",
+                report.evaluation_id,
+                path.display()
+            ),
+        });
+    }
+
+    // The bytes are written into a temporary file and published with a link:
+    // the link fails when the report exists, so a published report can never
+    // be clobbered by a concurrent process.
+    let temporary = parent.join(format!("{REPORT_FILE_NAME}.tmp"));
+    std::fs::write(&temporary, &bytes).map_err(|err| {
+        EvidenceError::io(&temporary, format!("the file cannot be written: {err}"))
+    })?;
+    match std::fs::hard_link(&temporary, &path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        Err(_) => {
+            let _ = std::fs::remove_file(&temporary);
+            if path.exists() {
+                return Err(EvidenceError::AlreadyRegistered {
+                    message: format!(
+                        "the report of the evaluation '{}' already exists and is never overwritten: '{}'",
+                        report.evaluation_id,
+                        path.display()
+                    ),
+                });
+            }
+            // A file system without hard links: the report is created
+            // exclusively (it never replaces an existing one) and written.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|err| {
+                    EvidenceError::io(&path, format!("the report cannot be created: {err}"))
+                })?;
+            file.write_all(&bytes).map_err(|err| {
+                EvidenceError::io(&path, format!("the report cannot be written: {err}"))
+            })?;
+            file.sync_all().map_err(|err| {
+                EvidenceError::io(&path, format!("the report cannot be flushed: {err}"))
+            })?;
+        }
+    }
+
     let entry = RegistryEntry {
         evaluation_id: report.evaluation_id.clone(),
         report_path: report_relative_path(&report.evaluation_id),
@@ -237,7 +305,6 @@ pub fn write_and_register(
         target_digest: report.target.aggregate_sha256.clone(),
         created_at: report.created_at.clone(),
     };
-    let mut registry = load_registry(run_dir)?;
     registry.register(entry.clone())?;
     write_registry(run_dir, &registry)?;
     Ok(entry)

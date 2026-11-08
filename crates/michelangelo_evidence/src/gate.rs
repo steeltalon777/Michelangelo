@@ -169,7 +169,6 @@ pub fn verify_report(
     for (pinned_view, current_view) in pinned_sorted.iter().zip(current_sorted.iter()) {
         if pinned_view.view_id != current_view.view_id
             || pinned_view.camera_digest != current_view.camera_digest
-            || pinned_view.mask_sha256 != current_view.mask_sha256
             || pinned_view.resolution != current_view.resolution
         {
             return Err(EvidenceError::InputChanged {
@@ -179,6 +178,19 @@ pub fn verify_report(
                     pinned_view.view_id,
                     pinned_view.camera_digest,
                     current_view.camera_digest
+                ),
+            });
+        }
+        // The pin of the mask is the digest of the bytes that were read: a
+        // mask that changed after the evaluation is an input that changed.
+        if pinned_view.mask_sha256 != current_view.mask_sha256 {
+            return Err(EvidenceError::InputChanged {
+                message: format!(
+                    "the evaluation '{}' pinned the mask {} of the view '{}' but the run carries {}",
+                    report.evaluation_id,
+                    pinned_view.mask_sha256,
+                    pinned_view.view_id,
+                    current_view.mask_sha256
                 ),
             });
         }

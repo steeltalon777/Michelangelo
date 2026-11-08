@@ -519,6 +519,44 @@ pub fn package_views(package: &serde_json::Value) -> Vec<PackageView> {
     views
 }
 
+/// The paths of the masks of the calibrated views of a package.
+///
+/// The paths are relative to the directory of the package. The pair is the
+/// identifier of the view and the path of the mask file.
+pub fn package_mask_paths(package: &serde_json::Value) -> Vec<(String, String)> {
+    let mut paths: Vec<(String, String)> = Vec::new();
+    let entries = match package.get("views").and_then(|value| value.as_array()) {
+        Some(entries) => entries,
+        None => return paths,
+    };
+    for entry in entries {
+        let kind = entry
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("calibrated");
+        if kind != "calibrated" {
+            continue;
+        }
+        let view_id = entry
+            .get("view_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let relative = entry
+            .get("mask")
+            .and_then(|mask| mask.get("path"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if relative.is_empty() {
+            continue;
+        }
+        paths.push((view_id, relative));
+    }
+    paths.sort_by(|left, right| left.0.cmp(&right.0));
+    paths
+}
+
 /// The identifiers of the declared measurements of an input package.
 ///
 /// The measurements are the author-accepted geometric data of the package:

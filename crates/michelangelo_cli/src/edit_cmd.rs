@@ -11,8 +11,9 @@
 //!   rolled back),
 //! * `1` — the candidate was rejected by the validator, the evidence does not
 //!   match (`EVIDENCE_MISMATCH`), the candidate carries no snapshot
-//!   (`SNAPSHOT_MISSING`), the base is not current any more (`STALE_BASE`)
-//!   or the candidate was already accepted
+//!   (`SNAPSHOT_MISSING`), the snapshot does not match the identity the
+//!   decision pinned (`SNAPSHOT_MISMATCH`), the base is not current any more
+//!   (`STALE_BASE`) or the candidate was already accepted
 //!   (`CANDIDATE_ALREADY_ACCEPTED`),
 //! * `2` — usage error, IO error, a candidate that cannot be interpreted or a
 //!   store that is locked by another process (`STORE_BUSY`).

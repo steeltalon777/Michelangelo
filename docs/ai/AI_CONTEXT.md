@@ -147,7 +147,12 @@ the current Windows stand).
   immutable resolutions, partial acceptance, `evidence_stale` invalidation, rollback-restored
   state) with solver-side package policy enforcement. The external-agent MCP demo is done: a DSH
   subagent authored a meaningful flame part, the owner evaluation/confirmation resolved the
-  unknown, and an arbitrary cube control did not close it. No wire changes.
+  unknown, and an arbitrary cube control did not close it. Corrective IT-8D (owner audit) pins
+  the snapshot identity and actual mask/package bytes, reserves evaluations atomically, verifies
+  the full bundle before the pointer, locks accept/reject transitions, keeps all evidence refs of
+  surviving resolutions, reads historical bundle bindings, forbids widening `--unknown` scope and
+  applies the accepted-author policy override consistently; held-out independence now requires
+  oblique directions. No wire changes.
 
 ## Out of Scope
 

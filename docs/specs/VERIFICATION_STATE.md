@@ -172,10 +172,12 @@ Rules:
   must satisfy the declared tolerance, otherwise the condition is `fail` or `unavailable`.
   A **required** condition with `fail`/`unavailable` cannot be treated as passed; an
   **optional** condition may remain explicitly unverified (`unavailable`).
-- Held-out views must add an independent silhouette constraint: a view looking in the same
-  direction as a source view (`dot(dir) > 0.9`) adds nothing and makes the held-out result
-  `unavailable`. Opposite orthographic views (`dot ≈ -1`) are allowed — they see the mirrored
-  silhouette and are the held-out controls of the proof datasets.
+- Held-out views must add an independent silhouette constraint: for a full opaque silhouette a
+  view whose direction is parallel to a source view (`|dot(dir)| > 0.9`) does **not** add an
+  independent constraint, whether it looks in the same direction or the opposite one (the
+  opposite view is the mirrored occupancy). Such a held-out result is `unavailable`; only oblique
+  directions count as independent. Opposite views may remain a render check, never an independent
+  shape-conformance result.
 
 ## 7. Acceptance rules
 

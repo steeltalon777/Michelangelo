@@ -158,10 +158,10 @@ TZ: `docs/tz/TZ_ASSISTANT_STAGE_D.md` (branch `dev`; evidence in `target/techlea
   (`-32001`), invalid policy stops the server, audit log complete without absolute paths; the
   candidate is applied only by an explicit `michelangelo edit accept` (→ `s0003`).
 
-## Completed — IT-8 hardening: acceptance integrity, evaluation, unknowns (A/B/C)
+## Completed — IT-8 hardening: acceptance integrity, evaluation, unknowns (A/B/C + demo + D)
 
 TZ: `docs/tz/TZ_IT8_ACCEPTANCE_INTEGRITY.md`; contract: `docs/specs/VERIFICATION_STATE.md`;
-evidence in `target/techlead/IT-8/` and `target/techlead/IT-8B/`.
+evidence in `target/techlead/IT-8/`, `target/techlead/IT-8B/`, `target/techlead/IT-8D/`.
 
 - [x] T-0801 Acceptance integrity (IT-8A, `003594b`) — full-result snapshot with digests,
   publication from the snapshot, OS lock and under-lock pointer re-read, append-only decision
@@ -188,6 +188,12 @@ evidence in `target/techlead/IT-8/` and `target/techlead/IT-8B/`.
   through the same MCP surface was accepted as geometry only (resolve without confirmation →
   `CONFIRMATION_MISSING`, partial accept → unknown `stub_pending`). Evidence:
   `target/techlead/IT-8/demo/EVIDENCE.md`. Relative-run evaluation bug found and fixed.
+- [x] T-0805 Corrective pass IT-8D (owner audit) — snapshot identity + full diff, actual mask/package
+  hashes, atomic evaluation reservation/no-overwrite, full bundle verification before pointer,
+  locked accept/reject + crash-after-pointer, held-out independence corrected; surviving
+  resolution evidence refs, historical bundle bindings, non-expandable `--unknown` scope,
+  accepted-author policy override. Lead negative reproduction 8/8 (`target/techlead/IT-8D/verify-D.json`),
+  reviewer GREEN; docs held-out claims corrected.
 
 ## Not yet started
 

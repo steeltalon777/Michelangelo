@@ -28,8 +28,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::candidate::{CandidateAction, EditCandidate};
 use crate::error::{io_error, EditError};
-use crate::scene::SceneStore;
+use crate::scene::{Scene, SceneStore};
 
 /// The name of the verification directory inside a run directory.
 pub const VERIFICATION_DIR_NAME: &str = "verification";
@@ -458,6 +459,381 @@ pub fn verify_snapshot(store: &SceneStore, manifest: &SnapshotManifest) -> Resul
                 manifest.snapshot_id, manifest.aggregate_sha256
             ),
         });
+    }
+    Ok(())
+}
+
+/// The identity of a snapshot that the decision of a candidate pins.
+///
+/// The identity is the set of digests that tie a decision to the exact bytes
+/// of the snapshot: the manifest, the aggregate of the components, the
+/// candidate document, the task, the package and the base revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotIdentity {
+    /// The identifier of the snapshot.
+    pub snapshot_id: String,
+    /// The aggregate digest of the components of the snapshot.
+    pub aggregate_sha256: String,
+    /// The digest of the bytes of the manifest of the snapshot.
+    pub manifest_sha256: String,
+    /// The digest of the bytes of the candidate document.
+    pub candidate_sha256: Option<String>,
+    /// The digest of the canonical JSON of the task of the candidate.
+    pub task_sha256: Option<String>,
+    /// The digest of the copy of the input package of the run.
+    pub package_sha256: Option<String>,
+    /// The aggregate digest of the components of the base revision.
+    pub base_aggregate_sha256: Option<String>,
+}
+
+/// The identity of a snapshot, read from the store.
+///
+/// The digests are computed from the bytes that are on the disk: the
+/// manifest, the candidate document and the base revision.
+pub fn snapshot_identity(
+    store: &SceneStore,
+    manifest: &SnapshotManifest,
+) -> Result<SnapshotIdentity, EditError> {
+    let manifest_sha256 = file_sha256(&store.snapshot_manifest_path(&manifest.snapshot_id))?;
+    let candidate_sha256 = file_sha256(&store.candidate_path(&manifest.snapshot_id)).ok();
+    Ok(SnapshotIdentity {
+        snapshot_id: manifest.snapshot_id.clone(),
+        aggregate_sha256: manifest.aggregate_sha256.clone(),
+        manifest_sha256,
+        candidate_sha256,
+        task_sha256: manifest.task_sha256.clone(),
+        package_sha256: manifest.package_sha256.clone(),
+        base_aggregate_sha256: Some(manifest.base.geometry_digest.clone()),
+    })
+}
+
+/// Verify the identity of a snapshot against the decision that pinned it.
+///
+/// The manifest, the aggregate, the candidate document, the task, the package
+/// and the base revision must be the ones the decision recorded. A snapshot
+/// whose manifest was rewritten (even together with its geometry) does not
+/// match the decision any more: the acceptance is refused
+/// (`SNAPSHOT_MISMATCH`).
+pub fn verify_snapshot_identity(
+    store: &SceneStore,
+    manifest: &SnapshotManifest,
+    expected: &SnapshotIdentity,
+) -> Result<(), EditError> {
+    if manifest.snapshot_id != expected.snapshot_id {
+        return Err(EditError::SnapshotMismatch {
+            message: format!(
+                "the snapshot '{}' does not match the snapshot '{}' the decision pinned",
+                manifest.snapshot_id, expected.snapshot_id
+            ),
+        });
+    }
+    if manifest.aggregate_sha256 != expected.aggregate_sha256 {
+        return Err(EditError::SnapshotMismatch {
+            message: format!(
+                "the aggregate digest of the snapshot '{}' is {} but the decision pinned {}",
+                manifest.snapshot_id, manifest.aggregate_sha256, expected.aggregate_sha256
+            ),
+        });
+    }
+    let manifest_sha256 = file_sha256(&store.snapshot_manifest_path(&manifest.snapshot_id))?;
+    if manifest_sha256 != expected.manifest_sha256 {
+        return Err(EditError::SnapshotMismatch {
+            message: format!(
+                "the manifest of the snapshot '{}' carries the digest {manifest_sha256} but the decision pinned {}",
+                manifest.snapshot_id, expected.manifest_sha256
+            ),
+        });
+    }
+    if let (Some(expected), Some(actual)) = (&expected.candidate_sha256, &manifest.candidate_sha256)
+    {
+        if expected != actual {
+            return Err(EditError::SnapshotMismatch {
+                message: format!(
+                    "the snapshot '{}' pins the candidate document {} but the decision pinned {}",
+                    manifest.snapshot_id, actual, expected
+                ),
+            });
+        }
+    }
+    if let Some(expected) = &expected.candidate_sha256 {
+        let actual = file_sha256(&store.candidate_path(&manifest.snapshot_id))?;
+        if &actual != expected {
+            return Err(EditError::EvidenceMismatch {
+                message: format!(
+                    "the candidate document of the snapshot '{}' carries the digest {actual} but the decision pinned {}",
+                    manifest.snapshot_id, expected
+                ),
+            });
+        }
+    }
+    if let (Some(expected), Some(actual)) = (&expected.task_sha256, &manifest.task_sha256) {
+        if expected != actual {
+            return Err(EditError::SnapshotMismatch {
+                message: format!(
+                    "the snapshot '{}' pins the task {} but the decision pinned {}",
+                    manifest.snapshot_id, actual, expected
+                ),
+            });
+        }
+    }
+    if let (Some(expected), Some(actual)) = (&expected.package_sha256, &manifest.package_sha256) {
+        if expected != actual {
+            return Err(EditError::SnapshotMismatch {
+                message: format!(
+                    "the snapshot '{}' pins the package {} but the decision pinned {}",
+                    manifest.snapshot_id, actual, expected
+                ),
+            });
+        }
+    }
+    if let Some(expected) = &expected.base_aggregate_sha256 {
+        if &manifest.base.geometry_digest != expected {
+            return Err(EditError::SnapshotMismatch {
+                message: format!(
+                    "the snapshot '{}' was taken from the base revision {} but the decision pinned {}",
+                    manifest.snapshot_id, manifest.base.geometry_digest, expected
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Verify the full difference of a snapshot against the base revision and the
+/// candidate.
+///
+/// The checks are the ones of the contract:
+///
+/// 1. the file set of the manifest is exactly the components of the base
+///    revision plus the components the candidate declares,
+/// 2. every component that comes from the base is byte-identical to the
+///    component of the base revision,
+/// 3. every component that comes from the candidate matches the digest of
+///    the file the candidate declares,
+/// 4. a protected component of the base revision is never changed.
+pub fn verify_snapshot_diff(
+    store: &SceneStore,
+    manifest: &SnapshotManifest,
+    base_scene: &Scene,
+    candidate: &EditCandidate,
+) -> Result<(), EditError> {
+    let mut expected: Vec<String> = base_scene
+        .components
+        .iter()
+        .map(|component| component.name.clone())
+        .collect();
+    for change in &candidate.changes {
+        // `Delete` is not supported in v0 (the validator rejects it). If it is
+        // enabled later, the base name must be removed from the expected set
+        // and the snapshot must omit the component.
+        if change.action == CandidateAction::Delete {
+            continue;
+        }
+        if !expected.contains(&change.component) {
+            expected.push(change.component.clone());
+        }
+    }
+    expected.sort();
+    expected.dedup();
+
+    let mut declared: Vec<String> = manifest
+        .files
+        .iter()
+        .map(|file| file.component.clone())
+        .collect();
+    declared.sort();
+    declared.dedup();
+    if declared != expected {
+        return Err(EditError::SnapshotMismatch {
+            message: format!(
+                "the snapshot '{}' carries the components [{}] but the base revision '{}' plus the declared changes are [{}]",
+                manifest.snapshot_id,
+                declared.join(", "),
+                base_scene.scene_revision,
+                expected.join(", ")
+            ),
+        });
+    }
+
+    for file in &manifest.files {
+        let base_component = base_scene.component(&file.component);
+        match file.source {
+            SnapshotSource::Base => {
+                let base_component = match base_component {
+                    Some(component) => component,
+                    None => {
+                        return Err(EditError::SnapshotMismatch {
+                            message: format!(
+                                "the snapshot '{}' carries the component '{}' as a copy of the base revision '{}' but the base revision has no such component",
+                                manifest.snapshot_id, file.component, base_scene.scene_revision
+                            ),
+                        })
+                    }
+                };
+                if base_component.sha256 != file.sha256 {
+                    return Err(EditError::EvidenceMismatch {
+                        message: format!(
+                            "the component '{}' of the snapshot '{}' carries the digest {} but the base revision '{}' carries {}",
+                            file.component, manifest.snapshot_id, file.sha256, base_scene.scene_revision, base_component.sha256
+                        ),
+                    });
+                }
+                let base_bytes = crate::scene::component_bytes(
+                    store,
+                    &base_scene.scene_revision,
+                    &file.component,
+                )?;
+                let snapshot_path = snapshot_file_path(store, &manifest.snapshot_id, &file.path);
+                let snapshot_bytes = std::fs::read(&snapshot_path).map_err(|err| {
+                    io_error(
+                        &snapshot_path,
+                        format!("the snapshot geometry cannot be read: {err}"),
+                    )
+                })?;
+                if base_bytes != snapshot_bytes {
+                    return Err(EditError::EvidenceMismatch {
+                        message: format!(
+                            "the component '{}' of the snapshot '{}' is not byte-identical to the component of the base revision '{}'",
+                            file.component, manifest.snapshot_id, base_scene.scene_revision
+                        ),
+                    });
+                }
+                // A Base-source file is byte-identical to the base by the check
+                // above; a protected component can only be changed through a
+                // Candidate-source file, which is refused below.
+            }
+            SnapshotSource::Candidate => {
+                let change = candidate.changes.iter().find(|change| {
+                    change.component == file.component && change.action != CandidateAction::Delete
+                });
+                let change = match change {
+                    Some(change) => change,
+                    None => {
+                        return Err(EditError::SnapshotMismatch {
+                            message: format!(
+                                "the snapshot '{}' carries the component '{}' but the candidate declares no change of it",
+                                manifest.snapshot_id, file.component
+                            ),
+                        })
+                    }
+                };
+                let path = store
+                    .candidate_dir(&candidate.candidate_id)
+                    .join(&change.obj);
+                let digest = file_sha256(&path)?;
+                if digest != file.sha256 {
+                    return Err(EditError::EvidenceMismatch {
+                        message: format!(
+                            "the component '{}' of the snapshot '{}' carries the digest {} but the candidate file carries {digest}",
+                            file.component, manifest.snapshot_id, file.sha256
+                        ),
+                    });
+                }
+                if let Some(base_component) = base_component {
+                    if base_component.protected {
+                        return Err(EditError::EvidenceMismatch {
+                            message: format!(
+                                "the protected component '{}' of the base revision '{}' was changed by the snapshot '{}'",
+                                file.component, base_scene.scene_revision, manifest.snapshot_id
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Verify the whole verification bundle of a published revision.
+///
+/// Every document the bundle refers to is loaded by its path and its digest
+/// is re-computed; the components of the revision are verified as well. A
+/// mismatch is an `EVIDENCE_MISMATCH`: the bundle is not consistent and
+/// must not become authoritative.
+pub fn verify_revision_bundle(store: &SceneStore, scene_revision: &str) -> Result<(), EditError> {
+    let scene = crate::scene::load_scene(store, scene_revision)?;
+    let mut components: Vec<(String, String)> = Vec::new();
+    for component in &scene.components {
+        let path = store
+            .components_dir(scene_revision)
+            .join(format!("{}.obj", component.name));
+        if !path.is_file() {
+            return Err(EditError::EvidenceMismatch {
+                message: format!(
+                    "the component '{}' of the revision '{}' is missing: '{}'",
+                    component.name,
+                    scene_revision,
+                    path.display()
+                ),
+            });
+        }
+        let digest = file_sha256(&path)?;
+        if digest != component.sha256 {
+            return Err(EditError::EvidenceMismatch {
+                message: format!(
+                    "the component '{}' of the revision '{}' carries the digest {digest} but the scene pins {}",
+                    component.name, scene_revision, component.sha256
+                ),
+            });
+        }
+        components.push((component.name.clone(), component.sha256.clone()));
+    }
+    let bundle = match &scene.verification {
+        Some(bundle) => bundle,
+        None => {
+            return Err(EditError::EvidenceMismatch {
+                message: format!(
+                    "the revision '{scene_revision}' carries no verification bundle: it cannot become authoritative"
+                ),
+            })
+        }
+    };
+    let aggregate = aggregate_digest(&components);
+    if aggregate != bundle.geometry_digest {
+        return Err(EditError::EvidenceMismatch {
+            message: format!(
+                "the aggregate digest of the revision '{scene_revision}' is {aggregate} but the bundle pins {}",
+                bundle.geometry_digest
+            ),
+        });
+    }
+    let mut references: Vec<(String, String)> = Vec::new();
+    if let Some(unknowns) = &bundle.unknowns {
+        references.push((unknowns.path.clone(), unknowns.sha256.clone()));
+    }
+    for binding in &bundle.bindings {
+        references.push((binding.path.clone(), binding.sha256.clone()));
+    }
+    for evaluation in &bundle.evaluations {
+        references.push((evaluation.path.clone(), evaluation.sha256.clone()));
+    }
+    for confirmation in &bundle.confirmations {
+        references.push((confirmation.path.clone(), confirmation.sha256.clone()));
+    }
+    for resolution in &bundle.resolutions {
+        references.push((resolution.path.clone(), resolution.sha256.clone()));
+    }
+    for (relative, expected) in references {
+        let path = store.run_dir.join(&relative);
+        if !path.is_file() {
+            return Err(EditError::EvidenceMismatch {
+                message: format!(
+                    "the document '{}' of the revision '{scene_revision}' is missing: '{}'",
+                    relative,
+                    path.display()
+                ),
+            });
+        }
+        let digest = file_sha256(&path)?;
+        if digest != expected {
+            return Err(EditError::EvidenceMismatch {
+                message: format!(
+                    "the document '{}' of the revision '{scene_revision}' carries the digest {digest} but the bundle pins {expected}",
+                    relative
+                ),
+            });
+        }
     }
     Ok(())
 }

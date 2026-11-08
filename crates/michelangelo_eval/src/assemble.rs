@@ -310,7 +310,7 @@ fn author_conditions(input: &Assembly<'_>) -> (Vec<EvaluationCheck>, TriState) {
         Some(diagnostic) => diagnostic.clone(),
         None => match &input.target_outcome.evaluation {
             Some(evaluation) => format!(
-                "the held-out views were measured (the mean IoU is {:.4}, the smallest IoU is {:.4})",
+                "the held-out views were measured against their masks (the mean IoU is {:.4}, the smallest IoU is {:.4}): the agreement of a silhouette is a measurement and not an independent constraint of the hidden shape",
                 evaluation.mean_iou, evaluation.min_iou
             ),
             None => String::from(

@@ -55,6 +55,14 @@ f 1 5 8 4
 f 2 3 7 6
 ";
 
+/// The digest of the mask file of the fixture.
+///
+/// The package of the fixture declares the digest of the mask file it really
+/// carries: the evaluation pins the bytes it reads.
+fn mask_sha256() -> String {
+    michelangelo_evidence::digest::sha256_hex(b"mask")
+}
+
 /// The package of the fixture: one calibrated view and one measurement.
 fn package_json(view_id: &str, location: [f64; 3]) -> String {
     serde_json::json!({
@@ -81,7 +89,7 @@ fn package_json(view_id: &str, location: [f64; 3]) -> String {
                 },
                 "mask": {
                     "path": format!("masks/{view_id}.png"),
-                    "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+                    "sha256": mask_sha256(),
                     "format": "grayscale8",
                     "foreground": "white"
                 },
@@ -572,16 +580,21 @@ fn the_held_out_cameras_must_be_distinct_from_the_source_cameras() {
         .check("held_out")
         .expect("the held-out set is reported");
     assert_eq!(check.status, TriState::Unavailable);
-    assert!(check.detail.contains("not distinct"));
+    assert!(
+        check.detail.contains("not independent"),
+        "the diagnostic names the reason: {}",
+        check.detail
+    );
     assert_eq!(report.inputs.evaluation_package_sha256, None);
     assert_eq!(renderer.renders(), 2, "the held-out views are not rendered");
 }
 
 #[test]
-fn opposite_orthographic_held_out_cameras_are_allowed() {
+fn an_opposite_held_out_view_is_not_independent() {
     // A view looking in the opposite direction (0, +4, 0) is the mirrored
-    // silhouette of the front source view: it is an independent constraint and
-    // the held-out controls of the proof datasets use exactly this form.
+    // silhouette of the front source view: for a full opaque silhouette it is
+    // the mirrored occupancy and not an independent constraint of the hidden
+    // shape. The held-out result is unavailable (a render-only check).
     let fixture = Fixture::new();
     let directory = tempfile::tempdir().expect("a temporary directory");
     let evaluation_package = directory.path().join("evaluation");
@@ -590,6 +603,54 @@ fn opposite_orthographic_held_out_cameras_are_allowed() {
         &package_json("back", [0.0, 4.0, 0.0]),
     );
     write(&evaluation_package.join("masks/back.png"), "mask");
+
+    let renderer = FakeRenderer::default();
+    let comparator = FakeComparator {
+        target_iou: 0.95,
+        base_iou: 0.95,
+        within_tolerance: Some(true),
+    };
+    let mut options = options();
+    options.evaluation_package = Some(evaluation_package);
+    let report = evaluate_candidate_with(
+        &fixture.run_dir,
+        "cand-0001",
+        &options,
+        &renderer,
+        &comparator,
+    )
+    .expect("the candidate is evaluated");
+
+    assert!(
+        report.visible.held_out.is_none(),
+        "the opposite view is not measured as an independent constraint"
+    );
+    assert_eq!(
+        report.inputs.evaluation_package_sha256, None,
+        "the held-out package is not pinned"
+    );
+    let check = report.check("held_out").expect("the held-out check exists");
+    assert_eq!(check.status, TriState::Unavailable);
+    assert!(
+        check.detail.contains("not independent"),
+        "the diagnostic names the reason: {}",
+        check.detail
+    );
+    assert_eq!(renderer.renders(), 2, "the held-out views are not rendered");
+}
+
+#[test]
+fn a_held_out_view_in_another_direction_is_measured() {
+    // A view at 90 degrees to the source view is an independent silhouette
+    // constraint: the held-out set is measured.
+    let fixture = Fixture::new();
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let evaluation_package = directory.path().join("evaluation");
+    write(
+        &evaluation_package.join("package.json"),
+        &package_json("side", [4.0, 0.0, 0.0]),
+    );
+    write(&evaluation_package.join("masks/side.png"), "mask");
 
     let renderer = FakeRenderer::default();
     let comparator = FakeComparator {
@@ -617,6 +678,100 @@ fn opposite_orthographic_held_out_cameras_are_allowed() {
     assert!(report.inputs.evaluation_package_sha256.is_some());
     let check = report.check("held_out").expect("the held-out check exists");
     assert_eq!(check.status, TriState::Pass);
+}
+
+#[test]
+fn an_inconsistent_package_fails_the_evaluation() {
+    // The package declares a mask digest that the file does not carry: the
+    // evaluation measures against the bytes of the disk, so the package must
+    // match its own files.
+    let fixture = Fixture::new();
+    let package = fixture.run_dir.join("package/package.json");
+    let text = std::fs::read_to_string(&package).expect("the package is readable");
+    std::fs::write(&package, text.replace(&mask_sha256(), &"0".repeat(64)))
+        .expect("the package is written");
+
+    let renderer = FakeRenderer::default();
+    let comparator = FakeComparator {
+        target_iou: 0.95,
+        base_iou: 0.95,
+        within_tolerance: Some(true),
+    };
+    let error = evaluate_candidate_with(
+        &fixture.run_dir,
+        "cand-0001",
+        &options(),
+        &renderer,
+        &comparator,
+    )
+    .expect_err("the evaluation is refused");
+    assert_eq!(error.code(), "EVALUATION_INPUT_INVALID");
+}
+
+#[test]
+fn two_concurrent_evaluations_get_distinct_identifiers() {
+    // The identifier of an evaluation is reserved with an atomic create under
+    // the lock of the store: two concurrent evaluations never share a
+    // directory and both reports stay intact.
+    let fixture = Fixture::new();
+    let renderer = std::sync::Arc::new(FakeRenderer::default());
+    let comparator = std::sync::Arc::new(FakeComparator {
+        target_iou: 0.95,
+        base_iou: 0.95,
+        within_tolerance: Some(true),
+    });
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let run_dir = fixture.run_dir.clone();
+            let renderer = renderer.clone();
+            let comparator = comparator.clone();
+            std::thread::spawn(move || {
+                evaluate_candidate_with(
+                    &run_dir,
+                    "cand-0001",
+                    &options(),
+                    renderer.as_ref(),
+                    comparator.as_ref(),
+                )
+                .expect("the candidate is evaluated")
+            })
+        })
+        .collect();
+    let reports: Vec<michelangelo_evidence::report::EvaluationReport> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("the thread ends"))
+        .collect();
+
+    let mut identifiers: Vec<String> = reports
+        .iter()
+        .map(|report| report.evaluation_id.clone())
+        .collect();
+    identifiers.sort();
+    assert_eq!(
+        identifiers,
+        vec!["ev-0001".to_string(), "ev-0002".to_string()],
+        "the concurrent evaluations reserved distinct identifiers"
+    );
+
+    let registry = michelangelo_evidence::registry::load_registry(&fixture.run_dir)
+        .expect("the registry is read");
+    assert_eq!(registry.evaluations.len(), 2);
+    for report in &reports {
+        let path = fixture
+            .run_dir
+            .join("verification/evaluations")
+            .join(&report.evaluation_id)
+            .join("report.json");
+        let bytes = std::fs::read(&path).expect("the report is readable");
+        let digest = michelangelo_evidence::digest::sha256_hex(&bytes);
+        let entry = registry
+            .entry(&report.evaluation_id)
+            .expect("the evaluation is registered");
+        assert_eq!(entry.sha256, digest, "the registry pins the written bytes");
+        let written: michelangelo_evidence::report::EvaluationReport =
+            serde_json::from_slice(&bytes).expect("the report is usable");
+        assert_eq!(written.evaluation_id, report.evaluation_id);
+    }
 }
 
 #[test]

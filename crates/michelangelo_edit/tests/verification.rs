@@ -13,13 +13,16 @@ use common::{
     accept, candidate, digest, lid_obj, make_run, register_evaluation, write_candidate, write_file,
 };
 use michelangelo_edit::apply::{
-    accept_candidate, accept_candidate_with_hooks, reject_candidate, rollback_scene,
-    submit_candidate, AcceptHooks, DECISION_ACCEPT, DECISION_ACCEPT_IDEMPOTENT, DECISION_REJECT,
-    DECISION_REJECT_IDEMPOTENT, DECISION_REJECT_REFUSED, DECISION_SUBMIT,
+    accept_candidate, accept_candidate_with_hooks, accept_candidate_with_hooks_and_options,
+    accept_candidate_with_options, reject_candidate, rollback_scene, submit_candidate, AcceptHooks,
+    DECISION_ACCEPT, DECISION_ACCEPT_IDEMPOTENT, DECISION_REJECT, DECISION_REJECT_IDEMPOTENT,
+    DECISION_REJECT_REFUSED, DECISION_SUBMIT,
 };
 use michelangelo_edit::error::{
-    CANDIDATE_ALREADY_ACCEPTED, EVIDENCE_MISMATCH, SNAPSHOT_MISSING, STALE_BASE, STORE_BUSY,
+    CANDIDATE_ALREADY_ACCEPTED, EVALUATION_STALE, EVIDENCE_MISMATCH, SNAPSHOT_MISMATCH,
+    SNAPSHOT_MISSING, STALE_BASE, STORE_BUSY,
 };
+use michelangelo_edit::gate::AcceptOptions;
 use michelangelo_edit::scene::{list_revisions, load_current, load_index, load_scene, SceneStore};
 use michelangelo_edit::verification::{aggregate_digest, load_snapshot, StoreLock};
 use michelangelo_edit::{Decision, EditError, FixedClock};
@@ -389,7 +392,7 @@ fn a_crash_before_the_pointer_leaves_the_old_bundle_authoritative() {
         before_publish: Some(&mut before_publish),
         ..Default::default()
     };
-    register_evaluation(&fixture.run_dir, "cand-0001");
+    let evaluation = register_evaluation(&fixture.run_dir, "cand-0001");
     let error = accept_candidate_with_hooks(
         &fixture.run_dir,
         "cand-0001",
@@ -413,8 +416,19 @@ fn a_crash_before_the_pointer_leaves_the_old_bundle_authoritative() {
         "the revision was published before the crash"
     );
 
-    // The retry succeeds and does not publish a second revision.
-    let report = fixture.accept();
+    // The retry succeeds with the same evaluation and does not publish a
+    // second revision: the published revision is reused.
+    let report = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(evaluation),
+            ..Default::default()
+        },
+    )
+    .expect("the acceptance succeeds");
     assert_eq!(report.decision, Decision::Accepted);
     assert_eq!(report.resulting_scene_revision.as_deref(), Some("s0002"));
     let pointer = load_current(&store)
@@ -822,4 +836,379 @@ fn the_historical_report_is_never_modified() {
     rollback_scene(&fixture.run_dir, "s0001", "alice", &fixture.clock())
         .expect("the store is rolled back");
     assert_eq!(before, digest(&fixture.run_dir.join("report.json")));
+}
+
+// ---------------------------------------------------------------------------
+// IT-8D1: the identity of the snapshot, the bundle and the decisions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_decision_pins_the_identity_of_the_snapshot() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    let report = fixture.submit();
+    let store = fixture.store();
+    let manifest = load_snapshot(&store, "cand-0001")
+        .expect("the snapshot is read")
+        .expect("the snapshot exists");
+    assert_eq!(report.snapshot_id.as_deref(), Some("cand-0001"));
+    assert_eq!(
+        report.snapshot_manifest_sha256.as_deref(),
+        Some(digest(&store.snapshot_manifest_path("cand-0001")).as_str()),
+        "the decision pins the bytes of the manifest"
+    );
+    assert_eq!(
+        report.candidate_sha256.as_deref(),
+        Some(digest(&store.candidate_path("cand-0001")).as_str()),
+        "the decision pins the bytes of the candidate document"
+    );
+    assert_eq!(
+        report.aggregate_sha256.as_deref(),
+        Some(manifest.aggregate_sha256.as_str())
+    );
+    assert!(report.task_sha256.is_some(), "the task is pinned");
+    assert!(
+        report.base_aggregate_sha256.is_some(),
+        "the base revision is pinned"
+    );
+}
+
+#[test]
+fn a_coordinated_tamper_of_a_protected_component_and_the_manifest_is_refused() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    fixture.submit();
+    let store = fixture.store();
+
+    // The protected component of the snapshot is replaced and the manifest is
+    // rewritten with it: the snapshot is consistent with itself, but it is
+    // not the snapshot the decision pinned any more.
+    let snapshot_geometry = store
+        .snapshot_dir("cand-0001")
+        .join("geometry")
+        .join("base.obj");
+    write_file(&snapshot_geometry, &common::box_obj(0.2));
+    let manifest_path = store.snapshot_manifest_path("cand-0001");
+    let mut manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(&manifest_path).expect("the manifest is read"),
+    )
+    .expect("the manifest is JSON");
+    let new_digest = digest(&snapshot_geometry);
+    for file in manifest["files"]
+        .as_array_mut()
+        .expect("the files are listed")
+    {
+        if file["component"] == "base" {
+            file["sha256"] = Value::String(new_digest.clone());
+        }
+    }
+    let components: Vec<(String, String)> = manifest["files"]
+        .as_array()
+        .expect("the files are listed")
+        .iter()
+        .map(|file| {
+            (
+                file["component"].as_str().unwrap_or_default().to_string(),
+                file["sha256"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    manifest["aggregate_sha256"] = Value::String(aggregate_digest(&components));
+    write_file(&manifest_path, &manifest.to_string());
+
+    // A new evaluation does not legitimise the tampered snapshot.
+    let evaluation = register_evaluation(&fixture.run_dir, "cand-0001");
+    let error = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(evaluation),
+            ..Default::default()
+        },
+    )
+    .expect_err("the acceptance is refused");
+    assert!(
+        error.code() == SNAPSHOT_MISMATCH || error.code() == EVIDENCE_MISMATCH,
+        "the refusal names the evidence: {}",
+        error.code()
+    );
+    assert_eq!(error.exit_code(), 1);
+    assert!(
+        !fixture.run_dir.join("scene/s0002").exists(),
+        "no revision is published"
+    );
+    let pointer = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(pointer.scene_revision, "s0001", "the pointer stays");
+}
+
+#[test]
+fn a_crash_after_the_pointer_completes_the_same_operation() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    fixture.submit();
+    let evaluation = register_evaluation(&fixture.run_dir, "cand-0001");
+    let mut after_pointer = || -> Result<(), EditError> {
+        Err(EditError::Internal {
+            message: "the process died after the pointer was switched".to_string(),
+        })
+    };
+    let hooks = AcceptHooks {
+        after_pointer: Some(&mut after_pointer),
+        ..Default::default()
+    };
+    let error = accept_candidate_with_hooks_and_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        hooks,
+        AcceptOptions {
+            evaluation: Some(evaluation.clone()),
+            ..Default::default()
+        },
+    )
+    .expect_err("the acceptance is interrupted");
+    assert!(error.to_string().contains("died"));
+
+    let store = fixture.store();
+    let pointer = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(
+        pointer.scene_revision, "s0002",
+        "the pointer is switched before the crash"
+    );
+    assert_eq!(
+        history(&store),
+        vec!["0001-submit.json".to_string()],
+        "the history is not written before the crash"
+    );
+
+    // The retry completes the same operation and publishes no second
+    // revision.
+    let report = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(evaluation.clone()),
+            ..Default::default()
+        },
+    )
+    .expect("the acceptance succeeds");
+    assert_eq!(report.decision, Decision::Accepted);
+    assert_eq!(report.resulting_scene_revision.as_deref(), Some("s0002"));
+    let revisions = list_revisions(&store).expect("the revisions are listed");
+    assert_eq!(revisions, vec!["s0001".to_string(), "s0002".to_string()]);
+    let index = load_index(&store).expect("the index is read");
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .status,
+        "accepted"
+    );
+
+    // After a rollback the retry keeps the idempotency: the historical
+    // result is returned and the scene is not switched back.
+    rollback_scene(&fixture.run_dir, "s0001", "alice", &fixture.clock())
+        .expect("the store is rolled back");
+    let again = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(evaluation),
+            ..Default::default()
+        },
+    )
+    .expect("the acceptance succeeds");
+    assert_eq!(again.decision, Decision::Accepted);
+    assert_eq!(again.resulting_scene_revision.as_deref(), Some("s0002"));
+    let pointer = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(
+        pointer.scene_revision, "s0001",
+        "the scene is not switched back"
+    );
+}
+
+#[test]
+fn a_rejection_cannot_overwrite_an_acceptance_that_won_the_race() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    fixture.submit();
+    let evaluation = register_evaluation(&fixture.run_dir, "cand-0001");
+
+    // The rejection runs while the acceptance holds the lock of the store:
+    // it cannot read a stale status and it cannot write anything.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let run_dir = fixture.run_dir.clone();
+    let mut after_validation = move || {
+        let outcome = reject_candidate(
+            &run_dir,
+            "cand-0001",
+            "bob",
+            Some("too late"),
+            &FixedClock::new("2026-01-03T04:05:06Z"),
+        );
+        let _ = sender.send(outcome.map(|report| report.decision));
+    };
+    let hooks = AcceptHooks {
+        after_validation: Some(&mut after_validation),
+        ..Default::default()
+    };
+    let report = accept_candidate_with_hooks_and_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        hooks,
+        AcceptOptions {
+            evaluation: Some(evaluation),
+            ..Default::default()
+        },
+    )
+    .expect("the acceptance succeeds");
+    assert_eq!(report.decision, Decision::Accepted);
+
+    let outcome = receiver.recv().expect("the rejection answered");
+    assert!(
+        outcome.is_err(),
+        "the rejection cannot run while the acceptance holds the lock"
+    );
+
+    let store = fixture.store();
+    let index = load_index(&store).expect("the index is read");
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .status,
+        "accepted",
+        "the acceptance is not overwritten"
+    );
+
+    // A rejection that arrives later is refused: the acceptance is never
+    // rewritten.
+    let refused = reject_candidate(
+        &fixture.run_dir,
+        "cand-0001",
+        "bob",
+        Some("too late"),
+        &fixture.clock(),
+    )
+    .expect("the rejection is decided");
+    let codes: Vec<&str> = refused
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect();
+    assert!(codes.contains(&CANDIDATE_ALREADY_ACCEPTED));
+    let index = load_index(&store).expect("the index is read");
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .status,
+        "accepted"
+    );
+}
+
+#[test]
+fn a_retry_with_another_evaluation_does_not_reuse_the_old_bundle() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    fixture.submit();
+    let first = register_evaluation(&fixture.run_dir, "cand-0001");
+
+    // The acceptance is interrupted after the publication of the revision.
+    let mut before_publish = || -> Result<(), EditError> {
+        Err(EditError::Internal {
+            message: "the process died before the pointer was switched".to_string(),
+        })
+    };
+    let hooks = AcceptHooks {
+        before_publish: Some(&mut before_publish),
+        ..Default::default()
+    };
+    let _ = accept_candidate_with_hooks_and_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        hooks,
+        AcceptOptions {
+            evaluation: Some(first),
+            ..Default::default()
+        },
+    )
+    .expect_err("the acceptance is interrupted");
+
+    // The retry with another evaluation never reuses the published bundle.
+    let second = register_evaluation(&fixture.run_dir, "cand-0001");
+    let report = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(second),
+            ..Default::default()
+        },
+    )
+    .expect("the acceptance succeeds");
+    assert_eq!(
+        report.resulting_scene_revision.as_deref(),
+        Some("s0003"),
+        "the bundle of another evaluation is never reused"
+    );
+    let store = fixture.store();
+    let revisions = list_revisions(&store).expect("the revisions are listed");
+    assert_eq!(
+        revisions,
+        vec![
+            "s0001".to_string(),
+            "s0002".to_string(),
+            "s0003".to_string()
+        ]
+    );
+    let scene = load_scene(&store, "s0003").expect("the scene is read");
+    let bundle = scene.verification.expect("the bundle exists");
+    assert_eq!(bundle.evaluations[0].evaluation_id, "ev-0002");
+}
+
+#[test]
+fn a_corrupted_registered_report_is_refused_even_with_a_valid_copy() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    fixture.submit();
+    let registered = register_evaluation(&fixture.run_dir, "cand-0001");
+
+    // A valid copy of the report: it carries the digest of the registry.
+    let copy = fixture
+        .run_dir
+        .join("verification/evaluations/copy-of-report.json");
+    std::fs::copy(&registered, &copy).expect("the copy is written");
+
+    // The registered report is corrupted.
+    std::fs::write(&registered, "{}\n").expect("the report is corrupted");
+
+    let error = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(copy),
+            ..Default::default()
+        },
+    )
+    .expect_err("the acceptance is refused");
+    assert_eq!(error.code(), EVALUATION_STALE);
+    assert!(
+        !fixture.run_dir.join("scene/s0002").exists(),
+        "no revision is published"
+    );
 }

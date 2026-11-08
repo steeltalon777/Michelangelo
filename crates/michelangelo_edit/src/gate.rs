@@ -12,7 +12,8 @@ use michelangelo_evidence::registry::{
     load_registry, registered_evaluations_for_target, report_relative_path,
 };
 use michelangelo_evidence::report::{
-    package_measurement_ids, package_views, EvaluationReport, TargetKind, ViewPin,
+    package_mask_paths, package_measurement_ids, package_views, EvaluationReport, TargetKind,
+    ViewPin,
 };
 use serde_json::Value;
 
@@ -98,6 +99,19 @@ pub fn resolve_evaluation(
                     message: format!(
                         "the evaluation report '{}' carries the digest {sha256} but the registry pins {}",
                         path.display(),
+                        entry.sha256
+                    ),
+                });
+            }
+            // The registered path must carry the registered bytes: a valid
+            // copy of a corrupted report is never trusted.
+            let registered = store.run_dir.join(&entry.report_path);
+            let registered_sha256 = file_sha256(&registered)?;
+            if registered_sha256 != entry.sha256 {
+                return Err(EditError::EvaluationStale {
+                    message: format!(
+                        "the registered evaluation report '{}' carries the digest {registered_sha256} but the registry pins {}",
+                        registered.display(),
                         entry.sha256
                     ),
                 });
@@ -208,13 +222,27 @@ pub fn verify_evaluation(
 ) -> Result<(), EditError> {
     let registry = load_registry(&store.run_dir).map_err(EditError::from)?;
     let package = package_json(store);
-    let current_views: Vec<ViewPin> = match &package {
+    let mut current_views: Vec<ViewPin> = match &package {
         Some(value) => package_views(value)
             .iter()
             .map(|view| view.pin(false))
             .collect(),
         None => Vec::new(),
     };
+    // The pins of the run are the digests of the bytes the run really
+    // carries: the mask file of every view is read again and hashed.
+    let mask_digests = match &package {
+        Some(value) => current_mask_digests(store, value)?,
+        None => Vec::new(),
+    };
+    for view in current_views.iter_mut() {
+        if let Some((_, digest)) = mask_digests
+            .iter()
+            .find(|(view_id, _)| *view_id == view.view_id)
+        {
+            view.mask_sha256 = digest.clone();
+        }
+    }
     let required_conditions: Vec<String> = match &package {
         Some(value) => package_measurement_ids(value),
         None => Vec::new(),
@@ -250,6 +278,36 @@ pub fn evaluation_ref(binding: &EvaluationBinding) -> crate::scene::EvaluationRe
 /// The relative path of the report of an evaluation.
 pub fn relative_report_path(evaluation_id: &str) -> String {
     report_relative_path(evaluation_id)
+}
+
+/// The digests of the mask files the run really carries.
+///
+/// The pairs are the identifier of the view and the SHA-256 of the bytes of
+/// the mask file. A mask file that is missing is an input that changed: the
+/// acceptance is refused.
+fn current_mask_digests(
+    store: &SceneStore,
+    package: &Value,
+) -> Result<Vec<(String, String)>, EditError> {
+    let package_dir = match store.package_copy_path().parent() {
+        Some(parent) => parent.to_path_buf(),
+        None => return Ok(Vec::new()),
+    };
+    let separator = std::path::MAIN_SEPARATOR.to_string();
+    let mut digests: Vec<(String, String)> = Vec::new();
+    for (view_id, relative) in package_mask_paths(package) {
+        let path = package_dir.join(relative.replace('/', &separator));
+        if !path.is_file() {
+            return Err(EditError::InputChanged {
+                message: format!(
+                    "the mask file of the view '{view_id}' is missing: '{}'",
+                    path.display()
+                ),
+            });
+        }
+        digests.push((view_id, file_sha256(&path)?));
+    }
+    Ok(digests)
 }
 
 /// The copy of the input package of the run (None when the run carries none).

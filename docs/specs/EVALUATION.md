@@ -147,10 +147,11 @@ All the digests are SHA-256 over canonical bytes and are computed by the Core (c
 * The **package copy** of the run (`<run>/package/package.json`) is pinned by its digest. The
   masks of the views are pinned by their digests, the cameras by their camera digest and the
   resolution by the size of the image.
-* The **held-out set** is optional (`--evaluation <pkg>`). A held-out view looking in the **same**
-  direction as a source view (`dot(dir_i, dir_j) > 0.9`) adds no constraint, so the held-out
-  result is `unavailable` with a diagnostic. Opposite orthographic views (`dot ≈ -1`) are allowed:
-  they see the mirrored silhouette and are the held-out controls of the proof datasets.
+* The **held-out set** is optional (`--evaluation <pkg>`). A held-out view whose direction is
+  parallel to a source view (`|dot(dir_i, dir_j)| > 0.9`) adds no independent silhouette
+  constraint, whether it is the same direction or the opposite one (the opposite view is the
+  mirrored occupancy). The held-out result is `unavailable` with a diagnostic; only oblique
+  directions count as independent shape conformance.
 * The **target** is the snapshot of the candidate (the full post-change component set) or the
   components of a revision. The **base** is the revision the target was built on. Both are
   rendered with identical inputs, cameras and settings; the per-view regression compares them.

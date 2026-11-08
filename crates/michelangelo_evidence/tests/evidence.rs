@@ -204,6 +204,29 @@ fn the_registry_is_append_only_and_deterministic() {
 }
 
 #[test]
+fn a_published_report_is_never_overwritten() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let run_dir = directory.path();
+    let report = passing_report();
+    write_and_register(run_dir, &report).expect("the report is registered");
+    let path = report_path(run_dir, "ev-0001");
+    let published = std::fs::read(&path).expect("the report is readable");
+
+    // A report with the same identifier but another content never replaces
+    // the published one.
+    let mut other = report.clone();
+    other.created_at = "2026-02-02T00:00:00Z".to_string();
+    let error =
+        write_and_register(run_dir, &other).expect_err("the published report is never overwritten");
+    assert_eq!(error.code(), "EVALUATION_ALREADY_REGISTERED");
+    assert_eq!(
+        published,
+        std::fs::read(&path).expect("the report is readable"),
+        "the published bytes are intact"
+    );
+}
+
+#[test]
 fn the_registry_orders_the_entries_by_the_identifier() {
     let directory = tempfile::tempdir().expect("a temporary directory");
     let run_dir = directory.path();
