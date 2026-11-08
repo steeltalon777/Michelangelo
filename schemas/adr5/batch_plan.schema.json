@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/batch_plan.schema.json",
+  "title": "Michelangelo resolved batch plan draft 0.1",
+  "description": "michelangelo.batch-plan/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). Immutable list of items with resolved parameters, input fingerprints, stage dependency edges, private output namespaces and validation profile references, computed and written before execution. Shows what will be created; approves nothing. Cycle check must have run before the plan is executable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "batch_id", "plan_revision", "created_at", "creator", "source_kind", "items", "limits", "cycle_check"],
+  "properties": {
+    "schema": { "const": "michelangelo.batch-plan/draft-0.1" },
+    "batch_id": { "$ref": "#/$defs/idToken" },
+    "plan_revision": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "creator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "name"],
+      "properties": {
+        "role": { "enum": ["owner", "operator", "agent"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Audit attribution only, not authentication (ADR 0005 section 13)." }
+      }
+    },
+    "source_kind": { "enum": ["family_recipe", "independent_items"] },
+    "recipe_ref": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["recipe_id", "revision", "recipe_sha256", "recipe_lock_digest"],
+      "properties": {
+        "recipe_id": { "$ref": "#/$defs/idToken" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "recipe_sha256": { "$ref": "#/$defs/sha256" },
+        "recipe_lock_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item_id", "source_kind", "resolved_parameters", "input_fingerprints", "output_namespace", "max_attempts"],
+        "properties": {
+          "item_id": { "$ref": "#/$defs/idToken" },
+          "source_kind": { "enum": ["variant_request", "independent_asset"] },
+          "variant_request_sha256": { "$ref": "#/$defs/sha256" },
+          "asset_input": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["snapshot_id", "snapshot_sha256"],
+            "properties": {
+              "snapshot_id": { "$ref": "#/$defs/idToken" },
+              "snapshot_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          },
+          "resolved_parameters": {
+            "type": "object",
+            "description": "Actually selected parameter values, written before execution; the seed does not replace this history."
+          },
+          "input_fingerprints": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": { "$ref": "#/$defs/token32" },
+            "additionalProperties": { "$ref": "#/$defs/sha256" }
+          },
+          "depends_on_items": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/idToken" }
+          },
+          "output_namespace": {
+            "$ref": "#/$defs/relPath",
+            "description": "Private reserved output directory; reserved atomically, never shared writable between items."
+          },
+          "validation_profile_ref": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["profile_id", "revision", "sha256"],
+            "properties": {
+              "profile_id": { "$ref": "#/$defs/idToken" },
+              "revision": { "type": "integer", "minimum": 1 },
+              "sha256": { "$ref": "#/$defs/sha256" }
+            }
+          },
+          "max_attempts": { "type": "integer", "minimum": 1, "maximum": 3 }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admission_profile", "max_parallel_heavy"],
+      "properties": {
+        "admission_profile": { "const": "single_heavy_process_v0", "description": "RTX 3050 8 GB / 32 GB RAM initial safe mode: one heavy Blender process at a time (ADR 0005 section 7.3)." },
+        "max_parallel_heavy": { "const": 1 },
+        "storage_budget_bytes": { "type": ["integer", "null"], "minimum": 1 },
+        "item_timeout_ms": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "cycle_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checked", "acyclic"],
+      "properties": {
+        "checked": { "const": true },
+        "acyclic": { "const": true },
+        "roots": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/idToken" } }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "relPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Workspace-relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    }
+  }
+}

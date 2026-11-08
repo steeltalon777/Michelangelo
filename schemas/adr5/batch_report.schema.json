@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/batch_report.schema.json",
+  "title": "Michelangelo batch report draft 0.1",
+  "description": "michelangelo.batch-report/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). Domain outcomes per item. These statuses are NOT the existing JobStatus: execution state, validation, author decision and engine readiness are different axes (ADR 0005 section 7.2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "batch_id", "plan_revision", "created_at", "items", "summary"],
+  "properties": {
+    "schema": { "const": "michelangelo.batch-report/draft-0.1" },
+    "batch_id": { "$ref": "#/$defs/idToken" },
+    "plan_revision": { "type": "integer", "minimum": 1 },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item_id", "status", "attempts"],
+        "properties": {
+          "item_id": { "$ref": "#/$defs/idToken" },
+          "status": {
+            "enum": ["built", "validation_failed", "awaiting_review", "accepted", "rejected", "execution_failed", "cancelled", "blocked"],
+            "description": "Closed domain outcome set v0.1 (owner question OP-6)."
+          },
+          "attempts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["attempt_id", "outcome"],
+              "properties": {
+                "attempt_id": { "$ref": "#/$defs/idToken" },
+                "outcome": { "enum": ["built", "execution_failed", "cancelled", "timeout"] },
+                "job_id": { "type": ["string", "null"], "maxLength": 128, "description": "Existing persisted job record used as a child execution record; never a competing authoritative pointer." }
+              }
+            }
+          },
+          "candidate_ref": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["candidate_id", "bundle_sha256"],
+            "properties": {
+              "candidate_id": { "$ref": "#/$defs/idToken" },
+              "bundle_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          },
+          "validation_report_ref": { "$ref": "#/$defs/docRef" },
+          "error": { "type": ["string", "null"], "maxLength": 2000 }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["built", "validation_failed", "awaiting_review", "accepted", "rejected", "execution_failed", "cancelled", "blocked"],
+      "properties": {
+        "built": { "type": "integer", "minimum": 0 },
+        "validation_failed": { "type": "integer", "minimum": 0 },
+        "awaiting_review": { "type": "integer", "minimum": 0 },
+        "accepted": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "integer", "minimum": 0 },
+        "execution_failed": { "type": "integer", "minimum": 0 },
+        "cancelled": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "docRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "relPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Workspace-relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    }
+  }
+}

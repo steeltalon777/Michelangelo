@@ -1,0 +1,25 @@
+{
+  "schema": "michelangelo.asset-source-snapshot/draft-0.1",
+  "snapshot_id": "house-master-src",
+  "snapshot_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "created_at": "2026-11-08T12:00:00Z",
+  "source": {
+    "origin_kind": "external_file",
+    "original_format": "glb",
+    "external_id": "urban-house-v3",
+    "external_provider": "local-export",
+    "detail": "Authored master model, single .glb with embedded textures"
+  },
+  "payload_files": [
+    { "path": "sources/house-master/urban-house-v3.glb", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size_bytes": 48213344, "content_kind": "geometry" }
+  ],
+  "dependencies": [
+    { "dep_id": "facade_texture", "path": "sources/house-master/textures/facade.png", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "kind": "texture", "resolution": "scanned", "status": "present" }
+  ],
+  "provenance": { "origin": "human", "detail": "Authored in Blender by the owner" },
+  "license_state": "known",
+  "license_detail": "Owner-authored, internal use",
+  "units": "m",
+  "axes": { "up": "+Z", "handedness": "right" },
+  "ambiguities": ["material slots for window glass are unnamed"]
+}

@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/candidate_bundle.schema.json",
+  "title": "Michelangelo candidate asset bundle draft 0.1",
+  "description": "michelangelo.candidate-asset-bundle/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). The full result of one item, not only the changed detail: every artifact with digests of actual bytes, transitive dependency digests, diff to base, provenance chain, unresolved issues. Status is constant 'proposed' in v0.1: turning a candidate into an accepted revision is done only by the canonical publisher creating an AcceptanceRecord; self-reported approval does not exist on the wire.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "candidate_id", "status", "created_at", "asset_id", "artifacts", "dependency_digests", "asset_digest", "provenance_chain"],
+  "properties": {
+    "schema": { "const": "michelangelo.candidate-asset-bundle/draft-0.1" },
+    "candidate_id": { "$ref": "#/$defs/idToken" },
+    "status": {
+      "const": "proposed",
+      "description": "Constant in v0.1. An accepted revision is a separate publication event with AcceptanceRecord; the bundle never promotes itself."
+    },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "asset_id": { "$ref": "#/$defs/idToken" },
+    "expected_current_revision": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "null = expect absent (no-clobber create); a value = compare-and-swap against the current revision of this asset identity. Checked under lock immediately before the pointer switch."
+    },
+    "base_ref": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["kind", "id", "sha256"],
+      "properties": {
+        "kind": { "enum": ["source_snapshot", "asset_revision"] },
+        "id": { "$ref": "#/$defs/idToken" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "recipe_ref": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["recipe_id", "revision", "recipe_lock_digest"],
+      "properties": {
+        "recipe_id": { "$ref": "#/$defs/idToken" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "recipe_lock_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "item_id": { "$ref": "#/$defs/idToken" },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8192,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifact_id", "path", "sha256", "size_bytes", "content_kind"],
+        "properties": {
+          "artifact_id": { "$ref": "#/$defs/token32" },
+          "path": { "$ref": "#/$defs/relPath" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size_bytes": { "type": "integer", "minimum": 1, "maximum": 1e12 },
+          "content_kind": { "$ref": "#/$defs/contentKind" },
+          "component_id": { "$ref": "#/$defs/idToken" },
+          "source": { "enum": ["generated", "shared", "copied_from_base"] }
+        }
+      }
+    },
+    "diff_to_base": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["changed", "added", "removed"],
+      "properties": {
+        "changed": { "type": "array", "maxItems": 8192, "items": { "$ref": "#/$defs/token32" } },
+        "added": { "type": "array", "maxItems": 8192, "items": { "$ref": "#/$defs/token32" } },
+        "removed": { "type": "array", "maxItems": 8192, "items": { "$ref": "#/$defs/token32" } }
+      }
+    },
+    "parents": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "Provenance DAG (multi-source); transactional base is still one identity with one expected_current_revision.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["asset_id", "revision", "revision_sha256"],
+        "properties": {
+          "asset_id": { "$ref": "#/$defs/idToken" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "revision_sha256": { "$ref": "#/$defs/sha256" },
+          "relation": { "$ref": "#/$defs/token32" }
+        }
+      }
+    },
+    "dependency_digests": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/token32" },
+      "additionalProperties": { "$ref": "#/$defs/sha256" },
+      "description": "Transitive closure actually used: linked libraries, materials, textures, node groups, rigs, clips. Changing any dependency invalidates the lock and dependent evidence (ADR 0005 section 9.2)."
+    },
+    "asset_digest": {
+      "$ref": "#/$defs/sha256",
+      "description": "Per schemas/adr5/README.md rule 4. Covers every artifact kind; a geometry-only digest never substitutes for it."
+    },
+    "provenance_chain": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "ref"],
+        "properties": {
+          "stage": { "enum": ["intake", "preparation", "source_set", "family_recipe", "recipe_lock", "variant_generation", "validation"] },
+          "ref": { "$ref": "#/$defs/docRef" },
+          "at": { "$ref": "#/$defs/rfc3339" },
+          "actor_role": { "enum": ["owner", "operator", "agent", "core"] }
+        }
+      }
+    },
+    "unresolved_issues": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "relPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Workspace-relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "contentKind": {
+      "enum": ["geometry", "material", "texture", "rig_definition", "animation", "scene_layout", "node_group", "linked_library", "metadata", "other"]
+    },
+    "docRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

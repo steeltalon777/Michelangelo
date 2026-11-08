@@ -1,0 +1,17 @@
+{
+  "schema": "michelangelo.recipe-lock/draft-0.1",
+  "lock_id": "urban-house-lock-1",
+  "created_at": "2026-11-08T12:25:00Z",
+  "recipe_ref": { "recipe_id": "urban-house-family", "revision": 1, "recipe_sha256": "9999999999999999999999999999999999999999999999999999999999999999" },
+  "dependencies": [
+    { "dep_id": "facade_kit", "revision": 3, "sha256": "5555555555555555555555555555555555555555555555555555555555555555", "kind": "geometry" },
+    { "dep_id": "house_generator", "revision": 2, "sha256": "6666666666666666666666666666666666666666666666666666666666666666", "kind": "node_group" },
+    { "dep_id": "house_validation", "revision": 1, "sha256": "7777777777777777777777777777777777777777777777777777777777777777", "kind": "metadata" },
+    { "dep_id": "family_owner_policy", "revision": 1, "sha256": "8888888888888888888888888888888888888888888888888888888888888888", "kind": "metadata" }
+  ],
+  "tool_versions": { "blender": "5.2.3 LTS", "michelangelo": "0.1.0" },
+  "prng": { "algorithm": "sha256_counter_v0", "derivation_version": "adr5-v0.1" },
+  "pinned_profiles": { "style_profile_sha256": "4444444444444444444444444444444444444444444444444444444444444444", "validation_profile_sha256": "7777777777777777777777777777777777777777777777777777777777777777", "approval_policy_sha256": "8888888888888888888888888888888888888888888888888888888888888888" },
+  "declared_settings": { "render_engine": "BLENDER_WORKBENCH", "resolution": "512x512" },
+  "floating_latest_allowed": false
+}

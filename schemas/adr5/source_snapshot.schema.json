@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/source_snapshot.schema.json",
+  "title": "Michelangelo asset source snapshot draft 0.1",
+  "description": "michelangelo.asset-source-snapshot/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1); not an implemented DTO. Immutable facts of one accepted source model: payload files with actual SHA-256, dependency closure, provenance/license state, units/axes, ambiguities. Missing/unsupported dependencies are recorded, not silently dropped.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "snapshot_id", "created_at", "source", "payload_files", "dependencies", "provenance", "license_state"],
+  "properties": {
+    "schema": { "const": "michelangelo.asset-source-snapshot/draft-0.1" },
+    "snapshot_id": { "$ref": "#/$defs/idToken" },
+    "snapshot_sha256": {
+      "$ref": "#/$defs/sha256",
+      "description": "SHA-256 of the canonical JSON (RFC 8785) of this document with the snapshot_sha256 member removed; computed by Core, not trusted from the producer."
+    },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin_kind", "original_format"],
+      "properties": {
+        "origin_kind": { "enum": ["external_file", "michelangelo_reconstruction", "michelangelo_family_variant"] },
+        "original_format": {
+          "enum": ["glb", "gltf", "obj", "stl", "ply"],
+          "description": "v0.1 intake set. .blend intake is blocked on the ADR 0005 section 13.2 owner decision; fbx is not implemented by the worker."
+        },
+        "external_id": { "type": ["string", "null"], "maxLength": 200 },
+        "external_provider": { "type": ["string", "null"], "maxLength": 64 },
+        "detail": { "type": ["string", "null"], "maxLength": 2000 }
+      }
+    },
+    "payload_files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size_bytes"],
+        "properties": {
+          "path": { "$ref": "#/$defs/relPath" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size_bytes": { "type": "integer", "minimum": 1, "maximum": 1e12 },
+          "content_kind": { "$ref": "#/$defs/contentKind" }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dep_id", "path", "kind", "resolution", "status"],
+        "properties": {
+          "dep_id": { "$ref": "#/$defs/token32" },
+          "path": { "$ref": "#/$defs/relPath" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "kind": { "enum": ["external_file", "texture", "linked_library", "packed", "other"] },
+          "resolution": { "enum": ["declared", "scanned"] },
+          "status": { "enum": ["present", "missing", "unsupported"], "description": "missing/unsupported are explicit intake diagnostics, never silently dropped." }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": { "enum": ["human", "ai_author", "mixed", "unknown"] },
+        "detail": { "type": ["string", "null"], "maxLength": 2000 }
+      }
+    },
+    "license_state": {
+      "enum": ["known", "unknown", "restricted"],
+      "description": "unknown provenance/license is never treated as a permission (ADR section 13)."
+    },
+    "license_detail": { "type": ["string", "null"], "maxLength": 2000 },
+    "units": { "enum": ["m", "cm", "mm", "unknown"] },
+    "axes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["up"],
+      "properties": {
+        "up": { "$ref": "#/$defs/axis" },
+        "forward": { "$ref": "#/$defs/axis" },
+        "handedness": { "enum": ["right", "left", "unknown"] }
+      }
+    },
+    "ambiguities": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "relPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Workspace-relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "axis": { "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"] },
+    "contentKind": {
+      "enum": ["geometry", "material", "texture", "rig_definition", "animation", "scene_layout", "node_group", "linked_library", "metadata", "other"]
+    }
+  }
+}

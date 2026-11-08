@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/family_recipe.schema.json",
+  "title": "Michelangelo family recipe draft 0.1",
+  "description": "michelangelo.family-recipe/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). Describes the allowed set of results, not arbitrary code. Executable revision is immutable; editing creates the next revision. allow_arbitrary_code is constant false in v0.1; V2-V4 capability kinds are deferred without implementation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "recipe_id", "revision", "created_at", "source_set_ref", "dependencies", "coordinates", "parameters", "generator", "scope", "randomness", "validation", "approval", "budget", "outputs"],
+  "properties": {
+    "schema": { "const": "michelangelo.family-recipe/draft-0.1" },
+    "recipe_id": { "$ref": "#/$defs/idToken" },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "source_set_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_set_id", "revision", "sha256"],
+      "properties": {
+        "source_set_id": { "$ref": "#/$defs/idToken" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "style_profile_ref": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "revision", "sha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/idToken" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "revision", "sha256"],
+        "properties": {
+          "id": { "$ref": "#/$defs/token32" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "coordinates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "up_axis"],
+      "properties": {
+        "unit": { "enum": ["m", "cm", "mm"] },
+        "up_axis": { "enum": ["X", "Y", "Z"] }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": { "$ref": "#/$defs/token32" },
+      "additionalProperties": { "$ref": "#/$defs/parameterSpec" }
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "template_ref", "capabilities", "parameter_bindings"],
+      "properties": {
+        "kind": {
+          "enum": ["registered_blender_template_v0", "static_variant_set_v0"],
+          "description": "V0/V1 only. V2/V3 kinds (modifiers, geometry nodes graphs, shape keys) are deferred without implementation."
+        },
+        "template_ref": { "$ref": "#/$defs/token32" },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "enum": ["module_assembly", "material_variation", "bounded_geometry_nodes", "static_variants"] }
+        },
+        "parameter_bindings": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 64,
+          "propertyNames": { "$ref": "#/$defs/token32" },
+          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_roles", "protected_roles", "allow_arbitrary_code"],
+      "properties": {
+        "allowed_roles": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/token32" } },
+        "protected_roles": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/token32" } },
+        "allow_arbitrary_code": { "const": false }
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind"],
+        "properties": {
+          "id": { "$ref": "#/$defs/token32" },
+          "kind": { "enum": ["connector_compatibility", "minimum_clearance", "maximum_dimension"] },
+          "profile_ref": { "$ref": "#/$defs/token32" },
+          "role": { "$ref": "#/$defs/token32" },
+          "axis": { "enum": ["X", "Y", "Z"] },
+          "value_m": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 }
+        }
+      }
+    },
+    "randomness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "derivation_version", "default_seed", "per_item_seed"],
+      "properties": {
+        "algorithm": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "derivation_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "default_seed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "per_item_seed": { "const": "from_locked_recipe_and_stable_item_id" }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_ref", "required_checks", "visual_review"],
+      "properties": {
+        "profile_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile_id", "revision", "sha256"],
+          "properties": {
+            "profile_id": { "$ref": "#/$defs/idToken" },
+            "revision": { "type": "integer", "minimum": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "required_checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/checkId" }
+        },
+        "visual_review": { "enum": ["per_variant", "contact_sheet_plus_per_variant"] }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_ref", "new_agent_design"],
+      "properties": {
+        "policy_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "revision", "sha256"],
+          "properties": {
+            "id": { "$ref": "#/$defs/idToken" },
+            "revision": { "type": "integer", "minimum": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "new_agent_design": { "const": "explicit_owner_decision" }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_items_per_plan"],
+      "properties": {
+        "max_items_per_plan": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "max_evaluated_triangles_per_item": { "type": "integer", "minimum": 1, "maximum": 100000000 }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["editable", "exchange"],
+      "properties": {
+        "editable": { "enum": ["blend"] },
+        "exchange": { "enum": ["glb"] }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "checkId": {
+      "enum": ["payload_integrity", "dependency_closure", "path_containment", "asset_digest_full", "budget_geometry", "protected_roles", "connector_compatibility", "minimum_clearance", "maximum_dimension", "material_presence", "texture_integrity", "export_roundtrip", "uv_preservation", "rig_bindings", "animation_clips", "silhouette_conformance", "style_review", "format_loss_declared"],
+      "description": "Closed check_id registry v0.1 (CONTRACT_GATE.md section 6). An unknown mandatory check blocks acceptance (VALIDATION_UNKNOWN_REQUIRED)."
+    },
+    "parameterSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["integer", "number", "enum", "boolean"] },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "values": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+        "default": {}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "parameters": { "propertyNames": { "pattern": "." } } }, "required": ["parameters"] },
+      "then": {
+        "properties": {
+          "parameters": {
+            "additionalProperties": {
+              "allOf": [
+                {
+                  "if": { "properties": { "type": { "enum": ["integer", "number"] } }, "required": ["type"] },
+                  "then": { "required": ["min", "max"] }
+                },
+                {
+                  "if": { "properties": { "type": { "const": "enum" } }, "required": ["type"] },
+                  "then": { "required": ["values"] }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

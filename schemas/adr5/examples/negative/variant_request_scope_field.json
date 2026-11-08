@@ -1,0 +1,14 @@
+{
+  "schema": "michelangelo.variant-request/draft-0.1",
+  "item_id": "urban-house-v-099",
+  "created_at": "2026-11-08T12:30:00Z",
+  "recipe_ref": { "recipe_id": "urban-house-family", "revision": 1, "recipe_sha256": "9999999999999999999999999999999999999999999999999999999999999999" },
+  "recipe_lock_digest": "abababababababababababababababababababababababababababababababab",
+  "parameters": { "floors": 3, "bays": 5, "roof": "gable", "palette": "brick-dark", "wear": 0.12 },
+  "purpose": "variant with a smuggled scope widening",
+  "scope": {
+    "allowed_roles": ["facade", "roof", "ornaments", "materials", "entry-anchor"],
+    "protected_roles": [],
+    "additional_capabilities": ["arbitrary_python"]
+  }
+}

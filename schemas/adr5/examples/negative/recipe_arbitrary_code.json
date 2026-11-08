@@ -1,0 +1,37 @@
+{
+  "schema": "michelangelo.family-recipe/draft-0.1",
+  "recipe_id": "bad-code-recipe",
+  "revision": 1,
+  "created_at": "2026-11-08T12:20:00Z",
+  "source_set_ref": { "source_set_id": "urban-house-sources", "revision": 1, "sha256": "3333333333333333333333333333333333333333333333333333333333333333" },
+  "dependencies": [
+    { "id": "evil_generator", "revision": 1, "sha256": "6666666666666666666666666666666666666666666666666666666666666666" }
+  ],
+  "coordinates": { "unit": "m", "up_axis": "Z" },
+  "parameters": {
+    "floors": { "type": "integer", "min": 2, "max": 5 }
+  },
+  "generator": {
+    "kind": "registered_blender_template_v0",
+    "template_ref": "evil_generator",
+    "capabilities": ["module_assembly"],
+    "parameter_bindings": { "floors": "facade.floor_count" }
+  },
+  "scope": {
+    "allowed_roles": ["facade"],
+    "protected_roles": [],
+    "allow_arbitrary_code": true
+  },
+  "randomness": { "algorithm": "sha256_counter_v0", "derivation_version": "adr5-v0.1", "default_seed": 1, "per_item_seed": "from_locked_recipe_and_stable_item_id" },
+  "validation": {
+    "profile_ref": { "profile_id": "urban-house-validation", "revision": 1, "sha256": "7777777777777777777777777777777777777777777777777777777777777777" },
+    "required_checks": ["payload_integrity"],
+    "visual_review": "per_variant"
+  },
+  "approval": {
+    "policy_ref": { "id": "family-owner-policy", "revision": 1, "sha256": "8888888888888888888888888888888888888888888888888888888888888888" },
+    "new_agent_design": "explicit_owner_decision"
+  },
+  "budget": { "max_items_per_plan": 30 },
+  "outputs": { "editable": "blend", "exchange": "glb" }
+}
