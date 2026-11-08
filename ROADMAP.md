@@ -120,8 +120,10 @@ Stage D (ADR §13.4) — optional assistant — ✅ **done (IT-7, 2026-11-07)**:
   materialised only by the accepted bundle, partial acceptance (geometry accepted while the
   unknown stays open), `evidence_stale` invalidation and rollback-restored state; solver-side
   package policy enforcement (unaccepted AI supplements not applied, forbidden stubs, allowed
-  completion rules, accepted-author precedence). Remaining: the external-agent demo (replacing a
-  stub via MCP, with a cube control that does not close the unknown).
+  completion rules, accepted-author precedence). ✅ Demo (2026-11-08): an external DSH subagent
+  over MCP authored a meaningful flame replacement for a solver stub; real-Blender evaluation
+  passed, the owner confirmation resolved the unknown in the accepted bundle, and an arbitrary
+  cube control was accepted only as geometry (it did not close the unknown).
 - Natural language command interpretation — future (needs a provider under the same bounded-task /
   data-policy rules)
 - Build plan validation → `BlenderJobSpec`; iterative refinement as bounded local-change

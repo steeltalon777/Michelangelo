@@ -181,8 +181,13 @@ evidence in `target/techlead/IT-8/` and `target/techlead/IT-8B/`.
   `SUPPLEMENT_RULE_NOT_ALLOWED`, `STUB_FORBIDDEN`, accepted-author precedence, `PACKAGE_POLICY_STRICTER`);
   `assistant task --unknown` + MCP optional `"unknown"`; 19 edit unknown tests + 17 solver policy
   tests; Lead real e2e partial accept → resolve → invalidation; reviewer GREEN after fixes.
-- [ ] T-0804 External-agent demo (IT-8): a DSH subagent over MCP replaces a stub with a meaningful
-  part; a cube control does not close the unknown; evidence in `target/techlead/IT-8/`.
+- [x] T-0804 External-agent demo (IT-8) — DSH subagent `bf5d23b9` over MCP authored a candle-flame
+  replacement for `stub_u_flame_shape` (1506 vertices), submitted as `cand-flame-0001`; real-Blender
+  evaluation `ev-0001` passed (mean IoU 0.9602); owner confirmation + `edit accept --resolve`
+  closed `u_flame_shape` in `s0002` (bundle refs `b0001`/`cf-0001`/`r-0001`/`ev-0001`). Cube control
+  through the same MCP surface was accepted as geometry only (resolve without confirmation →
+  `CONFIRMATION_MISSING`, partial accept → unknown `stub_pending`). Evidence:
+  `target/techlead/IT-8/demo/EVIDENCE.md`. Relative-run evaluation bug found and fixed.
 
 ## Not yet started
 

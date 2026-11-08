@@ -34,6 +34,19 @@ pub const PER_VIEW_REGRESSION_MAX: f64 = 0.01;
 /// The largest accepted scalar product of the directions of two views.
 pub const HELD_OUT_MAX_DOT: f64 = 0.9;
 
+/// The run directory as an absolute path.
+///
+/// The Blender worker rejects a relative `workspace_root`, so every evaluation
+/// resolves the run directory before any path is written into a job.
+fn absolute_run(run_dir: &Path) -> Result<PathBuf, EvalError> {
+    std::path::absolute(run_dir).map_err(|err| EvalError::Invalid {
+        message: format!(
+            "the run directory '{}' cannot be resolved to an absolute path: {err}",
+            run_dir.display()
+        ),
+    })
+}
+
 /// The options of an evaluation.
 #[derive(Debug, Clone, Default)]
 pub struct EvaluationOptions {
@@ -104,6 +117,8 @@ pub fn evaluate_candidate_with(
     renderer: &dyn Renderer,
     comparator: &dyn Comparator,
 ) -> Result<EvaluationReport, EvalError> {
+    let absolute = absolute_run(run_dir)?;
+    let run_dir = absolute.as_path();
     let store = SceneStore::new(run_dir);
     let manifest = match load_snapshot(&store, candidate_id)? {
         Some(manifest) => manifest,
@@ -175,6 +190,8 @@ pub fn evaluate_revision_with(
     renderer: &dyn Renderer,
     comparator: &dyn Comparator,
 ) -> Result<EvaluationReport, EvalError> {
+    let absolute = absolute_run(run_dir)?;
+    let run_dir = absolute.as_path();
     let store = SceneStore::new(run_dir);
     let scene = load_scene(&store, revision)?;
     let components: Vec<Component> = scene
@@ -591,4 +608,21 @@ fn read_run_report(run_dir: &Path) -> Option<Value> {
 /// The state of the visible result of an evaluation (used by the CLI).
 pub fn verdict_of(report: &EvaluationReport) -> TriState {
     report.verdict()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::absolute_run;
+    use std::path::Path;
+
+    #[test]
+    fn a_relative_run_directory_is_resolved_before_the_render() {
+        // The Blender worker rejects a relative workspace_root; the evaluator
+        // must resolve the run directory even when the CLI was given a relative
+        // path (regression: RENDER_FAILED "workspace_root must be an absolute
+        // path").
+        let absolute = absolute_run(Path::new("examples/edit/run-0001"))
+            .expect("the relative path is resolved");
+        assert!(absolute.is_absolute());
+    }
 }

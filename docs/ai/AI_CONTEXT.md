@@ -145,8 +145,9 @@ the current Windows stand).
   IoU regression, hidden/author/GT taxonomy, registered report digest), and explicit unknown
   resolution over [`UNKNOWNS.md`](../specs/UNKNOWNS.md) (bindings, author confirmations,
   immutable resolutions, partial acceptance, `evidence_stale` invalidation, rollback-restored
-  state) with solver-side package policy enforcement. The external-agent MCP demo remains. No
-  wire changes.
+  state) with solver-side package policy enforcement. The external-agent MCP demo is done: a DSH
+  subagent authored a meaningful flame part, the owner evaluation/confirmation resolved the
+  unknown, and an arbitrary cube control did not close it. No wire changes.
 
 ## Out of Scope
 

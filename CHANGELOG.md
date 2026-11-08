@@ -164,11 +164,28 @@ library crates plus CLI subcommands and an accept gate.
   (`PACKAGE_POLICY_STRICTER`); no `uncertainty_policy` object keeps the Stage B behaviour.
   19 edit unknown tests + 17 solver policy tests.
 
+### Added (IT-8C)
+
+- **IT-8 mandatory demo (2026-11-08)**: an external DSH subagent authored a meaningful candle-flame
+  part for the solver stub `stub_u_flame_shape` and submitted it through the MCP stdio surface;
+  the owner's real-Blender evaluation passed (mean IoU 0.9602), the author confirmation was
+  recorded and `edit accept --resolve` closed `u_flame_shape` in `s0002` with a hash-pinned
+  resolution. An arbitrary cube submitted through the same surface was accepted as geometry only:
+  resolving it without an author confirmation was refused (`CONFIRMATION_MISSING`) and a partial
+  acceptance kept the unknown `stub_pending`.
+
+### Fixed (IT-8 demo)
+
+- **Evaluation with a relative `--run` path** passed a relative `workspace_root` to the Blender
+  worker (`RENDER_FAILED`). The evaluator now resolves the run directory with
+  `std::path::absolute` before building the job; regression test
+  `a_relative_run_directory_is_resolved_before_the_render`.
+
 ### Changed (IT-8A/IT-8B)
 
 - `docs/specs/LOCAL_EDIT.md`, `docs/specs/VERIFICATION_STATE.md`, `docs/specs/RECONSTRUCTION.md`,
   `docs/specs/EVALUATION.md`, TZ `TZ_IT8_ACCEPTANCE_INTEGRITY.md` and ROADMAP/TASKS/AI_CONTEXT
-  updated for A/B/C; test count baseline 816 Rust tests + 86 solver tests.
+  updated for A/B/C and the demo; test count baseline 817 Rust tests + 86 solver tests.
 
 ## [0.1.0] — 2026-11-07
 

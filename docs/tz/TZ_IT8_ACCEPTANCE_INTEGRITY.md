@@ -429,6 +429,30 @@ Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 
   could not execute commands (no shell in the preset); the ladder, solver suite and the Lead e2e
   are the command evidence.
 
+### IT-8 mandatory demo (2026-11-08)
+
+- External agent: DSH subagent child `bf5d23b9-1da6-48df-95d6-5ec09f369cda`, route
+  `minimax-cn/MiniMax-M3.1-Flash`, preset `worker`; it received only the bounded MCP task
+  (`asst-0001`, narrowed to `u_flame_shape` by IT-8C) and authored a lathed candle-flame teardrop
+  (1506 vertices / 1536 faces, inside the stub bbox), submitted through the real MCP stdio
+  surface (`michelangelo_get_task` → `michelangelo_submit_candidate`) as `cand-flame-0001`,
+  decision `proposed`; MCP never applied.
+- Owner flow: `evaluate` with real Blender → `ev-0001` (visible mean IoU **0.9602**,
+  projection/author conditions pass, GT unavailable, hidden pending) → `unknown confirm` by the
+  owner → `edit accept --resolve u_flame_shape` → `s0002` with bundle refs `b0001`, `cf-0001`,
+  `r-0001`, `ev-0001`; unknown state `resolved (r-0001)`.
+- Cube control (separate pristine workspace, same MCP path): cube candidate `cand-cube-0001`
+  evaluated `pass`; `edit accept --resolve` without an author confirmation → exit 1
+  `CONFIRMATION_MISSING`, no revision; `edit accept` without `--resolve` → geometry accepted in
+  `s0002`, unknown still `stub_pending` (not resolved). The arbitrary cube does not close the
+  task.
+- Bug found by the demo and fixed: evaluation with a **relative** `--run` path passed a relative
+  `workspace_root` to the Blender worker (`RENDER_FAILED`); the evaluator now resolves the run
+  directory with `std::path::absolute` before building the job, with regression test
+  `a_relative_run_directory_is_resolved_before_the_render`.
+- Evidence: `target/techlead/IT-8/demo/EVIDENCE.md`, `.../ws` (resolved run) and `.../ws-cube`
+  (cube control), MCP client `target/techlead/IT-8/mcp_call.py`.
+
 ### Review log
 
 | блок | attempt | reviewer | route | verdict | findings |
@@ -437,3 +461,4 @@ Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 
 | A | 1 | child `f21acc57` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | MINOR: refusal history written outside the lock (fixed: lock before evidence); dead exit-code arm (fixed); `kinds ?` (script display only). Lead reproduced 14/14 after fixes. |
 | B | 1 | child `3788f634` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | MINOR: view-order-sensitive pin comparison (fixed + test); regression limit taken from the report (fixed: pinned to 0.01 + test). NITs: public testing helpers/fakes, guarded `unreachable!()` in the binary. Lead reproduced real-Blender evaluation/accept and tamper refusal. |
 | C | 1 | child `3bb78488` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | LOW: stale solver `detail` after invalidation (fixed); doc wording of the no-policy default (fixed); omitted-`require_author_acceptance` default pin test (added). Lead reproduced partial accept → resolve → invalidation with real Blender and the solver policy suite. |
+| Demo | 1 | external DSH child `bf5d23b9` (authoring agent) + Lead verification | `minimax-cn/MiniMax-M3.1-Flash`, preset `worker` | GREEN | Meaningful flame via MCP → evaluation pass → owner confirmation/resolution; cube control accepted as geometry but `CONFIRMATION_MISSING` prevents closure; relative-run evaluation bug fixed + regression test. |
