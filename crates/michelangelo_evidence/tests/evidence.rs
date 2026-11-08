@@ -8,8 +8,8 @@ use michelangelo_evidence::digest::{
 };
 use michelangelo_evidence::gate::{verify_report, GateContext};
 use michelangelo_evidence::registry::{
-    load_registry, report_path, write_and_register, write_registry, EvaluationRegistry,
-    RegistryEntry,
+    load_registry, registered_evaluation_bytes_for_target, report_path, write_and_register,
+    write_registry, EvaluationRegistry, RegistryEntry,
 };
 use michelangelo_evidence::report::{
     AuthorDecision, CameraDigest, ClaimStatus, EvaluationCheck, EvaluationInputs, EvaluationReport,
@@ -435,4 +435,80 @@ fn the_file_digest_pins_the_bytes() {
     assert_eq!(digest.len(), 64);
     std::fs::write(&path, b"other").expect("the file is written");
     assert_ne!(digest, file_sha256(&path).expect("the digest is computed"));
+}
+
+#[test]
+fn a_tampered_registered_report_is_never_silently_skipped() {
+    // A registered report that cannot be read or parsed is tampering, not a
+    // missing evaluation: the bytes-once resolver must surface it instead of
+    // silently falling back to an older evaluation of the same target.
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let run_dir = directory.path();
+    let report = passing_report();
+    let entry = write_and_register(run_dir, &report).expect("the report is registered");
+    let mut registry = EvaluationRegistry::empty();
+    registry
+        .register(entry.clone())
+        .expect("the entry is registered");
+
+    let found = registered_evaluation_bytes_for_target(run_dir, &registry, "cand-0001")
+        .expect("the registered report is read");
+    assert_eq!(
+        found.len(),
+        1,
+        "the registered evaluation of the target is found"
+    );
+    assert_eq!(
+        found[0].0.sha256, entry.sha256,
+        "the bytes of the report and the registry agree"
+    );
+
+    std::fs::write(
+        report_path(run_dir, &entry.evaluation_id),
+        b"{ not a report",
+    )
+    .expect("the report is corrupted");
+    let error = registered_evaluation_bytes_for_target(run_dir, &registry, "cand-0001")
+        .expect_err("a corrupted registered report is refused");
+    assert!(
+        error.message().contains("tampered"),
+        "the refusal names the tampering: {}",
+        error.message()
+    );
+
+    // A missing report file is refused as well, never skipped.
+    std::fs::remove_file(report_path(run_dir, &entry.evaluation_id))
+        .expect("the report is removed");
+    let error = registered_evaluation_bytes_for_target(run_dir, &registry, "cand-0001")
+        .expect_err("a missing registered report is refused");
+    assert!(error.message().contains("tampered"));
+}
+
+#[test]
+fn the_registry_orders_the_evaluations_numerically() {
+    // The identifiers are `ev-<number>`: a lexical order puts `ev-10000`
+    // before `ev-9999`, so a resolver that takes the last entry would take an
+    // older report once the run passes ten thousand evaluations.
+    let mut registry = EvaluationRegistry::empty();
+    for (number, identifier) in [(9999_u32, "ev-9999"), (10000, "ev-10000")] {
+        registry
+            .register(RegistryEntry {
+                evaluation_id: identifier.to_string(),
+                report_path: format!("verification/evaluations/{identifier}/report.json"),
+                sha256: format!("{number:064}"),
+                target_digest: "aggregate".to_string(),
+                created_at: "2026-01-02T03:04:05Z".to_string(),
+            })
+            .expect("the entry is registered");
+    }
+    let identifiers: Vec<&str> = registry
+        .evaluations
+        .iter()
+        .map(|entry| entry.evaluation_id.as_str())
+        .collect();
+    assert_eq!(
+        identifiers,
+        vec!["ev-9999", "ev-10000"],
+        "the newest evaluation is the last one"
+    );
 }

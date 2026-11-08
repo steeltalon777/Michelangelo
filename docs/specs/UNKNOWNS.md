@@ -146,8 +146,16 @@ Rules:
    `resolved` only in the revision whose bundle references the resolution
    (the bundle lists the bindings, the confirmation and the resolution with
    their digests). A resolution that survives a later revision keeps its
-   confirmation, resolution and binding references in that later bundle;
-   `verification.bindings` lists every binding version those resolutions use.
+   confirmation, resolution, binding **and evaluation** references in that
+   later bundle; `verification.bindings` lists every binding version those
+   resolutions use. The carried documents are checked against the digests
+   pinned in the base revision's bundle, never re-hashed into new trust.
+   Binding documents are cumulative (a version carries the whole set), but a
+   new version never re-carries a binding that the last rollback discarded:
+   when the latest document was discarded, a new document starts from the
+   bindings the selected revision's bundle pins, so a routine `unknown bind`
+   of another unknown cannot reactivate a rolled-back binding. An explicit
+   re-bind after the rollback is a new decision and is honoured.
 7. **Invalidation is mandatory.** Every new bundle recomputes the validity of
    the carried resolutions. A resolution is carried forward only when all of
    its dependencies still hold: the bound components, the binding version and

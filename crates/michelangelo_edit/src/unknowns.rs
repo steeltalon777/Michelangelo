@@ -27,6 +27,7 @@
 //!   reason `evidence_stale`),
 //! * the historical documents stay in the history but are not current.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -488,9 +489,23 @@ pub fn bind_unknown(
         });
     }
 
-    let mut bindings = match latest_binding_document(store)? {
-        Some(document) => document.bindings,
-        None => Vec::new(),
+    // The base of the new document: the latest binding document carries the
+    // whole set of the bindings. A rollback that discarded the latest document
+    // changes the base: the new document starts from the bindings the bundle
+    // of the current revision pins, so a binding a rollback discarded is
+    // never resurrected by a later bind.
+    let current_revision = load_current(store)?.map(|pointer| pointer.scene_revision);
+    let latest = latest_binding_document(store)?;
+    let mut bindings = match (&latest, &current_revision) {
+        (Some(document), Some(revision)) => {
+            if discarded_by_rollback(store, document, revision)? {
+                merged_bundle_bindings(store, revision)?
+            } else {
+                document.bindings.clone()
+            }
+        }
+        (Some(document), None) => document.bindings.clone(),
+        (None, _) => Vec::new(),
     };
     bindings.retain(|binding| binding.unknown_id != unknown_id);
     bindings.push(UnknownBinding {
@@ -531,6 +546,29 @@ pub fn bind_unknown(
         }),
     )?;
     Ok(document)
+}
+
+/// The bindings the bundle of a revision pins, merged per unknown.
+///
+/// The versions of the bundle are merged from the oldest to the newest: the
+/// binding of the newest version wins for the unknown it carries. The result
+/// is the set of the bindings a new document may build on when the latest
+/// document was discarded by a rollback.
+fn merged_bundle_bindings(
+    store: &SceneStore,
+    scene_revision: &str,
+) -> Result<Vec<UnknownBinding>, EditError> {
+    let mut merged: BTreeMap<String, UnknownBinding> = BTreeMap::new();
+    for version in bundle_binding_versions(store, scene_revision)? {
+        let document = match load_binding_document(store, &version)? {
+            Some(document) => document,
+            None => continue,
+        };
+        for binding in document.bindings {
+            merged.insert(binding.unknown_id.clone(), binding);
+        }
+    }
+    Ok(merged.into_values().collect())
 }
 
 /// Read the confirmations of the store, sorted by the identifier.
@@ -764,6 +802,249 @@ fn binding_of_entry(
     (None, None)
 }
 
+/// The binding versions that are active for a revision.
+///
+/// The bundle of the revision is the authority (contract section 3): the
+/// versions it refers to are active. The globally latest binding document is
+/// active too, unless a rollback discarded it: a rollback never leaves a new
+/// binding active (the bindings of the selected revision are the active
+/// ones).
+pub fn active_binding_versions(
+    store: &SceneStore,
+    scene_revision: &str,
+) -> Result<Vec<String>, EditError> {
+    let mut versions = bundle_binding_versions(store, scene_revision)?;
+    if let Some(document) = latest_binding_document(store)? {
+        if !discarded_by_rollback(store, &document, scene_revision)? {
+            versions.push(document.version);
+        }
+    }
+    versions.sort();
+    versions.dedup();
+    Ok(versions)
+}
+
+/// The active binding document of an unknown.
+///
+/// The document is the most recent active version that carries the unknown.
+/// The globally latest binding document is never used instead of the bundle of
+/// the current revision.
+pub fn active_binding_document(
+    store: &SceneStore,
+    unknown_id: &str,
+) -> Result<Option<BindingDocument>, EditError> {
+    let revision = match load_current(store)? {
+        Some(pointer) => pointer.scene_revision,
+        None => return Ok(None),
+    };
+    let versions = active_binding_versions(store, &revision)?;
+    let mut documents: Vec<BindingDocument> = Vec::new();
+    for version in &versions {
+        if let Some(document) = load_binding_document(store, version)? {
+            documents.push(document);
+        }
+    }
+    Ok(documents
+        .iter()
+        .rev()
+        .find(|document| document.binding(unknown_id).is_some())
+        .cloned())
+}
+
+/// True when a rollback discarded a binding document.
+///
+/// A rollback selects a revision: a binding that was written before the
+/// rollback and that the selected revision does not reference is not active
+/// any more. A binding that was written after the rollback is a new one.
+///
+/// The times are compared numerically (the instants, not their text): the
+/// lexical comparison of two RFC 3339 timestamps is only correct for one
+/// fixed format.
+fn discarded_by_rollback(
+    store: &SceneStore,
+    document: &BindingDocument,
+    scene_revision: &str,
+) -> Result<bool, EditError> {
+    let index = crate::scene::load_index(store)?;
+    let rollback = match index.rollbacks.last() {
+        Some(rollback) => rollback,
+        None => return Ok(false),
+    };
+    let written_after_rollback = match compare_rfc3339(&document.created_at, &rollback.at) {
+        Some(Ordering::Greater) => true,
+        Some(_) => false,
+        // A timestamp that does not parse falls back to the lexical
+        // comparison of the texts.
+        None => document.created_at > rollback.at,
+    };
+    if written_after_rollback {
+        // The binding was written after the rollback: it is a new binding.
+        return Ok(false);
+    }
+    let versions = bundle_binding_versions(store, scene_revision)?;
+    Ok(!versions.contains(&document.version))
+}
+
+/// Compare two RFC 3339 timestamps.
+///
+/// The function returns `None` when one of the timestamps does not parse: the
+/// caller falls back to the lexical comparison of the texts then.
+fn compare_rfc3339(left: &str, right: &str) -> Option<Ordering> {
+    let left = parse_rfc3339(left)?;
+    let right = parse_rfc3339(right)?;
+    Some(left.cmp(&right))
+}
+
+/// An instant of the RFC 3339 grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Instant {
+    /// The seconds since the epoch (UTC).
+    seconds: i64,
+    /// The nanoseconds of the second.
+    nanoseconds: u32,
+}
+
+/// Parse a timestamp of the RFC 3339 grammar.
+///
+/// The accepted grammar is `YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM)`:
+/// the fraction of the second is optional and the offset is either `Z` or a
+/// signed difference of the UTC time. The function returns `None` when the
+/// text does not parse.
+fn parse_rfc3339(text: &str) -> Option<Instant> {
+    let text = text.trim();
+    let (date, rest) = text.split_once(['T', 't'])?;
+    let mut date_parts = date.split('-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: u32 = date_parts.next()?.parse().ok()?;
+    let day: u32 = date_parts.next()?.parse().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    // The offset of the time: `Z` or a signed difference of the UTC time.
+    let (time, offset_seconds) = if let Some(time) = rest.strip_suffix(['Z', 'z']) {
+        (time, 0_i64)
+    } else {
+        let bytes = rest.as_bytes();
+        if bytes.len() < 6 {
+            return None;
+        }
+        let sign = match bytes[bytes.len() - 6] {
+            b'+' => 1_i64,
+            b'-' => -1_i64,
+            _ => return None,
+        };
+        let hours: i64 = rest.get(rest.len() - 5..rest.len() - 3)?.parse().ok()?;
+        let minutes: i64 = rest.get(rest.len() - 2..)?.parse().ok()?;
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        (
+            rest.get(..rest.len() - 6)?,
+            sign * (hours * 3600 + minutes * 60),
+        )
+    };
+
+    // The time of the day: the hours, the minutes and the seconds.
+    let mut time_parts = time.split(':');
+    let hour: i64 = time_parts.next()?.parse().ok()?;
+    let minute: i64 = time_parts.next()?.parse().ok()?;
+    let seconds_text = time_parts.next()?;
+    if time_parts.next().is_some() {
+        return None;
+    }
+    let (second_text, fraction_text) = match seconds_text.split_once('.') {
+        Some((second, fraction)) => (second, fraction),
+        None => (seconds_text, ""),
+    };
+    let second: i64 = second_text.parse().ok()?;
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+
+    // The fraction of the second: the digits are truncated to the
+    // nanoseconds.
+    let mut nanoseconds = 0_u32;
+    if !fraction_text.is_empty() {
+        if !fraction_text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let mut digits = fraction_text.to_string();
+        digits.truncate(9);
+        while digits.len() < 9 {
+            digits.push('0');
+        }
+        nanoseconds = digits.parse().ok()?;
+    }
+
+    let days = days_from_civil(year, month, day);
+    let seconds = days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds;
+    Some(Instant {
+        seconds,
+        nanoseconds,
+    })
+}
+
+/// The days between the epoch and a date of the proleptic Gregorian
+/// calendar.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let month = month as i64;
+    let day = day as i64;
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// The binding of an unknown in the bundle of a revision.
+///
+/// The bundle of the revision is the authority (contract section 3): the
+/// active bindings are the ones the revision references. The globally latest
+/// binding document is never used instead, so a rolled back binding is never
+/// reactivated. The pair is the binding and the version it comes from.
+pub fn revision_binding(
+    store: &SceneStore,
+    scene_revision: &str,
+    unknown_id: &str,
+) -> Result<Option<(UnknownBinding, String)>, EditError> {
+    // The bundle of the revision is the authority: the most recent version
+    // of the bundle that carries the unknown is its binding.
+    let versions = bundle_binding_versions(store, scene_revision)?;
+    let mut documents: Vec<(String, BindingDocument)> = Vec::new();
+    for version in &versions {
+        if let Some(document) = load_binding_document(store, version)? {
+            documents.push((version.clone(), document));
+        }
+    }
+    for (version, document) in documents.iter().rev() {
+        if let Some(binding) = document.binding(unknown_id) {
+            return Ok(Some((binding.clone(), version.clone())));
+        }
+    }
+    if !versions.is_empty() {
+        // The bundle of the revision carries bindings: the globally latest
+        // binding document is never used instead.
+        return Ok(None);
+    }
+    // The revision carries no binding at all (the store never published a
+    // bundle with bindings): the latest binding document is active, unless a
+    // rollback discarded it.
+    if let Some(document) = latest_binding_document(store)? {
+        if discarded_by_rollback(store, &document, scene_revision)? {
+            return Ok(None);
+        }
+        if let Some(binding) = document.binding(unknown_id) {
+            return Ok(Some((binding.clone(), document.version.clone())));
+        }
+    }
+    Ok(None)
+}
+
 /// The view of the unknowns of a revision.
 pub fn show_unknowns(store: &SceneStore, revision: Option<&str>) -> Result<UnknownView, EditError> {
     let (revision, state) = state_of(store, revision)?;
@@ -895,7 +1176,7 @@ pub fn sync_unknowns(store: &SceneStore, clock: &dyn Clock) -> Result<SyncReport
 
 /// The claim of an unknown: the claim of its binding, if it carries one.
 fn claim_of(store: &SceneStore, unknown_id: &str) -> Result<Option<String>, EditError> {
-    Ok(latest_binding_document(store)?
+    Ok(active_binding_document(store, unknown_id)?
         .and_then(|document| document.binding(unknown_id).and_then(|b| b.claim.clone())))
 }
 
@@ -1094,7 +1375,7 @@ pub fn check_resolution(
 
     // 1. A binding must exist: a part id match never closes an unknown.
     let binding_document =
-        latest_binding_document(store)?.ok_or_else(|| EditError::BindingMissing {
+        active_binding_document(store, unknown_id)?.ok_or_else(|| EditError::BindingMissing {
             message: format!(
             "the unknown '{unknown_id}' carries no binding: run 'michelangelo unknown bind' first"
         ),
@@ -1708,7 +1989,17 @@ pub fn recompute_state(
     state.revision = new_revision.to_string();
     state.created_at = created_at.to_string();
 
-    let latest_bindings = latest_binding_document(store)?;
+    // The bindings that are active for the base revision: the bundle of the
+    // base revision is the authority. The globally latest binding document is
+    // never used instead: a binding that a rollback discarded does not
+    // invalidate a resolution that survives the revision.
+    let active_versions = active_binding_versions(store, base_revision)?;
+    let mut active_documents: Vec<(String, BindingDocument)> = Vec::new();
+    for version in &active_versions {
+        if let Some(document) = load_binding_document(store, version)? {
+            active_documents.push((version.clone(), document));
+        }
+    }
 
     for entry in state.unknowns.iter_mut() {
         if entry.status != STATUS_RESOLVED {
@@ -1742,12 +2033,23 @@ pub fn recompute_state(
                 continue;
             }
         };
-        // The binding must not have changed.
-        let current = latest_bindings
-            .as_ref()
-            .and_then(|document| document.binding(&entry.unknown_id).cloned());
+        // The binding must not have changed: the binding of the unknown in
+        // the active versions of the base revision is the current one.
+        let current_version = active_documents
+            .iter()
+            .rev()
+            .find(|(_, document)| document.binding(&entry.unknown_id).is_some())
+            .map(|(version, _)| version.clone());
+        let current = current_version.as_ref().and_then(|version| {
+            active_documents
+                .iter()
+                .find(|(name, _)| name == version)
+                .and_then(|(_, document)| document.binding(&entry.unknown_id).cloned())
+        });
         if current.as_ref() != Some(&bound) {
             invalidate_entry(entry, "the binding changed");
+            // The state follows the binding that is active now.
+            entry.binding_version = current_version;
             continue;
         }
         // The bound components must not have changed.
@@ -1811,4 +2113,57 @@ pub fn component_map(scene: &Scene) -> BTreeMap<String, String> {
         .iter()
         .map(|component| (component.name.clone(), component.sha256.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compare_rfc3339;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn the_rfc3339_comparison_is_numeric() {
+        // Two texts of the same instant compare as equal, with and without
+        // the fraction of the second.
+        assert_eq!(
+            compare_rfc3339("2026-01-02T03:04:05Z", "2026-01-02T03:04:05.000Z"),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            compare_rfc3339("2026-01-02T03:04:05.000Z", "2026-01-02T03:04:05Z"),
+            Some(Ordering::Equal)
+        );
+
+        // The fraction orders the instants: the lexical comparison of the
+        // texts says the opposite.
+        assert_eq!(
+            compare_rfc3339("2026-01-02T03:04:05.5Z", "2026-01-02T03:04:05.500000001Z"),
+            Some(Ordering::Less)
+        );
+        assert!("2026-01-02T03:04:05.5Z" > "2026-01-02T03:04:05.500000001Z");
+
+        // The offset is taken into account: the two texts are the same
+        // instant.
+        assert_eq!(
+            compare_rfc3339("2026-01-02T04:04:05+01:00", "2026-01-02T03:04:05Z"),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            compare_rfc3339("2026-01-02T02:04:05-01:00", "2026-01-02T03:04:05Z"),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            compare_rfc3339("2026-01-02T03:04:05+01:00", "2026-01-02T03:04:05Z"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_rfc3339("2026-01-02T03:04:05-01:00", "2026-01-02T03:04:05Z"),
+            Some(Ordering::Greater)
+        );
+        assert!("2026-01-02T04:04:05+01:00" > "2026-01-02T03:04:05Z");
+
+        // A text that does not parse has no order: the caller falls back to
+        // the lexical comparison.
+        assert_eq!(compare_rfc3339("yesterday", "2026-01-02T03:04:05Z"), None);
+        assert_eq!(compare_rfc3339("2026-01-02T03:04:05Z", "2026-01-02"), None);
+    }
 }

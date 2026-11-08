@@ -1037,6 +1037,148 @@ fn a_crash_after_the_pointer_completes_the_same_operation() {
     );
 }
 
+/// Accept a candidate and crash after the switch of the pointer.
+///
+/// The acceptance is committed (the pointer names the revision of the
+/// candidate) but its bookkeeping (the history and the index) is missing.
+fn owner_review_crash_after_the_pointer(fixture: &Fixture) -> PathBuf {
+    fixture.submit();
+    let evaluation = register_evaluation(&fixture.run_dir, "cand-0001");
+    let mut after_pointer = || -> Result<(), EditError> {
+        Err(EditError::Internal {
+            message: "owner-review simulated crash after the commit point".to_string(),
+        })
+    };
+    let result = accept_candidate_with_hooks_and_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptHooks {
+            after_pointer: Some(&mut after_pointer),
+            ..Default::default()
+        },
+        AcceptOptions {
+            evaluation: Some(evaluation.clone()),
+            ..Default::default()
+        },
+    );
+    assert!(result.is_err(), "the acceptance is interrupted");
+    let store = fixture.store();
+    let pointer = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(
+        pointer.scene_revision, "s0002",
+        "the pointer is switched before the crash"
+    );
+    assert_eq!(
+        history(&store),
+        vec!["0001-submit.json".to_string()],
+        "the bookkeeping of the acceptance is missing"
+    );
+    evaluation
+}
+
+#[test]
+fn owner_review_crash_then_rollback_before_retry_preserves_rollback() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    let evaluation = owner_review_crash_after_the_pointer(&fixture);
+    let store = fixture.store();
+
+    // The rollback completes the bookkeeping of the committed acceptance
+    // first and then rolls the store back.
+    rollback_scene(&fixture.run_dir, "s0001", "alice", &fixture.clock())
+        .expect("the store is rolled back");
+    let index = load_index(&store).expect("the index is read");
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .status,
+        "accepted",
+        "the committed acceptance is recovered before the rollback"
+    );
+    assert!(
+        history(&store)
+            .iter()
+            .any(|name| name.ends_with("-accept.json")),
+        "the history carries the recovered acceptance: {:?}",
+        history(&store)
+    );
+
+    // The retry returns the historical acceptance and never switches the
+    // scene back.
+    let result = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(evaluation),
+            ..Default::default()
+        },
+    );
+    assert!(
+        result.is_ok(),
+        "the retry returns the historical acceptance: {:?}",
+        result.err()
+    );
+    let current = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(
+        current.scene_revision, "s0001",
+        "a historical retry must not undo the explicit rollback"
+    );
+}
+
+#[test]
+fn owner_review_reject_after_committed_crash_cannot_replace_acceptance() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    owner_review_crash_after_the_pointer(&fixture);
+    let store = fixture.store();
+
+    // The rejection recovers the bookkeeping of the committed acceptance and
+    // refuses itself: the history never carries a reject that contradicts
+    // the commit.
+    let report = reject_candidate(
+        &fixture.run_dir,
+        "cand-0001",
+        "bob",
+        Some("late reject"),
+        &fixture.clock(),
+    )
+    .expect("the rejection is refused, not applied");
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == CANDIDATE_ALREADY_ACCEPTED),
+        "the pointer already committed the acceptance: {:?}",
+        report.diagnostics
+    );
+    let index = load_index(&store).expect("the index is read");
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .status,
+        "accepted"
+    );
+    let current = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(current.scene_revision, "s0002");
+    assert!(
+        !history(&store)
+            .iter()
+            .any(|name| name.ends_with("-reject.json")),
+        "no reject record contradicts the commit: {:?}",
+        history(&store)
+    );
+}
+
 #[test]
 fn a_rejection_cannot_overwrite_an_acceptance_that_won_the_race() {
     let fixture = Fixture::new(&json!({}), &lid_geometry());
@@ -1178,6 +1320,397 @@ fn a_retry_with_another_evaluation_does_not_reuse_the_old_bundle() {
     let scene = load_scene(&store, "s0003").expect("the scene is read");
     let bundle = scene.verification.expect("the bundle exists");
     assert_eq!(bundle.evaluations[0].evaluation_id, "ev-0002");
+}
+
+// ---------------------------------------------------------------------------
+// Review E: the recovery of a committed acceptance
+// ---------------------------------------------------------------------------
+
+/// Write a second candidate that is built on a revision.
+fn owner_review_second_candidate(fixture: &Fixture, base_revision: &str) -> PathBuf {
+    let directory = fixture._directory.path().join("cand-0002");
+    write_candidate(
+        &directory,
+        &candidate(&json!({
+            "candidate_id": "cand-0002",
+            "base": {"scene_revision": base_revision},
+            "task": {"allowed_components": ["lid"], "protected": []}
+        })),
+        &[("lid.obj", lid_obj(0.03))],
+    );
+    directory
+}
+
+#[test]
+fn review_e_a_late_reject_recovers_the_committed_acceptance_it_contradicts() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    // The acceptance of the first candidate is committed (the pointer names
+    // its revision) but its bookkeeping is missing.
+    owner_review_crash_after_the_pointer(&fixture);
+    let store = fixture.store();
+
+    // A second candidate is built on the revision of the committed
+    // acceptance and accepted: the pointer names the new revision.
+    let directory = owner_review_second_candidate(&fixture, "s0002");
+    submit_candidate(&fixture.run_dir, &directory, &fixture.clock())
+        .expect("the second candidate is submitted");
+    let evaluation = register_evaluation(&fixture.run_dir, "cand-0002");
+    let accepted = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0002",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(evaluation),
+            ..Default::default()
+        },
+    )
+    .expect("the second candidate is accepted");
+    assert_eq!(accepted.resulting_scene_revision.as_deref(), Some("s0003"));
+
+    // The late rejection of the first candidate recovers the acceptance that
+    // was committed before the crash and refuses itself.
+    let report = reject_candidate(
+        &fixture.run_dir,
+        "cand-0001",
+        "bob",
+        Some("late reject"),
+        &fixture.clock(),
+    )
+    .expect("the rejection is refused, not applied");
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == CANDIDATE_ALREADY_ACCEPTED),
+        "the committed acceptance is never contradicted: {:?}",
+        report.diagnostics
+    );
+
+    let index = load_index(&store).expect("the index is read");
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .status,
+        "accepted",
+        "the committed acceptance is recovered"
+    );
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .scene_revision
+            .as_deref(),
+        Some("s0002"),
+        "the recovered acceptance names the revision it published"
+    );
+
+    // The history carries the recovered acceptance and the refusal, never a
+    // plain rejection.
+    let names = history(&store);
+    assert!(
+        names.iter().any(|name| name.ends_with("-accept.json")),
+        "the history carries the recovered acceptance: {names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.ends_with("-reject-refused.json")),
+        "the history carries the refusal: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|name| name.ends_with("-reject.json")),
+        "no plain rejection contradicts the commit: {names:?}"
+    );
+
+    // The scene pointer stays on the revision of the second candidate.
+    let pointer = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(pointer.scene_revision, "s0003");
+    assert_eq!(pointer.candidate_id.as_deref(), Some("cand-0002"));
+}
+
+#[test]
+fn review_e_the_recovered_acceptance_names_the_recovery_as_its_author() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    owner_review_crash_after_the_pointer(&fixture);
+    let store = fixture.store();
+
+    // The rejection completes the bookkeeping of the committed acceptance.
+    reject_candidate(
+        &fixture.run_dir,
+        "cand-0001",
+        "bob",
+        Some("late reject"),
+        &fixture.clock(),
+    )
+    .expect("the rejection is refused, not applied");
+
+    let names = history(&store);
+    let accept = names
+        .iter()
+        .find(|name| name.ends_with("-accept.json"))
+        .expect("the recovered acceptance is in the history");
+    let text = history_bytes(&store, accept);
+    let value: Value = serde_json::from_slice(&text).expect("the decision is JSON");
+    assert_eq!(
+        value["decided_by"].as_str(),
+        Some("recovery:bob"),
+        "the audit trail names the recovery, never the late actor"
+    );
+    assert!(
+        value["checks"]
+            .as_array()
+            .expect("the decision carries checks")
+            .iter()
+            .any(|check| check["check"].as_str() == Some("recovery")),
+        "the recovered decision explains the recovery: {value}"
+    );
+}
+
+#[test]
+fn review_e_a_revision_that_was_never_published_is_not_recovered() {
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    fixture.submit();
+    // The acceptance dies before the pointer is switched: the revision is
+    // written but it was never published.
+    let mut before_publish = || -> Result<(), EditError> {
+        Err(EditError::Internal {
+            message: "the process died before the pointer was switched".to_string(),
+        })
+    };
+    let hooks = AcceptHooks {
+        before_publish: Some(&mut before_publish),
+        ..Default::default()
+    };
+    let evaluation = register_evaluation(&fixture.run_dir, "cand-0001");
+    let error = accept_candidate_with_hooks_and_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        hooks,
+        AcceptOptions {
+            evaluation: Some(evaluation),
+            ..Default::default()
+        },
+    )
+    .expect_err("the acceptance is interrupted");
+    assert!(error.to_string().contains("died"));
+    let store = fixture.store();
+    assert!(
+        fixture.run_dir.join("scene/s0002/scene.json").is_file(),
+        "the revision was written before the crash"
+    );
+    let pointer = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(
+        pointer.scene_revision, "s0001",
+        "the revision was never published"
+    );
+
+    // The rejection of the candidate is a plain rejection: the revision that
+    // was never published is not a committed acceptance.
+    let report = reject_candidate(
+        &fixture.run_dir,
+        "cand-0001",
+        "bob",
+        Some("not good enough"),
+        &fixture.clock(),
+    )
+    .expect("the candidate is rejected");
+    assert_eq!(report.decision, Decision::Rejected);
+    let index = load_index(&store).expect("the index is read");
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .status,
+        "rejected",
+        "a revision that was never published is not a committed acceptance"
+    );
+    let names = history(&store);
+    assert!(
+        !names.iter().any(|name| name.ends_with("-accept.json")),
+        "no acceptance is recovered: {names:?}"
+    );
+    assert!(
+        names.iter().any(|name| name.ends_with("-reject.json")),
+        "the rejection is recorded: {names:?}"
+    );
+    let pointer = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(pointer.scene_revision, "s0001", "the pointer never moved");
+}
+
+#[test]
+fn review_e_a_rejected_candidate_is_never_recovered_as_accepted() {
+    // A revision written by an acceptance that crashed before the pointer was
+    // switched is not a committed acceptance. Selecting it with a rollback
+    // makes it the current revision, but the candidate stays rejected: the
+    // recovery never turns a rejection into a fabricated acceptance.
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    fixture.submit();
+    let mut before_publish = || -> Result<(), EditError> {
+        Err(EditError::Internal {
+            message: "the process died before the pointer was switched".to_string(),
+        })
+    };
+    let evaluation = register_evaluation(&fixture.run_dir, "cand-0001");
+    accept_candidate_with_hooks_and_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock(),
+        AcceptHooks {
+            before_publish: Some(&mut before_publish),
+            ..Default::default()
+        },
+        AcceptOptions {
+            evaluation: Some(evaluation),
+            ..Default::default()
+        },
+    )
+    .expect_err("the acceptance is interrupted");
+    let store = fixture.store();
+    reject_candidate(&fixture.run_dir, "cand-0001", "bob", None, &fixture.clock())
+        .expect("the candidate is rejected");
+
+    // The rollback selects the revision the crashed acceptance wrote.
+    rollback_scene(&fixture.run_dir, "s0002", "bob", &fixture.clock())
+        .expect("the store selects the revision");
+    let pointer = load_current(&store)
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(pointer.scene_revision, "s0002", "the revision is selected");
+
+    // The next decision operation runs the recovery: the rejected candidate
+    // must not be recovered as accepted.
+    rollback_scene(&fixture.run_dir, "s0001", "bob", &fixture.clock())
+        .expect("the store is rolled back again");
+    let index = load_index(&store).expect("the index is read");
+    assert_eq!(
+        index
+            .entry("cand-0001")
+            .expect("the candidate is listed")
+            .status,
+        "rejected",
+        "a rejection is never turned into an acceptance"
+    );
+    let names = history(&store);
+    assert!(
+        !names.iter().any(|name| name.ends_with("-accept.json")),
+        "no acceptance is fabricated: {names:?}"
+    );
+}
+
+#[test]
+fn review_e_the_pins_of_the_package_fail_closed() {
+    // A run without a copy of the package pins no view.
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    fixture.submit();
+    let store = fixture.store();
+    let manifest = load_snapshot(&store, "cand-0001")
+        .expect("the snapshot is read")
+        .expect("the snapshot exists");
+    assert!(
+        manifest.view_pins.is_empty(),
+        "a run without a copy of the package pins no view"
+    );
+
+    // A copy of the package that cannot be parsed is an error: the pins
+    // never fall back to the digest the package declares.
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    write_file(&fixture.run_dir.join("package/package.json"), "{not json");
+    let error = submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
+        .expect_err("the broken copy of the package is refused");
+    assert!(
+        error.message().contains("package"),
+        "the error names the copy of the package: {}",
+        error.message()
+    );
+
+    // A mask the package declares and that cannot be read is an error too.
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    write_file(
+        &fixture.run_dir.join("package/package.json"),
+        &json!({
+            "schema": "michelangelo.input-package/0",
+            "package_id": "demo-package",
+            "revision": 1,
+            "views": [{
+                "view_id": "front",
+                "kind": "calibrated",
+                "image": {"path": "images/front.png", "sha256": "00", "width_px": 4, "height_px": 4},
+                "mask": {"path": "masks/front.png", "sha256": "11"},
+                "projection": {
+                    "type": "orthographic",
+                    "location_m": [0.0, -4.0, 0.0],
+                    "look_at_m": [0.0, 0.0, 0.0],
+                    "up_world": [0.0, 0.0, 1.0],
+                    "ortho_scale_m": 1.0
+                }
+            }]
+        })
+        .to_string(),
+    );
+    let error = submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
+        .expect_err("the missing mask of the package is refused");
+    assert_eq!(
+        error.code(),
+        "IO_ERROR",
+        "the mask that cannot be read is an error: {}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("cannot be read"),
+        "the error names the file that cannot be read: {}",
+        error.message()
+    );
+
+    // The mask the run really carries is pinned, never the digest the
+    // package declares.
+    let fixture = Fixture::new(&json!({}), &lid_geometry());
+    write_file(
+        &fixture.run_dir.join("package/package.json"),
+        &json!({
+            "schema": "michelangelo.input-package/0",
+            "package_id": "demo-package",
+            "revision": 1,
+            "views": [{
+                "view_id": "front",
+                "kind": "calibrated",
+                "image": {"path": "images/front.png", "sha256": "00", "width_px": 4, "height_px": 4},
+                "mask": {"path": "masks/front.png", "sha256": "11"},
+                "projection": {
+                    "type": "orthographic",
+                    "location_m": [0.0, -4.0, 0.0],
+                    "look_at_m": [0.0, 0.0, 0.0],
+                    "up_world": [0.0, 0.0, 1.0],
+                    "ortho_scale_m": 1.0
+                }
+            }]
+        })
+        .to_string(),
+    );
+    write_file(&fixture.run_dir.join("package/masks/front.png"), "mask");
+    let report = submit_candidate(&fixture.run_dir, &fixture.candidate_dir, &fixture.clock())
+        .expect("the candidate is submitted");
+    assert_eq!(report.decision, Decision::Proposed);
+    let store = fixture.store();
+    let manifest = load_snapshot(&store, "cand-0001")
+        .expect("the snapshot is read")
+        .expect("the snapshot exists");
+    assert_eq!(manifest.view_pins.len(), 1);
+    assert_eq!(
+        manifest.view_pins[0].mask_sha256,
+        digest(&fixture.run_dir.join("package/masks/front.png")),
+        "the pin carries the digest of the mask the run really has"
+    );
 }
 
 #[test]

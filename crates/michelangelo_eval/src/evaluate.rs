@@ -256,10 +256,27 @@ fn evaluate(
             ),
         });
     }
-    let package_dir = package_path
+    let live_package_dir = package_path
         .parent()
         .map(|parent| parent.to_path_buf())
         .unwrap_or_else(|| run_dir.to_path_buf());
+
+    // The work area of the evaluation: the identifier is reserved with an
+    // atomic create (no overwrite) under the short lock of the store, so two
+    // concurrent evaluations never share a directory. The reservation comes
+    // before the copy, because the copy lives in the reserved work area.
+    let (evaluation_id, work) = reserve_evaluation(run_dir, &store)?;
+
+    // The package of the run is copied into the work area before anything is
+    // pinned: the copy is the pin. Every digest below is derived from the
+    // copy and the comparison reads the copy, so the bytes that are measured
+    // are the bytes that the report pins. A resource replaced at any moment
+    // (at the pin time, during a long render, or before the comparison) can
+    // no longer certify a different input — the ABA window is closed.
+    let package_dir = work.join("package");
+    copy_package(&live_package_dir, &package_dir)?;
+    let package_path = package_dir.join("package.json");
+
     let package_sha256 = file_sha256(&package_path).map_err(|err| EvalError::Invalid {
         message: err.message().to_string(),
     })?;
@@ -287,23 +304,27 @@ fn evaluate(
         units: units_of(&package),
         views: source_views.iter().map(view_spec).collect(),
     };
-    let mask_paths = mask_paths_of(&package_dir, &package);
 
     // The held-out set: the directions must be distinct from the source
-    // directions, otherwise the held-out result is unavailable.
+    // directions, otherwise the held-out result is unavailable. The held-out
+    // package is copied as well before it is pinned, so the comparison reads
+    // the immutable copy of the held-out masks too.
     let mut held_out: Option<HoldOut> = None;
     let mut held_out_diagnostic: Option<String> = None;
     if let Some(evaluation_package) = &options.evaluation_package {
-        match held_out_set(evaluation_package, &view_set) {
+        let held_out_copy = work.join("held-out-package");
+        let staged = match copy_package(evaluation_package, &held_out_copy) {
+            Ok(()) => held_out_set(&held_out_copy, &view_set),
+            Err(error) => Err(error.message().to_string()),
+        };
+        match staged {
             Ok(set) => held_out = Some(set),
             Err(message) => held_out_diagnostic = Some(message),
         }
     }
 
-    // The work area of the evaluation: the identifier is reserved with an
-    // atomic create (no overwrite) under the short lock of the store, so two
-    // concurrent evaluations never share a directory.
-    let (evaluation_id, work) = reserve_evaluation(run_dir, &store)?;
+    let mask_paths = mask_paths_of(&package_dir, &package);
+
     let target_dir = work.join("target");
     let base_dir = work.join("base");
     stage_geometry(&target.components, &target_dir)?;
@@ -522,6 +543,77 @@ fn reserve_evaluation(run_dir: &Path, store: &SceneStore) -> Result<(String, Pat
             }
         }
     }
+}
+
+/// Copy a package into the work area of the evaluation.
+///
+/// The copy holds the package document and the masks and the images its views
+/// refer to. It is taken at the pin time, so the bytes the comparison reads
+/// are the bytes the evaluation pinned.
+fn copy_package(package_dir: &Path, destination: &Path) -> Result<(), EvalError> {
+    std::fs::create_dir_all(destination).map_err(|err| {
+        EvalError::io(
+            destination,
+            format!("the package copy of the evaluation cannot be created: {err}"),
+        )
+    })?;
+    let document = package_dir.join("package.json");
+    let bytes = std::fs::read(&document).map_err(|err| {
+        EvalError::io(&document, format!("the package copy cannot be read: {err}"))
+    })?;
+    let package: Value = serde_json::from_slice(&bytes).map_err(|err| EvalError::Invalid {
+        message: format!("the package copy cannot be used: {err}"),
+    })?;
+    let separator = std::path::MAIN_SEPARATOR.to_string();
+    let mut relatives: Vec<String> = Vec::new();
+    if let Some(entries) = package.get("views").and_then(|value| value.as_array()) {
+        for entry in entries {
+            for key in ["mask", "image"] {
+                let relative = entry
+                    .get(key)
+                    .and_then(|value| value.get("path"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !relative.is_empty() {
+                    relatives.push(relative);
+                }
+            }
+        }
+    }
+    relatives.sort();
+    relatives.dedup();
+    for relative in relatives {
+        let source = package_dir.join(relative.replace('/', &separator));
+        if !source.is_file() {
+            continue;
+        }
+        let target = destination.join(relative.replace('/', &separator));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                EvalError::io(
+                    parent,
+                    format!("the package copy of the evaluation cannot be created: {err}"),
+                )
+            })?;
+        }
+        std::fs::copy(&source, &target).map_err(|err| {
+            EvalError::io(
+                &target,
+                format!("the package copy of the evaluation cannot be written: {err}"),
+            )
+        })?;
+    }
+    // The package document itself: the bytes are copied verbatim, so the
+    // digest of the copy is the digest the evaluation pinned.
+    let target = destination.join("package.json");
+    std::fs::write(&target, &bytes).map_err(|err| {
+        EvalError::io(
+            &target,
+            format!("the package copy of the evaluation cannot be written: {err}"),
+        )
+    })?;
+    Ok(())
 }
 
 /// Pin the bytes of the mask files a package really carries.

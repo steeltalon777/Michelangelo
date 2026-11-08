@@ -19,7 +19,15 @@ owner gate.
    registered by the Core with a computed digest; its self-reported hash is not trusted.
 3. **Accepted means one consistent set.** The pointer switch is the only commit point. A
    crash before it leaves the previous bundle authoritative; a crash after it leaves the new
-   bundle authoritative. There is no observable half-state.
+   bundle authoritative. There is no observable half-state. A crash between the switch and the
+   history/index is repaired by recovery under the lock: a published revision whose candidate is
+   still `proposed` is completed (recovered) before the next acceptance, rejection or rollback —
+   a submission only adds a new candidate and never triggers recovery, so a crashed acceptance
+   stays `proposed` until the next decision operation. The recovered decision names
+   `recovery:<actor>` so the audit trail never attributes the acceptance to whoever completed the
+   repair. A revision that is not demonstrably published (the pointer never named it, no
+   revision was built on it and no rollback started from it), and a candidate the index already
+   accepted or rejected, are never recovered as an acceptance.
 4. **History is append-only.** Decisions, bindings, confirmations, resolutions and unknown
    states are immutable documents; only `current.json` and the latest-decision mirror are
    rewritten.
@@ -186,6 +194,14 @@ Rules:
   `projection_conformance = pass` and every **required** `author_geometric_conditions`
   entry `pass` (an optional entry may be `unavailable` only when it is explicitly marked
   optional and the gap is reported). Hidden decisions do not block geometry acceptance.
+  The report's `package_sha256` and per-view mask pins must equal the **submit snapshot** pins
+  as well as the actual current files: an evaluation performed under a different (e.g.
+  weakened) package is `INPUT_CHANGED`. The evaluator copies the package into the reserved
+  work area **before anything is pinned** and derives every pin (the package digest and the
+  per-view mask/camera/resolution pins) from that copy; the render and the comparison read the
+  copy, so the bytes that are measured are the bytes that are pinned. A resource changed at any
+  later moment (during a long render, or between the pin and the render) cannot certify a
+  different input.
 - **Unknown resolution** is separate and additionally requires: a versioned binding, an
   evaluation of exactly the resolving geometry, the required author confirmation for that
   claim/geometry, and the package `uncertainty_policy` satisfied. Resolving does not happen
@@ -198,7 +214,10 @@ Rules:
   with `reason: evidence_stale` in the new bundle's state. Historical evidence and
   confirmations remain in the history but are not presented as current for the new variant.
   A resolution is carried forward only when all its dependency digests (target components,
-  binding version, claim/conditions) are unchanged. This validity rule must be part of
+  binding version, claim/conditions) are unchanged. The carried resolution keeps its
+  evaluation reference, and its confirmation/resolution/binding documents are compared with the
+  digests pinned in the **base revision bundle**; a changed carried document is
+  `EVIDENCE_MISMATCH`, never re-hashed into new trust. This validity rule must be part of
   bundle formation from IT-8A onward, even though the full resolution transitions land in
   IT-8C.
 - **Idempotent accept.** A repeated accept of an already accepted candidate returns the

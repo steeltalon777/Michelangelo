@@ -209,6 +209,39 @@ pass closes the audit findings without an architecture change:
   rule override consistently with the solver.
 - Negative evidence: `target/techlead/IT-8D/verify-D.json` 8/8; 837 Rust tests + 86 solver tests.
 
+### Fixed (IT-8E corrective pass, independent review 2026-11-08)
+
+The independent review of the acceptance-integrity guarantees left the verdict RED (8 production
+probes); IT-8E closes the five clusters without a contract or wire change:
+
+- **Committed crash recovery covers every published revision**, not only the pointer's candidate:
+  an acceptance stranded by a later acceptance on top of it is completed before any new decision,
+  a late reject refuses with `CANDIDATE_ALREADY_ACCEPTED` instead of appending a contradictory
+  decision, a revision that is not demonstrably published is never recovered, a candidate the
+  index already rejected is never turned into an acceptance, and a recovered decision records
+  `recovery:<actor>` so the audit trail never attributes it to the late actor.
+- **Evaluation input binding**: the package (and the held-out package) is copied into the reserved
+  work area *before* anything is pinned and every pin — the package digest and the per-view
+  mask/camera/resolution pins — is derived from that copy, so the bytes that are measured are the
+  bytes that are pinned; accept cross-checks the report pins with the **submit snapshot** pins
+  (`INPUT_CHANGED`), and the snapshot pins fail closed (an unreadable package copy or mask
+  refuses the submission instead of pinning a declared digest).
+- **Carried resolution evidence**: a surviving resolution keeps its evaluation reference, carried
+  documents are compared with the digests the base revision's bundle pinned
+  (`EVIDENCE_MISMATCH`), and a cumulative binding document never re-carries a binding the last
+  rollback discarded — a routine `unknown bind` of another unknown cannot reactivate it, while an
+  explicit re-bind after the rollback is honoured.
+- **Assistant task binding** reads the current pointer revision's bundle, the same authority as
+  `unknown show`; the only fallback is a revision whose bundle carries no binding document at all
+  (nothing published for it), and that fallback never uses a binding a rollback discarded.
+- **Single-read resolvers**: the registered report bytes are read once; a registered report that
+  cannot be read or parsed is `EVALUATION_STALE` instead of a silent fallback to an older
+  evaluation; the RFC 3339 timestamps used by the rollback classification are compared
+  numerically, not lexicographically.
+- Evidence: external harness `target/owner-review-it8d-20261108/` **80/80** (the 8 owner probes
+  also absorbed natively), **856 Rust tests** + 86 solver tests, fmt/clippy/build green; reviewer
+  **GREEN** on the third independent round (TZ §11 review log, rows E). No package or wire change.
+
 ### Changed (IT-8A/IT-8B)
 
 - `docs/specs/LOCAL_EDIT.md`, `docs/specs/VERIFICATION_STATE.md`, `docs/specs/RECONSTRUCTION.md`,

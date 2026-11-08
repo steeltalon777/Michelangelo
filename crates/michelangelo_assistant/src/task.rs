@@ -407,17 +407,25 @@ pub fn generate_task(
         })?;
 
     let package = load_package(run_dir);
+    // The binding of the unknown comes from the bundle of the revision the
+    // store points to: the globally latest binding document is never used
+    // instead (a rolled back binding is never reactivated).
     let binding = match &request.unknown {
-        Some(unknown_id) => Some(binding_of(&store, unknown_id)?),
+        Some(unknown_id) => Some(binding_of(&store, &pointer.scene_revision, unknown_id)?),
         None => None,
     };
-    let (allowed, protected) = resolve_scope(&scene, request, binding.as_ref())?;
-    let allowed_region = resolve_region(&scene, &allowed, request.region, binding.as_ref())?;
+    let (allowed, protected) = resolve_scope(&scene, request, binding.as_ref().map(|(b, _)| b))?;
+    let allowed_region = resolve_region(
+        &scene,
+        &allowed,
+        request.region,
+        binding.as_ref().map(|(b, _)| b),
+    )?;
 
     let references = collect_references(run_dir, package.as_ref());
     let mut unknowns = collect_unknowns(&report, package.as_ref());
     let supplements = collect_supplements(&report);
-    if let Some(binding) = &binding {
+    if let Some((binding, _version)) = &binding {
         // The references of a narrowed task describe the unknown only.
         unknowns.retain(|unknown| unknown.id == binding.unknown_id);
     }
@@ -448,9 +456,9 @@ pub fn generate_task(
 
     // The criteria of a narrowed unknown carry the effective scope of the
     // task: the components and the region it may touch.
-    let criteria = binding
-        .as_ref()
-        .map(|binding| unknown_criteria(binding, &store, &allowed, &allowed_region));
+    let criteria = binding.as_ref().map(|(binding, version)| {
+        unknown_criteria(binding, version, &store, &allowed, &allowed_region)
+    });
 
     Ok(AssistantTask {
         schema: TASK_SCHEMA.to_string(),
@@ -480,32 +488,26 @@ pub fn generate_task(
     })
 }
 
-/// The binding of an unknown (the store of the run).
+/// The binding of an unknown in the bundle of a revision.
+///
+/// The bundle of the revision is the authority (the same authority as
+/// `unknown show`): the globally latest binding document is never used
+/// instead, so a binding that a rollback discarded is never reactivated.
 fn binding_of(
     store: &michelangelo_edit::scene::SceneStore,
+    scene_revision: &str,
     unknown_id: &str,
-) -> Result<michelangelo_edit::unknowns::UnknownBinding, crate::error::AssistantError> {
-    let document = michelangelo_edit::unknowns::latest_binding_document(store)
+) -> Result<(michelangelo_edit::unknowns::UnknownBinding, String), crate::error::AssistantError> {
+    let binding = michelangelo_edit::unknowns::revision_binding(store, scene_revision, unknown_id)
         .map_err(crate::error::AssistantError::from)?;
-    let document = match document {
-        Some(document) => document,
-        None => {
-            return Err(crate::error::AssistantError::NotFound {
-                message: String::from(
-                    "the run carries no binding: run 'michelangelo unknown bind' first",
-                ),
-            })
-        }
-    };
-    document
-        .binding(unknown_id)
-        .cloned()
-        .ok_or_else(|| crate::error::AssistantError::NotFound {
+    match binding {
+        Some(binding) => Ok(binding),
+        None => Err(crate::error::AssistantError::NotFound {
             message: format!(
-                "the unknown '{unknown_id}' carries no binding in the version '{}'",
-                document.version
+                "the unknown '{unknown_id}' carries no binding in the bundle of the revision '{scene_revision}': run 'michelangelo unknown bind' first"
             ),
-        })
+        }),
+    }
 }
 
 /// The allowed and the protected components of a task.
@@ -867,6 +869,7 @@ fn collect_supplements(report: &ReconstructionReport) -> Vec<TaskSupplement> {
 /// binding of the unknown.
 fn unknown_criteria(
     binding: &michelangelo_edit::unknowns::UnknownBinding,
+    binding_version: &str,
     store: &michelangelo_edit::scene::SceneStore,
     components: &[String],
     region: &Region,
@@ -876,10 +879,7 @@ fn unknown_criteria(
         unknown_id: binding.unknown_id.clone(),
         components: components.to_vec(),
         region: *region,
-        binding_version: michelangelo_edit::unknowns::latest_binding_document(store)
-            .ok()
-            .flatten()
-            .map(|document| document.version),
+        binding_version: Some(binding_version.to_string()),
         claim: binding.claim.clone(),
         requires_confirmation: true,
         requires_evaluation: true,

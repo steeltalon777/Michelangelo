@@ -539,3 +539,169 @@ fn a_task_with_another_schema_is_refused() -> Result<(), Box<dyn std::error::Err
     assert!(matches!(error, AssistantError::TaskInvalid { .. }));
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// IT-8E: the task reads the binding of the bundle of the current revision
+// ---------------------------------------------------------------------------
+
+/// Write a binding document of a version into the store of a fixture.
+fn bind_version(
+    fixture: &Fixture,
+    version: &str,
+    unknown_id: &str,
+    components: &[&str],
+    by: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = fixture.run_dir.join("verification/bindings");
+    std::fs::create_dir_all(&directory)?;
+    let bindings: Vec<serde_json::Value> = components
+        .iter()
+        .map(|component| {
+            serde_json::json!({
+                "unknown_id": unknown_id,
+                "components": [component],
+                "region": {"min": [-0.05, 0.04, -0.05], "max": [0.05, 0.10, 0.05]},
+                "by": by,
+                "claim": "the inside of the lid is a plain box"
+            })
+        })
+        .collect();
+    let document = serde_json::json!({
+        "schema": "michelangelo.unknown-bindings/0",
+        "version": version,
+        "created_at": "2026-01-02T03:04:05Z",
+        "bindings": bindings
+    });
+    std::fs::write(
+        directory.join(format!("{version}.json")),
+        document.to_string(),
+    )?;
+    Ok(())
+}
+
+/// Write a candidate directory on a base revision.
+fn write_candidate_on(
+    fixture: &Fixture,
+    name: &str,
+    candidate_id: &str,
+    base_revision: &str,
+    lid: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    let directory = fixture.workspace.join(name);
+    std::fs::create_dir_all(directory.join("geometry"))?;
+    let mut document = crate::testutil::candidate_document(candidate_id, "fix-lid");
+    document["base"]["scene_revision"] = serde_json::json!(base_revision);
+    std::fs::write(
+        directory.join("candidate.json"),
+        serde_json::to_string_pretty(&document).map_err(std::io::Error::other)?,
+    )?;
+    std::fs::write(directory.join("geometry/lid.obj"), lid)?;
+    Ok(directory)
+}
+
+/// Register an evaluation of a candidate of the fixture.
+fn register_evaluation(fixture: &Fixture, candidate_id: &str) -> (std::path::PathBuf, String) {
+    let registry = michelangelo_evidence::registry::load_registry(&fixture.run_dir)
+        .expect("the registry is read");
+    let evaluation_id = registry.next_evaluation_id();
+    let report = michelangelo_evidence::testing::synthetic_evaluation(
+        &fixture.run_dir,
+        candidate_id,
+        &evaluation_id,
+        "2026-01-03T04:05:06Z",
+    )
+    .expect("the synthetic evaluation is built");
+    let entry = michelangelo_evidence::registry::write_and_register(&fixture.run_dir, &report)
+        .expect("the evaluation is registered");
+    (fixture.run_dir.join(entry.report_path), evaluation_id)
+}
+
+#[test]
+fn owner_review_task_after_rollback_uses_selected_bundle_binding(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    bind(&fixture, "u_lid_inside", &["lid"])?;
+    let store = michelangelo_edit::scene::SceneStore::new(&fixture.run_dir);
+
+    // The first candidate is accepted with the resolution of the unknown: the
+    // bundle of the revision references the binding of the lid.
+    let first = write_candidate_on(
+        &fixture,
+        "cand-0001",
+        "cand-0001",
+        "s0001",
+        crate::testutil::LID_OBJ,
+    )?;
+    michelangelo_edit::apply::submit_candidate(&fixture.run_dir, &first, &fixture.clock)?;
+    let (report_path, evaluation_id) = register_evaluation(&fixture, "cand-0001");
+    let evaluation = michelangelo_edit::gate::resolve_evaluation_by_id(&store, &evaluation_id)?;
+    michelangelo_edit::unknowns::confirm_unknown(
+        &store,
+        "u_lid_inside",
+        "alice",
+        &evaluation,
+        None,
+        None,
+        &fixture.clock,
+    )?;
+    let accepted = michelangelo_edit::apply::accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "alice",
+        &fixture.clock,
+        michelangelo_edit::gate::AcceptOptions {
+            evaluation: Some(report_path),
+            resolve: Some("u_lid_inside".to_string()),
+        },
+    )?;
+    assert_eq!(accepted.resulting_scene_revision.as_deref(), Some("s0002"));
+
+    // The author rebinds the unknown with another scope.
+    bind_version(&fixture, "b0002", "u_lid_inside", &["base"], "bob")?;
+
+    // A later revision is published with the new binding.
+    let second = write_candidate_on(
+        &fixture,
+        "cand-0002",
+        "cand-0002",
+        "s0002",
+        &crate::testutil::LID_OBJ.replace("0.09", "0.08"),
+    )?;
+    michelangelo_edit::apply::submit_candidate(&fixture.run_dir, &second, &fixture.clock)?;
+    let (report_path, _evaluation_id) = register_evaluation(&fixture, "cand-0002");
+    let accepted = michelangelo_edit::apply::accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0002",
+        "alice",
+        &fixture.clock,
+        michelangelo_edit::gate::AcceptOptions {
+            evaluation: Some(report_path),
+            resolve: None,
+        },
+    )?;
+    assert_eq!(accepted.resulting_scene_revision.as_deref(), Some("s0003"));
+
+    // The rollback selects the first revision again: its bundle carries the
+    // binding of the lid.
+    michelangelo_edit::apply::rollback_scene(&fixture.run_dir, "s0002", "alice", &fixture.clock)?;
+
+    // The view and the task read the same binding: the rolled back one.
+    let view = michelangelo_edit::unknowns::show_unknowns(&store, None)?;
+    let selected = view
+        .unknowns
+        .iter()
+        .find(|entry| entry.unknown_id == "u_lid_inside")
+        .expect("the unknown is listed");
+    let task = task_of(&fixture, &TaskRequest::with_unknown("u_lid_inside"))?;
+    assert_eq!(
+        task.allowed_components,
+        selected
+            .binding
+            .as_ref()
+            .expect("the binding is shown")
+            .components,
+        "the assistant task must not silently reactivate a rolled back binding"
+    );
+    assert_eq!(task.allowed_components, vec!["lid".to_string()]);
+    Ok(())
+}

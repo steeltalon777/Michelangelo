@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use michelangelo_evidence::gate::{verify_report, GateContext};
 use michelangelo_evidence::registry::{
-    load_registry, registered_evaluations_for_target, report_relative_path,
+    load_registry, registered_evaluation_bytes_for_target, report_relative_path,
 };
 use michelangelo_evidence::report::{
     package_mask_paths, package_measurement_ids, package_views, EvaluationReport, TargetKind,
@@ -124,9 +124,21 @@ pub fn resolve_evaluation(
             })
         }
         None => {
+            // The bytes of the report are read once: the digest and the
+            // parsed report are derived from the same bytes, so the two can
+            // never describe two different states of the file. A registered
+            // report that cannot be read or parsed is refused here: the
+            // resolver never falls back to an older evaluation when the
+            // newest registered report was tampered with.
             let registered =
-                registered_evaluations_for_target(&store.run_dir, &registry, candidate_id);
-            let (entry, report) = match registered.last() {
+                registered_evaluation_bytes_for_target(&store.run_dir, &registry, candidate_id)
+                    .map_err(|err| EditError::EvaluationStale {
+                        message: format!(
+                            "the registered evaluations of the candidate '{candidate_id}' cannot be used: {}",
+                            err.message()
+                        ),
+                    })?;
+            let (entry, bytes) = match registered.last() {
                 Some(found) => found.clone(),
                 None => {
                     return Err(EditError::EvaluationMissing {
@@ -137,7 +149,7 @@ pub fn resolve_evaluation(
                 }
             };
             let path = store.run_dir.join(&entry.report_path);
-            let sha256 = file_sha256(&path)?;
+            let sha256 = michelangelo_evidence::digest::sha256_hex(&bytes);
             if sha256 != entry.sha256 {
                 return Err(EditError::EvaluationStale {
                     message: format!(
@@ -147,6 +159,13 @@ pub fn resolve_evaluation(
                     ),
                 });
             }
+            let report: EvaluationReport =
+                serde_json::from_slice(&bytes).map_err(|err| EditError::EvaluationStale {
+                    message: format!(
+                        "the evaluation report '{}' is not usable: {err}",
+                        path.display()
+                    ),
+                })?;
             Ok(EvaluationBinding {
                 evaluation_id: entry.evaluation_id.clone(),
                 report_path: entry.report_path.clone(),
@@ -183,7 +202,15 @@ pub fn resolve_evaluation_by_id(
             ),
         });
     }
-    let sha256 = file_sha256(&path)?;
+    // The bytes of the report are read once: the digest and the parsed
+    // report are derived from the same bytes.
+    let bytes = std::fs::read(&path).map_err(|err| {
+        crate::io_error(
+            &path,
+            format!("the evaluation report cannot be read: {err}"),
+        )
+    })?;
+    let sha256 = michelangelo_evidence::digest::sha256_hex(&bytes);
     if sha256 != entry.sha256 {
         return Err(EditError::EvaluationStale {
             message: format!(
@@ -192,14 +219,10 @@ pub fn resolve_evaluation_by_id(
             ),
         });
     }
-    let report = michelangelo_evidence::report::EvaluationReport::load(&path).map_err(|error| {
-        EditError::EvaluationStale {
-            message: format!(
-                "the report of the evaluation '{evaluation_id}' is not usable: {}",
-                error.message()
-            ),
-        }
-    })?;
+    let report: EvaluationReport =
+        serde_json::from_slice(&bytes).map_err(|err| EditError::EvaluationStale {
+            message: format!("the report of the evaluation '{evaluation_id}' is not usable: {err}"),
+        })?;
     Ok(EvaluationBinding {
         evaluation_id: report.evaluation_id.clone(),
         report_path: entry.report_path.clone(),
@@ -251,6 +274,11 @@ pub fn verify_evaluation(
         latest_decision(store, &candidate.candidate_id).and_then(|report| report.evaluation_sha256);
 
     let package_sha256 = package_digest(store);
+    // The evaluation must be based on the inputs the candidate was submitted
+    // with: the package and the masks of the submit snapshot. A report that
+    // was made under another package (a weakened one) or against other masks
+    // is an input that changed (contract section 7).
+    verify_snapshot_inputs(manifest, binding, &mask_digests)?;
     let run_id = crate::scene::run_id_of(&store.run_dir);
     let context = GateContext {
         run_id: &run_id,
@@ -264,6 +292,85 @@ pub fn verify_evaluation(
         decision_evaluation_sha256: decision_digest.as_deref(),
     };
     verify_report(&registry, &binding.report, &binding.sha256, &context).map_err(EditError::from)
+}
+
+/// Verify that the evaluation is based on the inputs of the submit snapshot.
+///
+/// The report must pin the package of the snapshot and the masks of the
+/// snapshot, and the masks of the run must still be the ones the snapshot
+/// pinned: an evaluation that was made under another package (or against
+/// other masks) never certifies the candidate.
+fn verify_snapshot_inputs(
+    manifest: &SnapshotManifest,
+    binding: &EvaluationBinding,
+    mask_digests: &[(String, String)],
+) -> Result<(), EditError> {
+    let pinned_package = manifest.package_sha256.as_deref();
+    let reported_package = binding.report.inputs.package_sha256.as_deref();
+    if pinned_package != reported_package {
+        return Err(EditError::InputChanged {
+            message: format!(
+                "the evaluation '{}' pinned the package {} but the candidate was submitted with the package {}",
+                binding.evaluation_id,
+                reported_package.unwrap_or("-"),
+                pinned_package.unwrap_or("-")
+            ),
+        });
+    }
+    for pin in &manifest.view_pins {
+        let reported = binding
+            .report
+            .inputs
+            .views
+            .iter()
+            .find(|view| view.view_id == pin.view_id);
+        let reported = match reported {
+            Some(view) => view,
+            None => {
+                return Err(EditError::InputChanged {
+                    message: format!(
+                        "the evaluation '{}' does not report the view '{}' the candidate was submitted with",
+                        binding.evaluation_id, pin.view_id
+                    ),
+                })
+            }
+        };
+        if reported.mask_sha256 != pin.mask_sha256
+            || reported.camera_digest != pin.camera_digest
+            || reported.resolution != pin.resolution
+        {
+            return Err(EditError::InputChanged {
+                message: format!(
+                    "the evaluation '{}' pinned the mask {} of the view '{}' but the candidate was submitted with the mask {}",
+                    binding.evaluation_id, reported.mask_sha256, pin.view_id, pin.mask_sha256
+                ),
+            });
+        }
+        // The mask of the run must still be the one the snapshot pinned.
+        match mask_digests
+            .iter()
+            .find(|(view_id, _)| *view_id == pin.view_id)
+        {
+            None => {
+                return Err(EditError::InputChanged {
+                    message: format!(
+                        "the mask file of the view '{}' is missing: the candidate was submitted with the mask {}",
+                        pin.view_id, pin.mask_sha256
+                    ),
+                })
+            }
+            Some((_, digest)) if digest != &pin.mask_sha256 => {
+                return Err(EditError::InputChanged {
+                    message: format!(
+                        "the mask file of the view '{}' carries the digest {digest} but the candidate was submitted with the mask {}",
+                        pin.view_id, pin.mask_sha256
+                    ),
+                })
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// The reference of an evaluation inside the bundle of a revision.

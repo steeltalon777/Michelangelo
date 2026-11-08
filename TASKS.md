@@ -194,6 +194,15 @@ evidence in `target/techlead/IT-8/`, `target/techlead/IT-8B/`, `target/techlead/
   resolution evidence refs, historical bundle bindings, non-expandable `--unknown` scope,
   accepted-author policy override. Lead negative reproduction 8/8 (`target/techlead/IT-8D/verify-D.json`),
   reviewer GREEN; docs held-out claims corrected.
+- [x] T-0806 Corrective pass IT-8E (independent review) — recovery of every committed acceptance
+  keyed on published revisions (`recovery:<actor>` audit line; a never-published revision is never
+  recovered), evaluation package/held-out copies taken before any pin and every pin derived from
+  the copy, submit-snapshot pin cross-check, fail-closed snapshot pins, carried resolution keeps its
+  evaluation ref and carried documents are checked against the base-bundle digests, cumulative
+  bindings never re-carry a rollback-discarded binding, assistant binding from the current bundle,
+  single-read fallback-free resolvers, numeric RFC 3339 comparison. Negative evidence
+  `target/owner-review-it8d-20261108/` 80/80 (8/8 owner probes absorbed natively as
+  `owner_review_*`), 856 Rust tests + 86 solver tests; reviewer verdict in TZ §11 row E.
 
 ## Not yet started
 

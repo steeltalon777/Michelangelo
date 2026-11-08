@@ -112,6 +112,13 @@ Rules:
   the bounding box of the allowed components with a margin of 5 % on every
   axis. A region that does not intersect an allowed component is refused
   (`TASK_EMPTY`).
+* A task narrowed with `--unknown` takes its binding from the **current pointer
+  revision's bundle**, the same authority as `unknown show`; it never falls back to the
+  globally latest binding after a rollback. When that revision's bundle carries no binding
+  document at all (nothing is published for it, e.g. a pre-binding revision after a rollback),
+  the newest binding that no rollback discarded is used; as soon as the revision's bundle
+  carries bindings, only those are authoritative. The caller may only narrow the binding's
+  components/region; a widening request is refused (`SCOPE_DENIED`).
 * `unknowns` and `supplements` are summarised from the manifest of the
   package and from the report of the run and are sorted by identifier. The
   policy of an unknown is `author_required`, `rule_allowed` or

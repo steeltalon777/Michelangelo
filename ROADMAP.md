@@ -128,7 +128,12 @@ Stage D (ADR §13.4) — optional assistant — ✅ **done (IT-7, 2026-11-07)**:
   evaluation reservation/no-overwrite, full bundle verification before the pointer, locked
   accept/reject and crash-after-pointer recovery, held-out independence corrected, surviving
   resolution evidence refs, historical bundle bindings, non-expandable `--unknown` scope and
-  accepted-author policy override; negative reproduction 8/8.
+  accepted-author policy override; negative reproduction 8/8. ✅ Corrective pass IT-8E
+  (independent review): recovery of every committed acceptance keyed on published revisions,
+  evaluation pins derived from an immutable package copy taken before any pin, submit-snapshot
+  pin cross-check, carried resolution evidence verified against the base-bundle digests, no
+  reactivation of a rollback-discarded binding by a cumulative binding document, assistant
+  binding from the current bundle, single-read fallback-free resolvers; external harness 80/80.
 - Natural language command interpretation — future (needs a provider under the same bounded-task /
   data-policy rules)
 - Build plan validation → `BlenderJobSpec`; iterative refinement as bounded local-change

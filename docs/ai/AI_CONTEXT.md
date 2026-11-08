@@ -152,7 +152,13 @@ the current Windows stand).
   the full bundle before the pointer, locks accept/reject transitions, keeps all evidence refs of
   surviving resolutions, reads historical bundle bindings, forbids widening `--unknown` scope and
   applies the accepted-author policy override consistently; held-out independence now requires
-  oblique directions. No wire changes.
+  oblique directions. Corrective IT-8E (independent review) completes every committed acceptance
+  keyed on published revisions (never re-attributes it to the late actor), takes the evaluation
+  package copy before deriving any pin (the pinned bytes are the measured bytes), cross-checks the
+  report pins with the submit snapshot, fails closed on the snapshot pins and on unreadable
+  registered reports, compares carried resolution documents with the base-bundle digests, stops a
+  cumulative binding document from re-carrying a rollback-discarded binding, and keeps the
+  assistant binding on the current bundle. No wire changes.
 
 ## Out of Scope
 

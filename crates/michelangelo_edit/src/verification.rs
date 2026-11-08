@@ -101,6 +101,24 @@ pub struct SnapshotFile {
     pub source: SnapshotSource,
 }
 
+/// The pin of one view of the input package.
+///
+/// The pin is taken when the snapshot is created: it carries the digest of
+/// the mask file the run really has and the digest of the calibration of the
+/// view. The acceptance compares the pins of the evaluation with the pins of
+/// the snapshot: an evaluation that measured another input is refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotViewPin {
+    /// The identifier of the view.
+    pub view_id: String,
+    /// The digest of the calibration of the view.
+    pub camera_digest: String,
+    /// The digest of the mask file of the view.
+    pub mask_sha256: String,
+    /// The resolution of the view, in pixels.
+    pub resolution: [u32; 2],
+}
+
 /// The manifest of a geometry snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotManifest {
@@ -125,6 +143,13 @@ pub struct SnapshotManifest {
     /// The SHA-256 of the canonical JSON of the uncertainty policy of the
     /// package (None when the run carries no copy of the package).
     pub package_policy_sha256: Option<String>,
+    /// The pins of the views of the input package at the moment of the
+    /// snapshot (empty when the run carries no copy of the package).
+    ///
+    /// The pins bind the candidate to the inputs it was submitted with: an
+    /// evaluation that measured other masks is refused (INPUT_CHANGED).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub view_pins: Vec<SnapshotViewPin>,
     /// The files of the snapshot, sorted by the name of the component.
     pub files: Vec<SnapshotFile>,
     /// The aggregate digest of the whole component set.
@@ -291,6 +316,90 @@ pub fn package_digest(store: &SceneStore) -> Option<String> {
         return None;
     }
     file_sha256(&path).ok()
+}
+
+/// The pins of the views of the copy of the input package.
+///
+/// The pin of a view carries the digest of the mask file the run really has
+/// (the bytes an evaluation measures against) and the digest of the
+/// calibration of the view. The list is empty when the run carries no copy of
+/// the package.
+///
+/// The function fails closed: a copy of the package that exists but cannot be
+/// read or parsed, and a mask file the package declares but that cannot be
+/// read, are errors. A pin never falls back to the digest the package
+/// declares.
+pub fn package_view_pins(store: &SceneStore) -> Result<Vec<SnapshotViewPin>, EditError> {
+    let path = store.package_copy_path();
+    if !path.exists() {
+        // The run carries no copy of the package: there is nothing to pin.
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|err| {
+        io_error(
+            &path,
+            format!("the copy of the package cannot be read: {err}"),
+        )
+    })?;
+    let package: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| EditError::Scene {
+            message: format!(
+                "the copy of the package '{}' is not usable: {err}",
+                path.display()
+            ),
+        })?;
+    let directory = match path.parent() {
+        Some(parent) => parent.to_path_buf(),
+        None => {
+            return Err(EditError::Scene {
+                message: format!(
+                    "the copy of the package '{}' has no directory: its views cannot be pinned",
+                    path.display()
+                ),
+            })
+        }
+    };
+    let separator = std::path::MAIN_SEPARATOR.to_string();
+    let masks = michelangelo_evidence::report::package_mask_paths(&package);
+    let mut pins: Vec<SnapshotViewPin> = Vec::new();
+    for view in michelangelo_evidence::report::package_views(&package) {
+        let pin = view.pin(false);
+        // The pin of the mask is the digest of the bytes the run really
+        // carries: a mask the package declares and that cannot be read is an
+        // error, and a declared mask without a path the run can read is an
+        // error as well. The declared digest is never used as a fallback.
+        let declared = pin.mask_sha256.clone();
+        let mut pinned: Option<String> = None;
+        for (view_id, relative) in &masks {
+            if view_id != &pin.view_id {
+                continue;
+            }
+            let mask = directory.join(relative.replace('/', &separator));
+            pinned = Some(file_sha256(&mask)?);
+        }
+        let mask_sha256 = match pinned {
+            Some(digest) => digest,
+            None if declared.is_empty() => {
+                // The view declares no mask digest: there is nothing to pin.
+                String::new()
+            }
+            None => {
+                return Err(EditError::Scene {
+                    message: format!(
+                        "the copy of the package declares the mask {declared} of the view '{}' but carries no readable path for it: the mask cannot be pinned",
+                        pin.view_id
+                    ),
+                })
+            }
+        };
+        pins.push(SnapshotViewPin {
+            view_id: pin.view_id,
+            camera_digest: pin.camera_digest,
+            mask_sha256,
+            resolution: pin.resolution,
+        });
+    }
+    Ok(pins)
 }
 
 /// The digest of the uncertainty policy of the copy of the input package

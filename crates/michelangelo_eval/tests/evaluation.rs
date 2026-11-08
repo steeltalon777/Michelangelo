@@ -794,3 +794,291 @@ fn a_revision_is_evaluated_against_its_base() {
     assert_eq!(report.target.id, "s0001");
     assert_eq!(report.verdict(), TriState::Pass);
 }
+
+// ---------------------------------------------------------------------------
+// IT-8E: the evaluation is bound to the inputs it pinned
+// ---------------------------------------------------------------------------
+
+/// The bytes of a mask fixture of the tests.
+fn owner_review_png(name: &str) -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("inputs")
+            .join(name),
+    )
+    .expect("the mask fixture is read")
+}
+
+/// The root of the repository (the comparator of the repository lives there).
+fn owner_review_repo() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("the repository root is resolved")
+}
+
+/// The production comparator of the repository (the pinned Python script).
+fn owner_review_real_comparator() -> michelangelo_eval::compare::ScriptComparator {
+    michelangelo_eval::compare::ScriptComparator::new(
+        Some(&owner_review_repo().join("tools/solver/solve.py")),
+        Some(Path::new("python")),
+        Some(30_000),
+    )
+    .expect("the production comparator is available")
+}
+
+/// A run with a package copy, a scene and a submitted candidate.
+///
+/// The package declares the digest of the mask it really carries.
+fn owner_review_png_fixture(mask_bytes: &[u8], keep_measurement: bool) -> Fixture {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let run_dir = directory.path().join("run-0001");
+    write(&run_dir.join("source/base.obj"), BASE_OBJ);
+    write(&run_dir.join("source/lid.obj"), LID_OBJ);
+    let mut package: serde_json::Value =
+        serde_json::from_str(&package_json("front", [0.0, -4.0, 0.0]))
+            .expect("the package is JSON");
+    let digest = michelangelo_evidence::digest::sha256_hex(mask_bytes);
+    package["views"][0]["mask"]["sha256"] = serde_json::json!(digest);
+    package["views"][0]["image"]["sha256"] = serde_json::json!(digest);
+    if !keep_measurement {
+        package["measurements"] = serde_json::json!([]);
+    }
+    write(&run_dir.join("package/package.json"), &package.to_string());
+    std::fs::create_dir_all(run_dir.join("package/masks")).expect("the masks directory is created");
+    std::fs::create_dir_all(run_dir.join("package/images"))
+        .expect("the images directory is created");
+    std::fs::write(run_dir.join("package/masks/front.png"), mask_bytes)
+        .expect("the mask is written");
+    std::fs::write(run_dir.join("package/images/front.png"), mask_bytes)
+        .expect("the image is written");
+    write(
+        &run_dir.join("report.json"),
+        &serde_json::json!({
+            "schema": "michelangelo.reconstruction-report/0",
+            "package": {"package_id": "demo-lantern", "revision": 1},
+            "quality": {"thresholds": {"source_mean_iou": 0.9, "source_min_iou": 0.85,
+                "evaluation_mean_iou": 0.8, "evaluation_min_iou": 0.7, "bbox_relative_error_max": 0.05}}
+        })
+        .to_string(),
+    );
+    init_scene(&run_dir, &FixedClock::new("2026-01-02T03:04:05Z")).expect("the scene is created");
+    let candidate_dir = directory.path().join("cand-0001");
+    write(&candidate_dir.join("candidate.json"), &candidate_json());
+    write(&candidate_dir.join("geometry/lid.obj"), LID_OBJ);
+    michelangelo_edit::apply::submit_candidate(
+        &run_dir,
+        &candidate_dir,
+        &FixedClock::new("2026-01-03T04:05:06Z"),
+    )
+    .expect("the candidate is submitted");
+    Fixture {
+        _directory: directory,
+        run_dir,
+    }
+}
+
+/// The renderer that replaces the mask of the run while it works.
+struct OwnerReviewPngRenderer {
+    png: Vec<u8>,
+    swap_mask_after_pin: Option<PathBuf>,
+}
+
+impl Renderer for OwnerReviewPngRenderer {
+    fn render(&self, request: &RenderRequest<'_>) -> Result<(), EvalError> {
+        // Exactly the interleaving a long renderer allows: only the source
+        // resource changes, never a registry, a manifest or a submit anchor.
+        if let Some(mask) = &self.swap_mask_after_pin {
+            std::fs::write(mask, &self.png).expect("the mask is replaced");
+        }
+        for view in &request.views.views {
+            std::fs::write(
+                request.renders_dir.join(format!("{}.png", view.view_id)),
+                &self.png,
+            )
+            .expect("the render is written");
+        }
+        Ok(())
+    }
+}
+
+/// Accept the candidate of a fixture with the report of an evaluation.
+fn owner_review_accept(
+    fixture: &Fixture,
+    report: &michelangelo_evidence::report::EvaluationReport,
+) -> Result<michelangelo_edit::DecisionReport, michelangelo_edit::EditError> {
+    let path = fixture.run_dir.join(format!(
+        "verification/evaluations/{}/report.json",
+        report.evaluation_id
+    ));
+    michelangelo_edit::apply::accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0001",
+        "owner",
+        &FixedClock::new("2026-01-03T04:05:06Z"),
+        michelangelo_edit::gate::AcceptOptions {
+            evaluation: Some(path),
+            resolve: None,
+        },
+    )
+}
+
+#[test]
+fn owner_review_mask_aba_during_render_cannot_certify_different_input() {
+    let a = owner_review_png("mask_a.png");
+    let b = owner_review_png("mask_b.png");
+    let fixture = owner_review_png_fixture(&a, false);
+    let mask_path = fixture.run_dir.join("package/masks/front.png");
+    let renderer = OwnerReviewPngRenderer {
+        png: b.clone(),
+        swap_mask_after_pin: Some(mask_path.clone()),
+    };
+    let comparator = owner_review_real_comparator();
+    let outcome = evaluate_candidate_with(
+        &fixture.run_dir,
+        "cand-0001",
+        &options(),
+        &renderer,
+        &comparator,
+    );
+    // The exact original input is restored before the acceptance: the initial
+    // and the final digests agree, but the comparator has already measured
+    // the render against the copy of the pinned mask.
+    std::fs::write(&mask_path, &a).expect("the mask is restored");
+    let report = outcome.expect("the production comparator completed on valid 8x8 PNGs");
+    let work = fixture.run_dir.join(format!(
+        "verification/evaluations/{}/work",
+        report.evaluation_id
+    ));
+    let check = comparator
+        .compare(&michelangelo_eval::compare::CompareRequest {
+            package_dir: &fixture.run_dir.join("package"),
+            renders_dir: &work.join("renders/target"),
+            out_dir: &work.join("owner-review-actual-a"),
+            evaluation: None,
+            mask_paths: &[("front".to_string(), mask_path.clone())],
+        })
+        .expect("the render is compared with the original mask");
+    let result = owner_review_accept(&fixture, &report);
+    assert!(
+        check.source.mean_iou < 0.85,
+        "control: the original source rejects the render"
+    );
+    assert!(
+        report.results.projection_conformance != TriState::Pass || result.is_err(),
+        "a result measured against another mask never certifies the candidate"
+    );
+    assert!(
+        result.is_err(),
+        "the acceptance of a result that does not match its evidence is refused"
+    );
+}
+
+#[test]
+fn owner_review_reevaluation_cannot_replace_submit_package() {
+    let b = owner_review_png("mask_b.png");
+    let fixture = owner_review_png_fixture(&b, true);
+    let store = michelangelo_edit::scene::SceneStore::new(&fixture.run_dir);
+    let manifest = michelangelo_edit::verification::load_snapshot(&store, "cand-0001")
+        .expect("the snapshot is read")
+        .expect("the snapshot exists");
+    let submit_package = manifest
+        .package_sha256
+        .clone()
+        .expect("the snapshot pins the package");
+    // The package is weakened after the submission: the declared measurement
+    // is removed.
+    let package_path = fixture.run_dir.join("package/package.json");
+    let mut package: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&package_path).expect("the package is read"))
+            .expect("the package is JSON");
+    package["measurements"] = serde_json::json!([]);
+    write(&package_path, &package.to_string());
+    let renderer = OwnerReviewPngRenderer {
+        png: b,
+        swap_mask_after_pin: None,
+    };
+    let report = evaluate_candidate_with(
+        &fixture.run_dir,
+        "cand-0001",
+        &options(),
+        &renderer,
+        &owner_review_real_comparator(),
+    )
+    .expect("the candidate is evaluated");
+    let result = owner_review_accept(&fixture, &report);
+    assert_ne!(
+        report.inputs.package_sha256.as_deref(),
+        Some(submit_package.as_str()),
+        "the reevaluation was made under another package"
+    );
+    assert!(
+        result.is_err(),
+        "reevaluating under a weakened package must not accept a candidate that was pinned at submit"
+    );
+}
+
+#[test]
+fn owner_review_pins_are_taken_from_the_immutable_copy() {
+    // The evaluator copies the package before anything is pinned: the copy is
+    // the pin. Every digest of the report is the digest of a file under the
+    // reserved work area, so the bytes that are measured are the bytes that
+    // are pinned — a resource replaced at any later moment can neither change
+    // the measurement nor the pins.
+    let a = owner_review_png("mask_a.png");
+    let b = owner_review_png("mask_b.png");
+    let fixture = owner_review_png_fixture(&a, false);
+    let renderer = OwnerReviewPngRenderer {
+        png: a.clone(),
+        swap_mask_after_pin: None,
+    };
+    let report = evaluate_candidate_with(
+        &fixture.run_dir,
+        "cand-0001",
+        &options(),
+        &renderer,
+        &owner_review_real_comparator(),
+    )
+    .expect("the candidate is evaluated");
+    let work = fixture.run_dir.join(format!(
+        "verification/evaluations/{}/work",
+        report.evaluation_id
+    ));
+    let copied_package = work.join("package");
+    let copied_document = std::fs::read(copied_package.join("package.json"))
+        .expect("the copy carries the package document");
+    let copied_mask =
+        std::fs::read(copied_package.join("masks/front.png")).expect("the copy carries the mask");
+    assert_eq!(copied_mask, a, "the copy carries the bytes of the pin time");
+    assert_eq!(
+        report.inputs.package_sha256.as_deref(),
+        Some(michelangelo_evidence::digest::sha256_hex(&copied_document).as_str()),
+        "the package pin is the digest of the copy"
+    );
+    let view = report
+        .inputs
+        .views
+        .iter()
+        .find(|view| view.view_id == "front")
+        .expect("the report pins the view of the package");
+    assert_eq!(
+        view.mask_sha256,
+        michelangelo_evidence::digest::sha256_hex(&copied_mask),
+        "the mask pin is the digest of the copy"
+    );
+    // The live resource may change afterwards: neither the copy nor the pins
+    // follow it.
+    std::fs::write(fixture.run_dir.join("package/masks/front.png"), &b)
+        .expect("the live mask is replaced");
+    assert_eq!(
+        std::fs::read(copied_package.join("masks/front.png")).expect("the copy is readable"),
+        a,
+        "the copy is immutable"
+    );
+    assert_eq!(
+        report.inputs.package_sha256.as_deref(),
+        Some(michelangelo_evidence::digest::sha256_hex(&copied_document).as_str()),
+        "the pins stay the pins of the copy"
+    );
+}

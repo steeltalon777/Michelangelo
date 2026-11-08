@@ -36,8 +36,9 @@ pub use error::{
 };
 pub use gate::{verify_report, GateContext, AUTHOR_CONDITION_KIND};
 pub use registry::{
-    evaluation_dir, load_registry, registered_evaluations_for_target, registry_path, report_path,
-    report_relative_path, write_and_register, write_registry, EvaluationRegistry, RegistryEntry,
+    evaluation_dir, load_registry, registered_evaluation_bytes_for_target,
+    registered_evaluations_for_target, registry_path, report_path, report_relative_path,
+    write_and_register, write_registry, EvaluationRegistry, RegistryEntry,
     EVALUATION_REGISTRY_SCHEMA,
 };
 pub use report::{

@@ -312,6 +312,7 @@ name = "michelangelo_assistant"
 version = "0.1.0"
 dependencies = [
  "michelangelo_edit",
+ "michelangelo_evidence",
  "michelangelo_input",
  "michelangelo_recon",
  "serde",

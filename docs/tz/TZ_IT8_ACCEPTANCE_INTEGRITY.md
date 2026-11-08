@@ -468,6 +468,9 @@ Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 
 | C | 1 | child `3bb78488` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | LOW: stale solver `detail` after invalidation (fixed); doc wording of the no-policy default (fixed); omitted-`require_author_acceptance` default pin test (added). Lead reproduced partial accept → resolve → invalidation with real Blender and the solver policy suite. |
 | Demo | 1 | external DSH child `bf5d23b9` (authoring agent) + Lead verification | `minimax-cn/MiniMax-M3.1-Flash`, preset `worker` | GREEN | Meaningful flame via MCP → evaluation pass → owner confirmation/resolution; cube control accepted as geometry but `CONFIRMATION_MISSING` prevents closure; relative-run evaluation bug fixed + regression test. |
 | D (corrective) | 1 | child `0a68c574` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | D1/D2 implemented; two LOW cleanup/semantics notes (dead protected-base guard removed; Delete unsupported in v0 documented). Lead negative verification 8/8 + selected Rust tests. |
+| E (corrective) | 1 | child `9fa6195b` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `worker`, effort high | RED | Claims 1–4 PARTIAL, claim 5 CONFIRMED. F1 HIGH: the evaluation pinned the live package and copied it later (pin→copy ABA window). F2 HIGH: a cumulative binding document re-carried a rollback-discarded binding after `unknown bind` of another unknown. F3 MEDIUM: a committed acceptance stranded by a later acceptance could be rejected later with a contradictory decision. F4/F6 LOW (binding-fallback wording, fail-open snapshot pins); F5/F7/F8 LOW (silent fallback on a tampered registered report, recovery actor, lexical RFC 3339). |
+| E (corrective) | 2 | child `64039457` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `worker`, effort high | RED | F1–F8 CLOSED. New N1 MEDIUM: recovery keyed on index status ≠ `accepted`, so `accept` crash-before-pointer → `reject` → `rollback` to that revision recovered the rejected candidate as accepted. N2/N3/N4 LOW (broad fail-closed resolver, lexical evaluation-id order, per-revision fallback wording); claims 2–4 PARTIAL (overstated sentences). |
+| E (corrective) | 3 | child `808e5dbc` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `worker`, effort high | **GREEN** | N1 CLOSED (recovery only for index status `proposed`; missing entry skipped), N3 CLOSED (numeric `evaluation_order` at both sort sites, numeric `next_evaluation_id`, `.last()` = newest), F6 residual CLOSED (declared mask without a readable path refuses the submission). Claims 1–5 CONFIRMED sentence-by-sentence. New LOW: N5 (a report named by id and deleted is refused as `EVALUATION_MISSING`/IO error rather than `EVALUATION_STALE` — refusal either way, claim 5 text now says so), N6 (pre-existing lexical order of binding/confirmation/resolution version lists at ≥10 000 documents; unchanged by this pass, recorded as a v0 residual), N7 (`submit` does not run recovery — the spec now says the next decision operation repairs it). Lead re-ran the full ladder and the external harness after every fix round. |
 
 ## 12. Corrective pass IT-8D — owner audit 2026-11-08 (reopened guarantees)
 
@@ -550,3 +553,97 @@ with all evidence refs; rebind+rollback historical show; `--unknown` + expanding
   tests, fmt/clippy/build green.
 - The earlier demo's held-out `0.9450` is **not** independent conformance; it was the mirrored
   occupancy under the old rule (see §11).
+
+## 13. Corrective pass IT-8E — independent review 2026-11-08 (RED)
+
+The independent review reproduced 8 production-code probes (72 passed / 8 failed) and left the
+verdict RED. These are the same agreed guarantees, not new requirements. IT-8E closes them:
+
+1. **Committed crash vs rollback/reject.** After a crash between the pointer switch and
+   history/index, `rollback_scene` and `reject_candidate` must detect the committed acceptance
+   under the lock. Rollback first completes the acceptance bookkeeping, then rolls back; a later
+   retry must stay historical and not switch the scene back. A late reject must recover the
+   bookkeeping and refuse with `CANDIDATE_ALREADY_ACCEPTED`, not append a contradictory reject.
+   Recovery is keyed on **published revisions**, not only on the current pointer: a revision whose
+   `parent_candidate_id` is still `proposed` in the index and that is demonstrably published (it is
+   the current revision, the base of another revision, or the source of a recorded rollback) is
+   recovered, so an acceptance stranded by a later acceptance on top of it is still completed and
+   can never be contradicted; a revision that is not demonstrably published, and a candidate that
+   the index already accepted or rejected, are never recovered. The recovered decision records
+   `decided_by = "recovery:<actor>"` — the late actor is never attributed with the original
+   acceptance.
+2. **Evaluation input binding.** The evaluator copies the source package to the reserved
+   evaluation work dir at pin time and renders/compares from that immutable copy (closes the mask
+   ABA window). Every pin (the package digest and the per-view mask/camera/resolution pins) is
+   derived from the copy, so the pinned bytes and the measured bytes are the same bytes. Accept
+   must require the report package/mask pins to match the **submit snapshot** pins (not only the
+   current package); a reevaluation under a weakened package is `INPUT_CHANGED`. The snapshot pins
+   fail closed: a package copy or a mask it declares that cannot be read refuses the submission
+   instead of pinning a declared digest.
+3. **Carried resolution evidence.** A surviving resolution keeps its evaluation reference in the
+   later bundle. Carried confirmation/resolution/binding documents are compared with the
+   digests pinned in the base revision's bundle; a tampered carried document is
+   `EVIDENCE_MISMATCH`, never re-hashed into new trust. `recompute_state`/bundle refs use the
+   binding versions the base revision's bundle pins plus the newest binding document that no
+   rollback discarded; a discarded document is never used, and a document the base bundle already
+   pinned is never re-hashed. Binding documents stay cumulative, but a new document never
+   re-carries a binding the last rollback discarded: when the latest document was discarded, a new
+   document starts from the bindings the selected revision's bundle pins (an explicit re-bind after
+   the rollback is honoured).
+4. **Assistant task binding.** `assistant task --unknown` and `unknown_criteria` read the binding
+   from the current pointer revision's bundle (the authority `unknown show` reads), never
+   `latest_binding_document`; after a rollback a rebound (not selected) binding is not reactivated.
+   The single exception is the unpublished case for the revision itself: when that revision's
+   bundle carries **no** binding document at all (nothing is published for it, e.g. a pre-binding
+   revision after a rollback), the newest binding that a rollback did not discard is used; as soon
+   as the revision's bundle carries bindings, only those are authoritative.
+5. **Single-read evaluation resolvers.** The default/`None` branch and
+   `resolve_evaluation_by_id` read the registered report bytes once and derive the hash and the
+   parsed report from the same bytes. In the default branch, a registered report that cannot be
+   read or parsed is `EVALUATION_STALE`, never silently skipped: the resolver never falls back to
+   an older evaluation when a registered report was tampered with (the refusal is intentionally
+   broad — naming the report explicitly with `--evaluation` remains possible). A report named by
+   identifier whose file is missing or unreadable is refused with its typed missing/IO error
+   (`EVALUATION_MISSING`/`IO_ERROR`), never a fallback either.
+
+Acceptance: all 8 external probes pass (80/80 in the review harness), the existing tests stay
+green, plus the absorbed native regression tests and the regression tests of the corrective
+findings; full ladder + solver tests. Review log row E.
+
+### IT-8E evidence
+
+- Fixes (first pass): committed-acceptance recovery in rollback/reject; package copy in the
+  evaluation reserved dir + submit-snapshot package/mask pin cross-check; carried resolution keeps
+  its evaluation ref and carried documents are compared with the base bundle digests; assistant
+  task/unknown_criteria read the current bundle binding; single-read report resolvers.
+- Independent review attempt 1: RED (claims 1–4 PARTIAL, claim 5 CONFIRMED). Findings: F1 HIGH
+  (pins taken from the live package before the copy), F2 HIGH (a cumulative binding document
+  re-carries a rollback-discarded binding), F3 MEDIUM (a stranded committed acceptance can be
+  rejected later), F4/F6 LOW (binding fallback wording, fail-open snapshot pins), F5/F7/F8 LOW
+  (silent fallback on a tampered registered report, recovery actor, lexical RFC 3339 comparison).
+- Fixes (attempt 2): the package and the held-out package are copied before any pin and every pin
+  is derived from the copy; recovery is keyed on published revisions (`recovery:<actor>`); a new
+  binding document starts from the selected revision's bindings when the latest document was
+  discarded; the snapshot pins fail closed; the default resolver refuses a registered report that
+  cannot be read or parsed; numeric RFC 3339 comparison.
+- Independent review attempt 2: RED (claims 2–4 PARTIAL due to overstated sentences; no new HIGH).
+  All eight findings CLOSED; new findings N1 MEDIUM (a rejected candidate whose crashed-before-the-
+  pointer revision a rollback selects could be recovered as accepted), N2/N3/N4 LOW (broad
+  fail-closed resolver, lexical evaluation-id order, per-revision fallback wording).
+- Fixes (attempt 3): recovery fires only for a candidate the index still lists as `proposed` (a
+  rejection is never turned into an acceptance); evaluation identifiers are ordered numerically;
+  the snapshot pins refuse a declared mask without a readable path; the claim texts of 1–4 were
+  reworded to the exactly-enforced rule; the fail-closed breadth of the default resolver is
+  documented as intentional (name the report with `--evaluation` to bypass it).
+- External harness `target/owner-review-it8d-20261108/`: **80/80 PASS** (17 evaluation + 27
+  unknown + 36 verification; the 8 owner probes absorbed natively as `owner_review_*`).
+- Workspace: **856 Rust tests** + 86 solver tests; fmt/clippy/build green. No package/wire change.
+- Independent review attempt 3: **GREEN**. Claims 1–5 CONFIRMED sentence-by-sentence; N1/N3/F6
+  residual CLOSED. Remaining LOW notes are recorded, not silently dropped: N5 (a report named by
+  identifier and deleted is refused with `EVALUATION_MISSING`/IO error, not `EVALUATION_STALE` —
+  refused either way; claim 5 now states it), N7 (`submit` does not run recovery; the next
+  decision operation repairs a crashed acceptance — spec updated), N6 (pre-existing lexical order
+  of the binding/confirmation/resolution version lists at ≥10 000 documents; out of scope here,
+  kept as a v0 residual).
+- Lead command evidence: `target/techlead/IT-8E/ladder-{fmt,clippy,build,workspace,harness,solver}.log`
+  and `target/techlead/IT-8E/verify-E.json` (gitignored).

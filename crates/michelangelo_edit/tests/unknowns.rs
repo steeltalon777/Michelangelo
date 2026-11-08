@@ -1169,6 +1169,122 @@ fn an_accepted_author_decision_satisfies_the_completion_rule_of_the_package() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// IT-8E: the carried evidence of a surviving resolution
+// ---------------------------------------------------------------------------
+
+/// A store with a resolved unknown: the candidate is bound, confirmed and
+/// accepted with the resolution of the unknown.
+fn owner_review_resolved_fixture() -> (Fixture, PathBuf, String) {
+    let fixture = Fixture::new();
+    fixture.bind("u_glass_thickness", Some("the glass is 2 mm"));
+    fixture.submit();
+    let (path, evaluation_id) = fixture.evaluate();
+    fixture.confirm("u_glass_thickness", &evaluation_id, "alice");
+    assert_eq!(
+        fixture.accept_candidate("cand-0001", path.clone(), Some("u_glass_thickness")),
+        "s0002"
+    );
+    (fixture, path, evaluation_id)
+}
+
+/// A second candidate that changes another component, submitted and
+/// evaluated: its acceptance carries the resolution of the first one.
+fn owner_review_prepare_other_edit(fixture: &Fixture) -> PathBuf {
+    let directory = fixture.write_second_candidate("s0002", "base", 0.1);
+    write_file(&directory.join("geometry/base.obj"), &common::box_obj(0.09));
+    fixture.submit_directory(&directory);
+    fixture.evaluate_second().0
+}
+
+#[test]
+fn owner_review_carried_resolution_keeps_original_evaluation_reference() {
+    let (fixture, _old_report, old_id) = owner_review_resolved_fixture();
+    let path = owner_review_prepare_other_edit(&fixture);
+    fixture.accept_candidate("cand-0002", path, None);
+    assert_eq!(fixture.status(None, "u_glass_thickness"), "resolved");
+    let bundle = load_scene(&fixture.store(), "s0003")
+        .expect("the scene is read")
+        .verification
+        .expect("the scene carries a bundle");
+    let ids: Vec<&str> = bundle
+        .evaluations
+        .iter()
+        .map(|reference| reference.evaluation_id.as_str())
+        .collect();
+    assert!(
+        bundle
+            .evaluations
+            .iter()
+            .any(|reference| reference.evaluation_id == old_id),
+        "a retained resolution must retain its evaluation reference: {ids:?}"
+    );
+}
+
+#[test]
+fn owner_review_corrupt_old_evaluation_blocks_carried_resolution_publication() {
+    let (fixture, old_report, _old_id) = owner_review_resolved_fixture();
+    let path = owner_review_prepare_other_edit(&fixture);
+    let mut old: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&old_report).expect("the report is read"))
+            .expect("the report is JSON");
+    old["results"]["projection_conformance"] = json!("fail");
+    write_file(&old_report, &old.to_string());
+    let result = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0002",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(path),
+            resolve: None,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "the old resolution evaluation is corrupt: publishing it as still resolved must fail"
+    );
+    let pointer = michelangelo_edit::scene::load_current(&fixture.store())
+        .expect("the pointer is read")
+        .expect("the pointer exists");
+    assert_eq!(
+        pointer.scene_revision, "s0002",
+        "the refused acceptance publishes no revision"
+    );
+}
+
+#[test]
+fn owner_review_corrupt_old_confirmation_is_not_rehashed_as_new_trust() {
+    let (fixture, _old_report, _evaluation_id) = owner_review_resolved_fixture();
+    let original = load_scene(&fixture.store(), "s0002")
+        .expect("the scene is read")
+        .verification
+        .expect("the scene carries a bundle");
+    let confirmation = &original.confirmations[0];
+    let confirmation_path = fixture.run_dir.join(&confirmation.path);
+    let path = owner_review_prepare_other_edit(&fixture);
+    let mut document: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&confirmation_path).expect("the confirmation is read"),
+    )
+    .expect("the confirmation is JSON");
+    document["claim"] = json!("TAMPERED: a different hidden shape was approved");
+    write_file(&confirmation_path, &document.to_string());
+    let result = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0002",
+        "alice",
+        &fixture.clock(),
+        AcceptOptions {
+            evaluation: Some(path),
+            resolve: None,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "a carried confirmation must match its previously accepted digest, not a newly computed replacement digest"
+    );
+}
+
 #[test]
 fn a_completion_rule_the_package_does_not_allow_is_refused_without_a_decision() {
     let fixture = Fixture::new();
@@ -1196,4 +1312,221 @@ fn a_completion_rule_the_package_does_not_allow_is_refused_without_a_decision() 
     )
     .expect_err("the rule the package does not allow is refused");
     assert_eq!(error.code(), UNKNOWN_POLICY_VIOLATION);
+}
+
+// ---------------------------------------------------------------------------
+// Review E: a binding a rollback discarded is never resurrected
+// ---------------------------------------------------------------------------
+
+/// A region that differs from the region of the fixture.
+fn other_region() -> Region {
+    Region {
+        min: [-0.3, -0.3, -0.3],
+        max: [0.3, 0.3, 0.3],
+    }
+}
+
+/// The latest binding document of a store.
+fn latest_document(fixture: &Fixture) -> michelangelo_edit::unknowns::BindingDocument {
+    michelangelo_edit::unknowns::latest_binding_document(&fixture.store())
+        .expect("the bindings are read")
+        .expect("the bindings exist")
+}
+
+impl Fixture {
+    /// A clock that is later than the clock of the fixture.
+    ///
+    /// The rollback and the binding that follows it must not carry the same
+    /// timestamp: the binding that a rollback discarded and the binding that
+    /// was written after it are told apart by their time.
+    fn later_clock(&self) -> FixedClock {
+        FixedClock::new("2026-01-04T05:06:07Z")
+    }
+}
+
+#[test]
+fn review_e_a_binding_after_a_rollback_never_resurrects_a_discarded_binding() {
+    let fixture = Fixture::new();
+    fixture.submit();
+    let (report_path, evaluation_id) = fixture.evaluate();
+    fixture.bind("u_glass_thickness", Some("the glass is 2 mm"));
+    fixture.confirm("u_glass_thickness", &evaluation_id, "alice");
+    let revision = fixture.accept_candidate("cand-0001", report_path, Some("u_glass_thickness"));
+    assert_eq!(revision, "s0002");
+    assert_eq!(
+        fixture.status(Some("s0002"), "u_glass_thickness"),
+        "resolved"
+    );
+
+    // The author rebinds the unknown with another scope: the document b0002
+    // is the one the rollback discards.
+    bind_unknown(
+        &fixture.store(),
+        "u_glass_thickness",
+        &["base".to_string()],
+        other_region(),
+        "bob",
+        Some("the glass is 3 mm"),
+        &fixture.clock(),
+    )
+    .expect("the unknown is rebound");
+    assert_eq!(latest_document(&fixture).version, "b0002");
+
+    // The rollback selects the revision s0002 again.
+    rollback_scene(&fixture.run_dir, "s0002", "alice", &fixture.clock())
+        .expect("the scene is rolled back");
+
+    // Another unknown is bound after the rollback: the new document must not
+    // carry the discarded binding forward.
+    let later = fixture.later_clock();
+    bind_unknown(
+        &fixture.store(),
+        "u_flame_shape",
+        &["lid".to_string()],
+        region(),
+        "carol",
+        None,
+        &later,
+    )
+    .expect("the unknown is bound");
+    let document = latest_document(&fixture);
+    assert_eq!(document.version, "b0003");
+    let binding = document
+        .binding("u_glass_thickness")
+        .expect("the unknown is bound in the new document");
+    assert_eq!(
+        binding.components,
+        vec!["lid".to_string()],
+        "the new document carries the binding of the selected revision"
+    );
+    assert_eq!(
+        binding.region,
+        region(),
+        "the new document carries the scope of the selected revision"
+    );
+    assert_eq!(
+        binding.claim.as_deref(),
+        Some("the glass is 2 mm"),
+        "the new document carries the claim of the selected revision"
+    );
+    assert!(
+        document.binding("u_flame_shape").is_some(),
+        "the new document carries the binding of the new unknown"
+    );
+
+    // The view of the current revision still reports the selected binding.
+    let entry = binding_of(&fixture, None, "u_glass_thickness");
+    assert_eq!(entry.1, Some(region()), "the rolled back scope is shown");
+    assert_eq!(entry.2.as_deref(), Some("b0001"));
+
+    // The resolution that survived the rollback is not invalidated by the
+    // unrelated bind.
+    let directory = fixture.write_second_candidate("s0002", "base", 0.1);
+    fixture.submit_directory(&directory);
+    let (report_path, _) = fixture.evaluate_second();
+    let report = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0002",
+        "alice",
+        &later,
+        AcceptOptions {
+            evaluation: Some(report_path),
+            resolve: None,
+        },
+    )
+    .expect("the candidate is accepted");
+    let revision = report
+        .resulting_scene_revision
+        .expect("the acceptance publishes a revision");
+    assert_eq!(revision, "s0003");
+    assert_eq!(
+        fixture.status(Some("s0003"), "u_glass_thickness"),
+        "resolved",
+        "the resolution of the selected revision survives the unrelated bind"
+    );
+}
+
+#[test]
+fn review_e_an_explicit_rebind_after_a_rollback_is_honoured() {
+    let fixture = Fixture::new();
+    fixture.submit();
+    let (report_path, evaluation_id) = fixture.evaluate();
+    fixture.bind("u_glass_thickness", Some("the glass is 2 mm"));
+    fixture.confirm("u_glass_thickness", &evaluation_id, "alice");
+    let revision = fixture.accept_candidate("cand-0001", report_path, Some("u_glass_thickness"));
+    assert_eq!(revision, "s0002");
+
+    // A first rebinding is written and discarded by the rollback.
+    bind_unknown(
+        &fixture.store(),
+        "u_glass_thickness",
+        &["base".to_string()],
+        other_region(),
+        "bob",
+        Some("the glass is 3 mm"),
+        &fixture.clock(),
+    )
+    .expect("the unknown is rebound");
+    rollback_scene(&fixture.run_dir, "s0002", "alice", &fixture.clock())
+        .expect("the scene is rolled back");
+
+    // The author binds the unknown again, with another scope: the explicit
+    // decision is honoured, the bindings are not immutable.
+    let new_region = Region {
+        min: [-0.1, -0.1, -0.1],
+        max: [0.1, 0.1, 0.1],
+    };
+    let later = fixture.later_clock();
+    bind_unknown(
+        &fixture.store(),
+        "u_glass_thickness",
+        &["lid".to_string()],
+        new_region,
+        "carol",
+        Some("the glass is 4 mm"),
+        &later,
+    )
+    .expect("the unknown is bound again");
+    let document = latest_document(&fixture);
+    assert_eq!(document.version, "b0003");
+    let binding = document
+        .binding("u_glass_thickness")
+        .expect("the unknown is bound in the new document");
+    assert_eq!(binding.region, new_region, "the new scope is carried");
+    assert_eq!(
+        binding.claim.as_deref(),
+        Some("the glass is 4 mm"),
+        "the new claim is carried"
+    );
+    assert_eq!(binding.by, "carol", "the author of the binding is carried");
+
+    // The resolution whose binding changed is invalidated by the next
+    // revision.
+    let directory = fixture.write_second_candidate("s0002", "base", 0.1);
+    fixture.submit_directory(&directory);
+    let (report_path, _) = fixture.evaluate_second();
+    let report = accept_candidate_with_options(
+        &fixture.run_dir,
+        "cand-0002",
+        "alice",
+        &later,
+        AcceptOptions {
+            evaluation: Some(report_path),
+            resolve: None,
+        },
+    )
+    .expect("the candidate is accepted");
+    let revision = report
+        .resulting_scene_revision
+        .expect("the acceptance publishes a revision");
+    assert_eq!(revision, "s0003");
+    assert_eq!(
+        fixture.status(Some("s0003"), "u_glass_thickness"),
+        "open",
+        "the resolution whose binding changed is invalidated"
+    );
+    assert_eq!(
+        fixture.reason(Some("s0003"), "u_glass_thickness"),
+        Some("evidence_stale".to_string())
+    );
 }

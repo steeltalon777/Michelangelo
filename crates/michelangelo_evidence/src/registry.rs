@@ -23,6 +23,25 @@ pub const REPORT_FILE_NAME: &str = "report.json";
 /// The schema of the registry of the evaluations.
 pub const EVALUATION_REGISTRY_SCHEMA: &str = "michelangelo.evaluation-registry/0";
 
+/// The order of the evaluation identifiers.
+///
+/// The identifiers are `ev-<number>`: a lexical order puts `ev-10000` before
+/// `ev-9999`, so the newest evaluation would not be the last one and a resolver
+/// that takes the last entry would silently take an older report. The
+/// identifiers are therefore compared numerically; anything that is not an
+/// evaluation identifier keeps the lexical order.
+pub fn evaluation_order(left: &str, right: &str) -> std::cmp::Ordering {
+    fn number(id: &str) -> Option<u64> {
+        id.strip_prefix("ev-")?.parse().ok()
+    }
+    match (number(left), number(right)) {
+        (Some(left_number), Some(right_number)) => {
+            left_number.cmp(&right_number).then_with(|| left.cmp(right))
+        }
+        _ => left.cmp(right),
+    }
+}
+
 /// One registered evaluation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegistryEntry {
@@ -88,7 +107,7 @@ impl EvaluationRegistry {
         }
         self.evaluations.push(entry);
         self.evaluations
-            .sort_by(|left, right| left.evaluation_id.cmp(&right.evaluation_id));
+            .sort_by(|left, right| evaluation_order(&left.evaluation_id, &right.evaluation_id));
         Ok(())
     }
 
@@ -164,7 +183,7 @@ pub fn write_registry(run_dir: &Path, registry: &EvaluationRegistry) -> Result<(
     let mut ordered = registry.clone();
     ordered
         .evaluations
-        .sort_by(|left, right| left.evaluation_id.cmp(&right.evaluation_id));
+        .sort_by(|left, right| evaluation_order(&left.evaluation_id, &right.evaluation_id));
     let text = serde_json::to_string_pretty(&ordered).map_err(|err| EvidenceError::Invalid {
         message: format!("the registry cannot be serialized: {err}"),
     })?;
@@ -206,6 +225,49 @@ pub fn registered_evaluations_for_target(
         }
     }
     found
+}
+
+/// The registered evaluations of a target with the bytes of their reports.
+///
+/// The bytes of every report are read **once**: the caller derives the
+/// digest and the parsed report from the same bytes, so the hash and the
+/// report can never describe two different states of the file.
+///
+/// A registered report that cannot be read or parsed is an error, never a
+/// missing evaluation: the caller must not silently fall back to an older
+/// evaluation when the newest registered report of the target was tampered
+/// with (the fallback would absorb the tampering).
+pub fn registered_evaluation_bytes_for_target(
+    run_dir: &Path,
+    registry: &EvaluationRegistry,
+    target_id: &str,
+) -> Result<Vec<(RegistryEntry, Vec<u8>)>, EvidenceError> {
+    let mut found: Vec<(RegistryEntry, Vec<u8>)> = Vec::new();
+    for entry in &registry.evaluations {
+        let path = run_dir.join(&entry.report_path);
+        let bytes = std::fs::read(&path).map_err(|err| {
+            EvidenceError::io(
+                &path,
+                format!(
+                    "the registered evaluation '{}' cannot be read: {err}: the evidence is tampered with",
+                    entry.evaluation_id
+                ),
+            )
+        })?;
+        let report: crate::report::EvaluationReport = serde_json::from_slice(&bytes).map_err(|err| {
+            EvidenceError::Invalid {
+                message: format!(
+                    "the registered evaluation '{}' of '{}' is not usable: {err}: the evidence is tampered with",
+                    entry.evaluation_id,
+                    path.display()
+                ),
+            }
+        })?;
+        if report.target.id == target_id {
+            found.push((entry.clone(), bytes));
+        }
+    }
+    Ok(found)
 }
 
 /// Write the report of an evaluation and register it in the registry.
