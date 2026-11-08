@@ -1,0 +1,17 @@
+[package]
+name = "michelangelo_asset_validation"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ADR 0005 validation layer PoC (GLM-6 stream): versioned ValidationProfiles, immutable no-clobber ValidationReports, deterministic adversarial checks. Private provisional DTOs aligned with the GLM-1 draft-0.1 contract gate; not an approved wire protocol."
+
+# Standalone crate: intentionally NOT a member of the root workspace
+# (the root Cargo.toml is shared and must not be modified). The empty
+# [workspace] table keeps cargo from attaching this package to the
+# repository workspace when built from its own directory.
+[workspace]
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.10.9"
