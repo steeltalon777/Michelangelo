@@ -228,23 +228,31 @@ can be made stricter by any layer, never weaker by a package or candidate. A pac
 decision does not override budgets or protected scope.
 
 The solver must not apply an unaccepted AI-authored supplement when the package requires
-author acceptance; such a supplement is reported as `SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED` and
-does not close the unknown. `stub_policy: forbidden` forbids stubs;
-`allowed_completion_rules` restricts executable supplement kinds.
+author acceptance; such a supplement is reported with status `not_applied` and diagnostic
+`SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED`, and does not close the unknown. A supplement rejected by
+`allowed_completion_rules` is `not_applied` with `SUPPLEMENT_RULE_NOT_ALLOWED`. An accepted
+author decision overrides the package rule list for that element (the author's geometric
+intent wins); a candidate can never weaken the package (`PACKAGE_POLICY_STRICTER`). A package
+without an `uncertainty_policy` object keeps the Stage B behaviour (supplements applied, stubs
+allowed); with the object, `require_author_acceptance` defaults to `true`.
+`stub_policy: forbidden` is absolute: no stub mesh is built, the solver reports
+`STUB_FORBIDDEN` and an accepted author decision cannot re-enable a stub.
 
 ## 9. Unknown state machine
 
-States: `open`, `stub_pending`, `resolution_proposed`, `resolved`, `rejected`.
-Events (append-only): `bind`, `confirm`, `propose`, `resolve`, `reject`, `rollback`.
+States: `open`, `stub_pending`, `resolved`.
+Events (append-only): `sync`, `bind`, `confirm`, `propose`, `resolve`, `rollback`.
 
 - Initial state per revision is derived from the immutable solver report; stubs are
   `stub_pending` and remain in the unresolved list until resolved.
 - `propose` writes an immutable proposal referencing candidate snapshot, evaluation and
-  confirmation; it does not change the current scene.
+  confirmation; it is a document, not a state, and does not change the current scene.
 - `resolve` is only materialised by publishing a revision whose bundle references the
-  resolution (typically `edit accept --resolve <id>`).
+  resolution (typically `edit accept --resolve <id>`); a projection/condition/confirmation
+  failure is refused with a typed code, and a proposal alone never closes the unknown.
 - A part-id match alone is never a resolution basis; an explicit binding and evidence are
-  required.
+  required. A binding may omit the claim; the author confirmation then carries the claim
+  (and the claim digest) for the resolution.
 - **Invalidation (mandatory bundle rule):** if a later revision changes any dependency of a
   resolution (target component hashes, binding version, claim/conditions), that resolution
   is no longer current; the unknown becomes `open` with `reason: evidence_stale`. The old

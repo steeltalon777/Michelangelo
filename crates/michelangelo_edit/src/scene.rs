@@ -449,6 +449,46 @@ impl SceneStore {
             .join(crate::verification::LOCK_FILE_NAME)
     }
 
+    /// The directory of the binding documents of the store.
+    pub fn bindings_dir(&self) -> PathBuf {
+        self.verification_dir()
+            .join(crate::unknowns::BINDINGS_DIR_NAME)
+    }
+
+    /// The path of a binding document of the store.
+    pub fn binding_path(&self, version: &str) -> PathBuf {
+        self.bindings_dir().join(format!("{version}.json"))
+    }
+
+    /// The directory of the author confirmations of the store.
+    pub fn confirmations_dir(&self) -> PathBuf {
+        self.verification_dir()
+            .join(crate::unknowns::CONFIRMATIONS_DIR_NAME)
+    }
+
+    /// The path of an author confirmation of the store.
+    ///
+    /// The name of the file is the identifier of the confirmation: the
+    /// bundle of a revision refers to the document with the same name.
+    pub fn confirmation_path(&self, confirmation_id: &str) -> PathBuf {
+        self.confirmations_dir()
+            .join(format!("{confirmation_id}.json"))
+    }
+
+    /// The directory of the resolutions of the store.
+    pub fn resolutions_dir(&self) -> PathBuf {
+        self.verification_dir()
+            .join(crate::unknowns::RESOLUTIONS_DIR_NAME)
+    }
+
+    /// The path of a resolution of the store.
+    ///
+    /// The name of the file is the identifier of the resolution: the bundle
+    /// of a revision refers to the document with the same name.
+    pub fn resolution_path(&self, resolution_id: &str) -> PathBuf {
+        self.resolutions_dir().join(format!("{resolution_id}.json"))
+    }
+
     /// The copy of the input package of the run (the run may carry none).
     pub fn package_copy_path(&self) -> PathBuf {
         self.run_dir.join(PACKAGE_DIR_NAME).join(PACKAGE_FILE_NAME)

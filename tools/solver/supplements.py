@@ -26,6 +26,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from carve import Grid, VoxelSet  # noqa: E402
+from policy import supplement_is_ai_authored  # noqa: E402
 
 #: supplement kinds that are known but not implemented in v0
 UNSUPPORTED_KINDS = ("section", "profile", "primitive_fill")
@@ -48,11 +49,12 @@ class SupplementOutcome:
     """Result of one supplement rule."""
 
     supplement_id: str
-    status: str  # applied | unsupported | rejected
+    status: str  # applied | unsupported | rejected | not_applied
     rule: str
     detail: str
     mode: str = "none"  # added | modified | none
     voxels: "VoxelSet | None" = None
+    code: str = ""  # the diagnostic code of a policy refusal
 
 
 def _surface_distance(voxels: VoxelSet):
@@ -278,11 +280,53 @@ def _apply_symmetry(hull: VoxelSet, geometry, unit_scale, hull_bbox):
     return (hull.with_indices(kept), detail)
 
 
-def apply_supplements(supplements, hull: VoxelSet, grid: Grid, hull_bbox, unit_scale=1.0):
+def _policy_refusal(policy, supplement, supplement_id, kind):
+    """The refusal of a supplement by the uncertainty policy of the package.
+
+    Returns (code, detail) when the supplement must not be applied, else None.
+
+    An accepted author decision of the package has the highest precedence
+    (contract section 8): it satisfies the author acceptance and it allows a
+    completion rule the package does not list.
+    """
+    accepted = policy.accepts_supplement(supplement_id)
+    if not accepted and not policy.rule_is_allowed(kind):
+        return (
+            "SUPPLEMENT_RULE_NOT_ALLOWED",
+            "the completion rule %r is not in the list of the rules the "
+            "package allows (%s): the supplement %r is not applied"
+            % (
+                kind,
+                ", ".join(policy.allowed_completion_rules) or "-",
+                supplement_id,
+            ),
+        )
+    if (
+        policy.author_acceptance_required()
+        and not accepted
+        and supplement_is_ai_authored(supplement)
+    ):
+        return (
+            "SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED",
+            "the supplement %r is authored by an AI system and the package "
+            "requires an explicit author acceptance: the decision "
+            "'supplements:%s' is missing, the supplement is not applied and "
+            "the unknown it would close stays unresolved"
+            % (supplement_id, supplement_id),
+        )
+    return None
+
+
+def apply_supplements(supplements, hull: VoxelSet, grid: Grid, hull_bbox, unit_scale=1.0,
+                      policy=None):
     """Apply the manifest supplements to the hull.
 
     Returns (hull, outcomes, diagnostics).  hull_bbox is the world bbox of the
     solid hull (min_corner, max_corner) in metres.
+
+    The optional policy is the uncertainty policy of the package (IT-8C): a
+    supplement that the policy refuses is reported with the status
+    "not_applied" and never touches the hull.
     """
     hull = hull
     outcomes = []
@@ -305,6 +349,24 @@ def apply_supplements(supplements, hull: VoxelSet, grid: Grid, hull_bbox, unit_s
                 }
             )
             continue
+        if policy is not None:
+            refusal = _policy_refusal(policy, supplement, supplement_id, kind)
+            if refusal is not None:
+                code, detail = refusal
+                outcomes.append(
+                    SupplementOutcome(
+                        supplement_id, "not_applied", kind, detail, "none", None, code
+                    )
+                )
+                diagnostics.append(
+                    {
+                        "code": code,
+                        "severity": "warning",
+                        "message": detail,
+                        "address": "supplements[%s].kind" % supplement_id,
+                    }
+                )
+                continue
         try:
             if kind == "thickness":
                 new_hull, detail = _apply_thickness(hull, geometry, unit_scale)
@@ -387,10 +449,14 @@ def stub_box(hull_bbox, fraction: float = STUB_BOX_FRACTION):
     return (min_corner, max_corner)
 
 
-def resolve_unknowns(unknowns, hull_bbox, resolved_by_supplement):
+def resolve_unknowns(unknowns, hull_bbox, resolved_by_supplement,
+                     blocked_by_supplement=None, package_policy=None):
     """Resolve the manifest unknowns into stubs / unresolved entries.
 
     resolved_by_supplement maps a part_id to the list of applied supplement ids.
+    blocked_by_supplement maps a part_id to the list of the supplements the
+    policy refused, as (supplement_id, detail) pairs.
+    package_policy is the uncertainty policy of the package (IT-8C).
     Returns (stubs, results, diagnostics); stubs is a list of
     (unknown_id, min_corner, max_corner, detail).
     """
@@ -405,6 +471,27 @@ def resolve_unknowns(unknowns, hull_bbox, resolved_by_supplement):
         for part_id in affected:
             applied.extend(resolved_by_supplement.get(part_id, []))
         if policy == "stub_allowed":
+            if package_policy is not None and not package_policy.stubs_allowed():
+                detail = (
+                    "the package forbids the stubs: the unknown %r stays "
+                    "unresolved and no stub geometry is produced" % unknown_id
+                )
+                results.append(
+                    {
+                        "id": unknown_id,
+                        "status": "unresolved",
+                        "detail": detail,
+                    }
+                )
+                diagnostics.append(
+                    {
+                        "code": "STUB_FORBIDDEN",
+                        "severity": "error",
+                        "message": detail,
+                        "address": "unknowns[%s]" % unknown_id,
+                    }
+                )
+                continue
             box = stub_box(hull_bbox) if hull_bbox else None
             if box is None:
                 results.append(
@@ -449,19 +536,46 @@ def resolve_unknowns(unknowns, hull_bbox, resolved_by_supplement):
                     }
                 )
             else:
+                blocked = []
+                for part_id in affected:
+                    blocked.extend((blocked_by_supplement or {}).get(part_id, []))
+                if blocked:
+                    names = ", ".join(sorted({item[0] for item in blocked}))
+                    detail = (
+                        "the supplement(s) %s were not applied, so the unknown "
+                        "stays unresolved; an author decision is required"
+                        % names
+                    )
+                    codes = sorted(
+                        {
+                            item[1]
+                            for item in blocked
+                            if len(item) > 1 and item[1]
+                        }
+                    )
+                    if "SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED" in codes:
+                        code = "SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED"
+                    else:
+                        code = codes[0] if codes else "UNKNOWN_UNRESOLVED"
+                else:
+                    detail = (
+                        "no supplement resolved this unknown; "
+                        "an author decision is required"
+                    )
+                    code = "UNKNOWN_UNRESOLVED"
                 results.append(
                     {
                         "id": unknown_id,
                         "status": "unresolved",
-                        "detail": "no supplement resolved this unknown; "
-                        "an author decision is required",
+                        "detail": detail,
                     }
                 )
                 diagnostics.append(
                     {
-                        "code": "UNKNOWN_UNRESOLVED",
+                        "code": code,
                         "severity": "warning",
-                        "message": "unknown %r is unresolved" % unknown_id,
+                        "message": "unknown %r is unresolved: %s"
+                        % (unknown_id, detail),
                         "address": "unknowns[%s]" % unknown_id,
                     }
                 )

@@ -373,16 +373,24 @@ a candidate may be applied without an explicit author acceptance:
 ```text
 michelangelo edit init     --run <run_dir> [--protect <name,...>] [--json]
 michelangelo edit submit   --run <run_dir> --candidate <dir> [--json]
-michelangelo edit accept   --run <run_dir> --candidate <id> --by <name> --evaluation <report> [--json]
+michelangelo edit accept   --run <run_dir> --candidate <id> --by <name> [--evaluation <report>] [--resolve <unknown>] [--json]
 michelangelo edit reject   --run <run_dir> --candidate <id> --by <name> [--reason <text>] [--json]
 michelangelo edit rollback --run <run_dir> --to <scene_revision> --by <name> [--json]
 michelangelo edit show     --run <run_dir> [--candidate <id>] [--json]
+
+michelangelo unknown sync    --run <run_dir> [--json]
+michelangelo unknown list    --run <run_dir> [--json]
+michelangelo unknown show    --run <run_dir> [--revision <sNNNN>] [--json]
+michelangelo unknown bind    --run <run_dir> --unknown <id> --components <a,b> --region <min=max> --by <name> [--claim <text>] [--json]
+michelangelo unknown confirm --run <run_dir> --unknown <id> --by <name> --evaluation <eval-id> [--evidence <file>] [--claim <text>] [--json]
+michelangelo unknown propose --run <run_dir> --unknown <id> [--candidate <id>] [--evaluation <eval-id>] [--json]
+michelangelo unknown resolve --run <run_dir> --unknown <id> [--candidate <id>] [--evaluation <eval-id>] --by <name> [--json]
 ```
 
 | Exit code | Meaning |
 |---|---|
-| `0` | the operation succeeded (accepted/proposed/rolled back, or an idempotent repeat with the historical result) |
-| `1` | the candidate was rejected, the evaluation gate refused it (`EVALUATION_MISSING`, `EVALUATION_UNREGISTERED`, `EVALUATION_STALE`, `INPUT_CHANGED`, `VISIBLE_FAILED`, `AUTHOR_CONDITION_FAILED`, `REGRESSION`, `NO_GROUND_TRUTH`), or the store refused the operation (`STALE_BASE`, `EVIDENCE_MISMATCH`, `SNAPSHOT_MISSING`, `CANDIDATE_ALREADY_ACCEPTED`, unknown resolution required in IT-8C) |
+| `0` | the operation succeeded (accepted/proposed/rolled back/resolved, or an idempotent repeat) |
+| `1` | the candidate was rejected; the evaluation gate refused it (`EVALUATION_MISSING`, `EVALUATION_UNREGISTERED`, `EVALUATION_STALE`, `INPUT_CHANGED`, `VISIBLE_FAILED`, `AUTHOR_CONDITION_FAILED`, `REGRESSION`, `NO_GROUND_TRUTH`); the unknown state machine refused it (`BINDING_MISSING`, `BINDING_MISMATCH`, `CONFIRMATION_MISSING`, `CONFIRMATION_STALE`, `AGENT_CONFIRMATION_REFUSED`); or the store refused the operation (`STALE_BASE`, `EVIDENCE_MISMATCH`, `SNAPSHOT_MISSING`, `CANDIDATE_ALREADY_ACCEPTED`) |
 | `2` | usage error, IO error, a candidate that cannot be interpreted, or a busy store (`STORE_BUSY`) |
 
 * `submit` copies the candidate into the store (`candidates/<id>/`), validates
@@ -394,7 +402,14 @@ michelangelo edit show     --run <run_dir> [--candidate <id>] [--json]
   conformance, required author geometric conditions and per-view regression. Only then a new
   revision is published and its bundle references the evaluation. A candidate that became
   stale is refused with `STALE_BASE`; a missing/invalid evaluation is refused with the gate
-  code and an `accept-refused` history record.
+  code and an `accept-refused` history record. `--resolve <unknown>` additionally closes that
+  unknown in the new bundle (see `docs/specs/UNKNOWNS.md`); without it the geometry is accepted
+  and every unknown stays open (partial acceptance).
+* `unknown` manages the explicit bindings, author confirmations and resolutions of the run.
+  Closure is never automatic and never based on a `part_id` match; it is materialised only by a
+  revision whose bundle references the resolution. A later change of the bound geometry,
+  binding or claim invalidates the closure (`open` + `evidence_stale`), and a rollback restores
+  the target bundle's state.
 * `reject` records the refusal of an author; the scene is not modified.
 * `rollback` points the store back to an existing revision; the revision
   directories themselves are never modified.

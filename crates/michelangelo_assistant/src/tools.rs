@@ -208,16 +208,19 @@ impl ToolOutcome {
 
 /// Generate and write the bounded task of a run.
 ///
-/// The task allows every component of the scene that is not protected.
-pub fn get_task(ctx: &ToolContext<'_>, run_dir: &Path) -> Result<ToolOutcome, AssistantError> {
+/// The task allows every component of the scene that is not protected. When an
+/// unknown is named, the task is narrowed to the binding of that unknown.
+pub fn get_task(
+    ctx: &ToolContext<'_>,
+    run_dir: &Path,
+    unknown: Option<&str>,
+) -> Result<ToolOutcome, AssistantError> {
     let task_id = next_task_id(run_dir)?;
-    let task = generate_task(
-        run_dir,
-        &task_id,
-        &TaskRequest::new(),
-        ctx.policy,
-        ctx.clock,
-    )?;
+    let request = match unknown {
+        Some(unknown_id) => TaskRequest::with_unknown(unknown_id),
+        None => TaskRequest::new(),
+    };
+    let task = generate_task(run_dir, &task_id, &request, ctx.policy, ctx.clock)?;
     write_task(run_dir, &task)?;
     let path = format!("{ASSISTANT_DIR_NAME}/tasks/{task_id}.json");
     Ok(ToolOutcome::Task {

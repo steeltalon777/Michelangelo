@@ -27,12 +27,14 @@ pub mod crc32;
 pub mod error;
 pub mod manifest;
 pub mod png;
+pub mod policy;
 pub mod report;
 pub mod sha256;
 pub mod validate;
 
 pub use error::InputError;
 pub use manifest::{InputPackage, MANIFEST_FILE_NAME, MANIFEST_SCHEMA};
+pub use policy::{PackagePolicy, DEFAULT_REQUIRE_AUTHOR_ACCEPTANCE};
 pub use report::{
     Completeness, CompletenessStatus, Diagnostic, InputPackageReport, LevelSummary, ReportStatus,
     ResourceReport, Severity, ValidationLevels,

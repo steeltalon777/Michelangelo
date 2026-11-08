@@ -25,6 +25,7 @@ import mesh as meshmod  # noqa: E402
 import pngread  # noqa: E402
 import supplements as supp  # noqa: E402
 from mask import UNIT_TO_METRES, ShiftNotSupportedError, View, ViewError  # noqa: E402
+from policy import PackagePolicy  # noqa: E402
 
 BUILD_REPORT_SCHEMA = "michelangelo.build-report/0"
 PACKAGE_SCHEMA = "michelangelo.input-package/0"
@@ -358,26 +359,47 @@ def solve_package(package_dir, out_dir, resolution=carve.DEFAULT_RESOLUTION,
 
     hull_bbox = hull.bbox()
     supplements = manifest.get("supplements") or []
+    # The uncertainty policy of the package (IT-8C): the solver never weakens
+    # it and reports every refusal as a diagnostic.
+    package_policy = PackagePolicy(manifest)
+    if package_policy.present:
+        diagnostics.append(
+            _diagnostic(
+                "PACKAGE_POLICY",
+                "info",
+                "the uncertainty policy of the package: %s"
+                % package_policy.summary(),
+            )
+        )
     hull, outcomes, supp_diagnostics = supp.apply_supplements(
-        supplements, hull, grid, hull_bbox, unit_scale
+        supplements, hull, grid, hull_bbox, unit_scale, package_policy
     )
     diagnostics.extend(supp_diagnostics)
     final_bbox = hull.bbox() or hull_bbox
 
     resolved_by_supplement = {}
+    blocked_by_supplement = {}
     for outcome in outcomes:
-        if outcome.status != "applied":
-            continue
         for supplement in supplements:
             if str(supplement.get("supplement_id")) != outcome.supplement_id:
                 continue
             part_id = supplement.get("part_id")
-            if part_id:
+            if not part_id:
+                continue
+            if outcome.status == "applied":
                 resolved_by_supplement.setdefault(str(part_id), []).append(
                     outcome.supplement_id
                 )
+            elif outcome.status == "not_applied":
+                blocked_by_supplement.setdefault(str(part_id), []).append(
+                    (outcome.supplement_id, outcome.code, outcome.detail)
+                )
     stubs, unknown_results, unknown_diagnostics = supp.resolve_unknowns(
-        manifest.get("unknowns") or [], final_bbox, resolved_by_supplement
+        manifest.get("unknowns") or [],
+        final_bbox,
+        resolved_by_supplement,
+        blocked_by_supplement,
+        package_policy,
     )
     diagnostics.extend(unknown_diagnostics)
 

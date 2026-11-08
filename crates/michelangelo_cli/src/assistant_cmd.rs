@@ -39,8 +39,15 @@ pub enum AssistantCommand {
         #[arg(long, value_name = "DIR")]
         run: PathBuf,
         /// The components the task may change (comma separated).
-        #[arg(long, value_name = "NAME", value_delimiter = ',', required = true)]
+        ///
+        /// The option is required unless the task is narrowed to an unknown
+        /// (--unknown): the scope of a narrowed task is the binding of the
+        /// unknown.
+        #[arg(long, value_name = "NAME", value_delimiter = ',')]
         allowed: Vec<String>,
+        /// The unknown the task is narrowed to.
+        #[arg(long, value_name = "ID")]
+        unknown: Option<String>,
         /// The region the task may touch (`min=max`, three comma separated
         /// coordinates on each side).
         #[arg(long, value_name = "MIN=MAX")]
@@ -78,10 +85,18 @@ pub fn execute(command: &AssistantCommand) -> ExitCode {
         AssistantCommand::Task {
             run,
             allowed,
+            unknown,
             region,
             out,
             json,
-        } => task(run, allowed, region.as_deref(), out.as_deref(), *json),
+        } => task(
+            run,
+            allowed,
+            unknown.as_deref(),
+            region.as_deref(),
+            out.as_deref(),
+            *json,
+        ),
         AssistantCommand::Submit {
             run,
             task,
@@ -96,12 +111,13 @@ pub fn execute(command: &AssistantCommand) -> ExitCode {
 fn task(
     run: &Path,
     allowed: &[String],
+    unknown: Option<&str>,
     region: Option<&str>,
     out: Option<&Path>,
     json: bool,
 ) -> ExitCode {
-    if allowed.is_empty() {
-        eprintln!("[michelangelo] the task needs at least one allowed component");
+    if allowed.is_empty() && unknown.is_none() {
+        eprintln!("[michelangelo] the task needs at least one allowed component or an unknown");
         return ExitCode::from(EXIT_USAGE);
     }
     let policy = match load_policy(run) {
@@ -117,8 +133,13 @@ fn task(
         None => None,
     };
     let request = TaskRequest {
-        allowed: Some(allowed.to_vec()),
+        allowed: if allowed.is_empty() {
+            None
+        } else {
+            Some(allowed.to_vec())
+        },
         region,
+        unknown: unknown.map(|value| value.to_string()),
     };
     let task_id = match next_task_id(run) {
         Ok(task_id) => task_id,

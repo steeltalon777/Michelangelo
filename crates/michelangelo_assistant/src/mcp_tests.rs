@@ -353,6 +353,62 @@ fn the_get_task_tool_returns_the_bounded_task() -> Result<(), Box<dyn std::error
 }
 
 #[test]
+fn the_get_task_tool_returns_the_task_of_an_unknown() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    // The run carries a binding of one unknown.
+    let directory = fixture.run_dir.join("verification/bindings");
+    std::fs::create_dir_all(&directory)?;
+    let document = json!({
+        "schema": "michelangelo.unknown-bindings/0",
+        "version": "b0001",
+        "created_at": "2026-01-02T03:04:05Z",
+        "bindings": [{
+            "unknown_id": "u_lid_inside",
+            "components": ["lid"],
+            "region": {"min": [-0.05, 0.04, -0.05], "max": [0.05, 0.10, 0.05]},
+            "by": "alice",
+            "claim": "the inside of the lid is a plain box"
+        }]
+    });
+    std::fs::write(directory.join("b0001.json"), document.to_string())?;
+    let mut server = server(&fixture, AssistantPolicy::default())?;
+    let response = call(
+        &mut server,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "michelangelo_get_task",
+                "arguments": {"run_id": "run-0001", "unknown": "u_lid_inside"}
+            }
+        }),
+    )?;
+    let content = response
+        .get("result")
+        .and_then(|result| result.get("structuredContent"))
+        .ok_or("the response carries the content")?;
+    let task = content.get("task").ok_or("the content carries the task")?;
+    assert_eq!(
+        task.get("unknown_id"),
+        Some(&Value::String("u_lid_inside".to_string()))
+    );
+    assert_eq!(
+        task.get("allowed_components"),
+        Some(&json!(["lid"])),
+        "the task is narrowed to the binding of the unknown"
+    );
+    let criteria = task
+        .get("unknown_criteria")
+        .ok_or("the task carries the criteria of the unknown")?;
+    assert_eq!(
+        criteria.get("unknown_id"),
+        Some(&Value::String("u_lid_inside".to_string()))
+    );
+    Ok(())
+}
+
+#[test]
 fn the_responses_carry_no_absolute_path() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = fixture()?;
     let mut server = server(&fixture, AssistantPolicy::default())?;

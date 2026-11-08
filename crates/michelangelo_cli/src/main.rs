@@ -10,6 +10,7 @@ mod input_cmd;
 mod mcp_cmd;
 mod reconstruct_cmd;
 mod stdio;
+mod unknown_cmd;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -75,6 +76,11 @@ enum Commands {
     Mcp {
         #[command(subcommand)]
         command: mcp_cmd::McpCommand,
+    },
+    /// Manage the unknowns of a reconstruction run (IT-8C)
+    Unknown {
+        #[command(subcommand)]
+        command: unknown_cmd::UnknownCommand,
     },
 }
 
@@ -143,6 +149,11 @@ fn main() -> std::process::ExitCode {
             // The MCP transport owns stdout: only the JSON-RPC responses are
             // written there.
             return mcp_cmd::execute(command);
+        }
+        Some(Commands::Unknown { command }) => {
+            // The unknown subcommands are independent of the protocol mode:
+            // stdout carries the summary or the document JSON.
+            return unknown_cmd::execute(command);
         }
         None => {
             // No subcommand — show help (--help is handled by clap automatically)

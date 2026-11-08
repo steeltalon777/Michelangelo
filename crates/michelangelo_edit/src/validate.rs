@@ -25,6 +25,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use michelangelo_input::policy::PackagePolicy;
+
 use crate::candidate::{CandidateAction, EditCandidate};
 use crate::obj::{parse_obj_file, Bbox};
 use crate::policy::{EditPolicy, PolicyDecision};
@@ -248,6 +250,13 @@ pub struct ValidationContext<'a> {
     pub mode: ValidationMode,
     /// The author that decides the candidate (None for a submission).
     pub decided_by: Option<&'a str>,
+    /// The uncertainty policy of the copy of the input package of the run.
+    ///
+    /// The policy is the second level of the precedence of the contract §8:
+    /// a candidate (or a workspace policy) can never weaken it. The field is
+    /// optional: a run that carries no copy of the package has no package
+    /// policy.
+    pub package_policy: Option<&'a PackagePolicy>,
 }
 
 /// One change whose geometry was read and validated.
@@ -752,7 +761,54 @@ pub fn validate(context: &ValidationContext<'_>, policy: Option<&EditPolicy>) ->
         diagnostics.push(diagnostic);
     }
 
-    let auto_accept = auto_accept && !blocking_failure && context.mode == ValidationMode::Submit;
+    // 12. The uncertainty policy of the package. A candidate or a workspace
+    // policy can never weaken it (contract §8): the check is only added when
+    // the run carries a package with a policy.
+    let mut package_requires_author = false;
+    if let Some(policy) = context.package_policy {
+        if policy.policy_present {
+            package_requires_author = policy.require_author_acceptance;
+            let mut detail = String::from("the uncertainty policy of the package: ");
+            detail.push_str("require_author_acceptance: ");
+            detail.push_str(if package_requires_author {
+                "an explicit author acceptance is required"
+            } else {
+                "not required"
+            });
+            detail.push_str("; stub_policy: ");
+            detail.push_str(if policy.stubs_allowed() {
+                "allowed"
+            } else {
+                "forbidden"
+            });
+            detail.push_str("; allowed_completion_rules: ");
+            if policy.allowed_completion_rules.is_empty() {
+                detail.push_str("no restriction");
+            } else {
+                detail.push_str(&policy.allowed_completion_rules.join(", "));
+            }
+            checks.push(Check {
+                check: "package_policy".to_string(),
+                status: CheckStatus::Pass,
+                detail,
+            });
+            if package_requires_author && !candidate.task.require_author_acceptance {
+                diagnostics.push(Diagnostic {
+                    code: "PACKAGE_POLICY_STRICTER".to_string(),
+                    severity: Severity::Warning,
+                    message: String::from(
+                        "the package requires an author acceptance: the flag of the candidate cannot weaken it",
+                    ),
+                    address: Some("task.require_author_acceptance".to_string()),
+                });
+            }
+        }
+    }
+
+    let auto_accept = auto_accept
+        && !blocking_failure
+        && context.mode == ValidationMode::Submit
+        && !package_requires_author;
 
     ValidationOutcome {
         checks,

@@ -148,6 +148,36 @@ pub struct DataPolicy {
     pub allowed_reference_kinds: Vec<String>,
 }
 
+/// The acceptance criteria of a task that is narrowed to one unknown.
+///
+/// The criteria are the conditions of the resolution of the unknown
+/// (contract §7): the change must touch the binding, the evaluation must
+/// pass and the author must confirm the claim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnknownCriteria {
+    /// The identifier of the unknown.
+    pub unknown_id: String,
+    /// The components the binding of the unknown covers.
+    pub components: Vec<String>,
+    /// The region the binding of the unknown covers.
+    pub region: Region,
+    /// The version of the binding document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_version: Option<String>,
+    /// The claim of the author about the unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<String>,
+    /// Whether an author confirmation is required to close the unknown.
+    pub requires_confirmation: bool,
+    /// Whether a registered evaluation is required to close the unknown.
+    pub requires_evaluation: bool,
+    /// Whether the package of the run requires an author acceptance.
+    pub package_requires_author_acceptance: bool,
+    /// The measurable conditions the result must satisfy.
+    pub conditions: Vec<String>,
+}
+
 /// The provenance of a task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -190,6 +220,12 @@ pub struct AssistantTask {
     pub data_policy: DataPolicy,
     /// The provenance of the task.
     pub provenance: TaskProvenance,
+    /// The unknown the task is narrowed to (None for a general task).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_id: Option<String>,
+    /// The acceptance criteria of the unknown (None for a general task).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_criteria: Option<UnknownCriteria>,
 }
 
 impl AssistantTask {
@@ -237,6 +273,11 @@ pub struct TaskRequest {
     /// The region the task may touch (None: the bounding box of the allowed
     /// components with a margin of 5 %).
     pub region: Option<Region>,
+    /// The unknown the task is narrowed to (None: a general task).
+    ///
+    /// The scope of the task is then the binding of the unknown: its
+    /// components and its region.
+    pub unknown: Option<String>,
 }
 
 impl TaskRequest {
@@ -250,6 +291,16 @@ impl TaskRequest {
         TaskRequest {
             allowed: Some(allowed.to_vec()),
             region: None,
+            unknown: None,
+        }
+    }
+
+    /// A request that is narrowed to one unknown.
+    pub fn with_unknown(unknown_id: &str) -> Self {
+        TaskRequest {
+            allowed: None,
+            region: None,
+            unknown: Some(unknown_id.to_string()),
         }
     }
 }
@@ -354,12 +405,26 @@ pub fn generate_task(
         })?;
 
     let package = load_package(run_dir);
-    let (allowed, protected) = resolve_scope(&scene, request)?;
-    let allowed_region = resolve_region(&scene, &allowed, request.region)?;
+    let binding = match &request.unknown {
+        Some(unknown_id) => Some(binding_of(&store, unknown_id)?),
+        None => None,
+    };
+    let (allowed, protected) = resolve_scope(&scene, request, binding.as_ref())?;
+    let allowed_region = resolve_region(
+        &scene,
+        &allowed,
+        request
+            .region
+            .or_else(|| binding.as_ref().map(|binding| binding.region)),
+    )?;
 
     let references = collect_references(run_dir, package.as_ref());
-    let unknowns = collect_unknowns(&report, package.as_ref());
+    let mut unknowns = collect_unknowns(&report, package.as_ref());
     let supplements = collect_supplements(&report);
+    if let Some(binding) = &binding {
+        // The references of a narrowed task describe the unknown only.
+        unknowns.retain(|unknown| unknown.id == binding.unknown_id);
+    }
 
     let thresholds = &report.quality.thresholds;
     let acceptance_criteria = AcceptanceCriteria {
@@ -408,17 +473,51 @@ pub fn generate_task(
             origin: "core".to_string(),
             detail: format!("bounded task generated from run '{}'", scene.run_id),
         },
+        unknown_id: request.unknown.clone(),
+        unknown_criteria: binding
+            .as_ref()
+            .map(|binding| unknown_criteria(binding, &store)),
     })
+}
+
+/// The binding of an unknown (the store of the run).
+fn binding_of(
+    store: &michelangelo_edit::scene::SceneStore,
+    unknown_id: &str,
+) -> Result<michelangelo_edit::unknowns::UnknownBinding, crate::error::AssistantError> {
+    let document = michelangelo_edit::unknowns::latest_binding_document(store)
+        .map_err(crate::error::AssistantError::from)?;
+    let document = match document {
+        Some(document) => document,
+        None => {
+            return Err(crate::error::AssistantError::NotFound {
+                message: String::from(
+                    "the run carries no binding: run 'michelangelo unknown bind' first",
+                ),
+            })
+        }
+    };
+    document
+        .binding(unknown_id)
+        .cloned()
+        .ok_or_else(|| crate::error::AssistantError::NotFound {
+            message: format!(
+                "the unknown '{unknown_id}' carries no binding in the version '{}'",
+                document.version
+            ),
+        })
 }
 
 /// The allowed and the protected components of a task.
 ///
 /// The allowed set is a non-empty subset of the components of the scene; the
 /// protected set is every other component of the scene, so the two sets are
-/// always disjoint.
+/// always disjoint. A task that is narrowed to an unknown is bound to the
+/// components of its binding.
 fn resolve_scope(
     scene: &Scene,
     request: &TaskRequest,
+    binding: Option<&michelangelo_edit::unknowns::UnknownBinding>,
 ) -> Result<(Vec<String>, Vec<String>), AssistantError> {
     let all: Vec<String> = scene
         .components
@@ -432,9 +531,10 @@ fn resolve_scope(
         .map(|component| component.name.clone())
         .collect();
 
-    let mut allowed: Vec<String> = match &request.allowed {
-        Some(names) => names.clone(),
-        None => all
+    let mut allowed: Vec<String> = match (&request.allowed, binding) {
+        (Some(names), _) => names.clone(),
+        (None, Some(binding)) => binding.components.clone(),
+        (None, None) => all
             .iter()
             .filter(|name| !protected_flags.contains(name))
             .cloned()
@@ -706,4 +806,39 @@ fn collect_supplements(report: &ReconstructionReport) -> Vec<TaskSupplement> {
         .collect();
     supplements.sort_by(|left, right| left.supplement_id.cmp(&right.supplement_id));
     supplements
+}
+
+/// The acceptance criteria of a task that is narrowed to one unknown.
+fn unknown_criteria(
+    binding: &michelangelo_edit::unknowns::UnknownBinding,
+    store: &michelangelo_edit::scene::SceneStore,
+) -> UnknownCriteria {
+    let policy = michelangelo_edit::unknowns::package_policy(store);
+    UnknownCriteria {
+        unknown_id: binding.unknown_id.clone(),
+        components: binding.components.clone(),
+        region: binding.region,
+        binding_version: michelangelo_edit::unknowns::latest_binding_document(store)
+            .ok()
+            .flatten()
+            .map(|document| document.version),
+        claim: binding.claim.clone(),
+        requires_confirmation: true,
+        requires_evaluation: true,
+        package_requires_author_acceptance: policy.requires_author_acceptance(),
+        conditions: vec![
+            String::from(
+                "the change touches the components of the binding and stays inside its region",
+            ),
+            String::from(
+                "a registered evaluation of the new geometry passes the projection conformance and every required author geometric condition",
+            ),
+            String::from(
+                "the author confirms the claim for this geometry and this evaluation before the unknown is closed",
+            ),
+            String::from(
+                "the unknown is closed only in a revision that references the resolution",
+            ),
+        ],
+    }
 }

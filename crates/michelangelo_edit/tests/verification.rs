@@ -23,7 +23,7 @@ use michelangelo_edit::error::{
 use michelangelo_edit::scene::{list_revisions, load_current, load_index, load_scene, SceneStore};
 use michelangelo_edit::verification::{aggregate_digest, load_snapshot, StoreLock};
 use michelangelo_edit::{Decision, EditError, FixedClock};
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// A scratch run with a candidate.
 struct Fixture {
@@ -633,14 +633,23 @@ fn the_initialization_seeds_the_unknown_state() {
     let unknowns = value["unknowns"].as_array().expect("the unknowns");
     assert_eq!(unknowns.len(), 2);
     for unknown in unknowns {
-        assert_eq!(unknown["status"], "open", "no unknown is closed");
+        // IT-8C: the stub of the solver waits for its resolution
+        // (contract §9: the stubs are 'stub_pending'); no unknown is closed.
+        assert_ne!(unknown["status"], "resolved", "no unknown is closed");
     }
     let stub = unknowns
         .iter()
         .find(|unknown| unknown["unknown_id"] == "u_flame_shape")
         .expect("the stub is listed");
+    assert_eq!(stub["status"], "stub_pending");
     assert_eq!(stub["stub"], true);
     assert_eq!(stub["solver_status"], "stub");
+    let open = unknowns
+        .iter()
+        .find(|unknown| unknown["unknown_id"] == "u_glass_thickness")
+        .expect("the unresolved unknown is listed");
+    assert_eq!(open["status"], "open");
+    assert_eq!(open["resolution_id"], Value::Null);
 }
 
 #[test]

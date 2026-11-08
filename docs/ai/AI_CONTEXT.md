@@ -32,7 +32,7 @@ CLI (michelangelo_cli)
 | `michelangelo_edit` | Local edit boundary: scene revisions, candidates, acceptance integrity | `SceneStore`, `init_scene_with_protection`, `submit_candidate`, `accept_candidate_with_options`, `rollback_scene`, `DecisionReport`, snapshot/lock/unknown-state (`verification.rs`), accept gate (`gate.rs`) |
 | `michelangelo_evidence` | IT-8 verification DTOs: evaluation report, digests, registry, pure accept gate | `EvaluationReport`, digest helpers, `EvaluationRegistry`, `verify_report`, gate codes |
 | `michelangelo_eval` | IT-8 candidate/revision evaluation with pinned inputs | `evaluate_candidate`, `evaluate_revision`, `Renderer`/`Comparator`, real Blender + `compare.py` path and test fakes |
-| `michelangelo_assistant` | Stage D bounded assistant surface + MCP stdio adapter | `assistant-task/0` generation, policy, budget/audit store, four MCP tools, error mapping |
+| `michelangelo_assistant` | Stage D bounded assistant surface + MCP stdio adapter; IT-8C `--unknown` narrowing | `assistant-task/0` generation (optional unknown binding), policy, budget/audit store, four MCP tools (optional `"unknown"` argument for get_task), error mapping |
 
 ## Protocol Numbers
 
@@ -138,12 +138,15 @@ the current Windows stand).
   apply, persisted per-run budget counters and an append-only audit log, and a local MCP stdio
   adapter exposing four tools. Submissions are always `proposed`; applying stays an explicit
   `michelangelo edit accept`. No embedded model, no network, no external service.
-- IT-8 hardening is in progress: [`docs/specs/VERIFICATION_STATE.md`](../specs/VERIFICATION_STATE.md)
-  + A/B implemented — immutable full-result snapshots, one authoritative bundle pointer, OS lock,
-  append-only decisions with idempotent accept, and a mandatory accept gate over
+- IT-8 hardening: [`docs/specs/VERIFICATION_STATE.md`](../specs/VERIFICATION_STATE.md)
+  + A/B/C implemented — immutable full-result snapshots, one authoritative bundle pointer, OS
+  lock, append-only decisions with idempotent accept, a mandatory accept gate over
   [`EVALUATION.md`](../specs/EVALUATION.md) (actual-geometry render, pinned inputs, per-view 0.01
-  IoU regression, hidden/author/GT taxonomy, registered report digest). Unknown resolution,
-  bindings/policy enforcement (IT-8C) and the external-agent MCP demo remain. No wire changes.
+  IoU regression, hidden/author/GT taxonomy, registered report digest), and explicit unknown
+  resolution over [`UNKNOWNS.md`](../specs/UNKNOWNS.md) (bindings, author confirmations,
+  immutable resolutions, partial acceptance, `evidence_stale` invalidation, rollback-restored
+  state) with solver-side package policy enforcement. The external-agent MCP demo remains. No
+  wire changes.
 
 ## Out of Scope
 

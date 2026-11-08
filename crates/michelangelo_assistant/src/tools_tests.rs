@@ -40,7 +40,7 @@ fn task_of(
 fn the_get_task_tool_writes_the_task_under_the_run() -> Result<(), Box<dyn std::error::Error>> {
     let (fixture, policy) = fixture()?;
     let ctx = context(&fixture, &policy);
-    let outcome = tools::get_task(&ctx, &fixture.run_dir)?;
+    let outcome = tools::get_task(&ctx, &fixture.run_dir, None)?;
     match outcome {
         ToolOutcome::Task { task, path } => {
             assert_eq!(task.task_id, "asst-0001");
@@ -62,7 +62,8 @@ fn the_get_task_tool_refuses_a_run_without_a_scene() -> Result<(), Box<dyn std::
     let fixture = Fixture::new()?;
     let policy = AssistantPolicy::default();
     let ctx = context(&fixture, &policy);
-    let error = tools::get_task(&ctx, &fixture.run_dir).expect_err("the run has no scene store");
+    let error =
+        tools::get_task(&ctx, &fixture.run_dir, None).expect_err("the run has no scene store");
     assert!(matches!(error, AssistantError::NotFound { .. }));
     Ok(())
 }

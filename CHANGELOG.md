@@ -145,10 +145,30 @@ library crates plus CLI subcommands and an accept gate.
   ground truth is `unavailable`, never a pass; `auto_accept` is deferred (submit stays `proposed`).
 - Spec `docs/specs/EVALUATION.md`; 51 new tests (evidence 23, eval 12, edit gate 10, CLI 6).
 
+### Added (IT-8C)
+
+- **Unknown resolution**: versioned `unknown-bindings/0`, immutable author `confirmation/0`
+  (claim + target geometry + evaluation + evidence), immutable `resolution/0` with seven checks,
+  `unknown-state/0` (`open|stub_pending|resolved`, `reason:evidence_stale`), and closure only in
+  a revision whose bundle references the resolution (`edit accept --resolve`). Partial acceptance
+  accepts geometry while unknowns stay open; a later change of a bound geometry/binding/claim
+  reopens `open` + `evidence_stale`; rollback restores the target bundle state; bindings without
+  a claim let the confirmation carry the claim.
+- **CLI**: `michelangelo unknown sync|list|show|bind|confirm|propose|resolve`; `edit accept
+  --resolve`; `assistant task --unknown` and MCP `michelangelo_get_task` optional `"unknown"`
+  argument (MCP still never applies). Spec `docs/specs/UNKNOWNS.md`.
+- **Package policy enforcement in the solver**: unaccepted AI supplements are `not_applied` with
+  `SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED` and do not close unknowns; `SUPPLEMENT_RULE_NOT_ALLOWED`
+  for disallowed kinds; `STUB_FORBIDDEN`; accepted author decisions take precedence for the
+  author's geometric intent; a candidate can only make the package policy stricter
+  (`PACKAGE_POLICY_STRICTER`); no `uncertainty_policy` object keeps the Stage B behaviour.
+  19 edit unknown tests + 17 solver policy tests.
+
 ### Changed (IT-8A/IT-8B)
 
-- `docs/specs/LOCAL_EDIT.md`, `docs/specs/VERIFICATION_STATE.md`, TZ `TZ_IT8_ACCEPTANCE_INTEGRITY.md`
-  and ROADMAP/TASKS/AI_CONTEXT updated for A/B; test count baseline 792 Rust tests.
+- `docs/specs/LOCAL_EDIT.md`, `docs/specs/VERIFICATION_STATE.md`, `docs/specs/RECONSTRUCTION.md`,
+  `docs/specs/EVALUATION.md`, TZ `TZ_IT8_ACCEPTANCE_INTEGRITY.md` and ROADMAP/TASKS/AI_CONTEXT
+  updated for A/B/C; test count baseline 816 Rust tests + 86 solver tests.
 
 ## [0.1.0] — 2026-11-07
 

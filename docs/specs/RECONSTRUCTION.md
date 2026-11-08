@@ -49,6 +49,26 @@ package dir ──▶ validate ──▶ allocate run ──▶ solve.py ──�
    atomically. `status` is `pass` only when the worker completed **and** every quality
    threshold was met.
 
+### Input-policy enforcement (IT-8C)
+
+The solver reads the `uncertainty_policy` of the package and enforces it in the build path
+(before the plan is written):
+
+* an AI-authored supplement is applied only when the package does not require author acceptance,
+  or the package carries an accepted author decision for that element; otherwise it is
+  `not_applied` with `SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED` and it does not close an unknown;
+* `allowed_completion_rules` limits the applied supplement kinds (`not_applied` +
+  `SUPPLEMENT_RULE_NOT_ALLOWED`); an accepted author decision overrides the list for that
+  element;
+* `stub_policy: forbidden` blocks the build with `STUB_FORBIDDEN` and no stub mesh is written;
+* precedence for the author's geometric intent is accepted package decisions > package policy >
+  workspace policy > candidate/task flags; the candidate can only make the policy stricter
+  (`PACKAGE_POLICY_STRICTER`), never weaker. Security constraints (file/network access, budgets,
+  protected scope, sandbox, secrets) are independent of this hierarchy;
+* a package without an `uncertainty_policy` object keeps the Stage B behaviour (supplements
+  applied, stubs allowed). The diagnostics are part of the build report and reach the run
+  report.
+
 ## Solver and comparator contract
 
 The Rust side never re-implements the solver; it only discovers, bounds and parses it.

@@ -263,6 +263,30 @@ fn an_unknown_completion_rule_is_rejected() {
 }
 
 #[test]
+fn an_omitted_require_author_acceptance_defaults_to_true() {
+    // Cross-language pin: the Rust default and the Python solver default must
+    // agree for an `uncertainty_policy` object that omits the key.
+    let temp = copy_fixture("valid_full");
+    let dir = package_dir(&temp);
+    let mut manifest = read_manifest(&dir);
+    manifest["uncertainty_policy"]
+        .as_object_mut()
+        .expect("the policy is an object")
+        .remove("require_author_acceptance");
+    write_manifest(&dir, &manifest);
+
+    let package = load_manifest(&dir).expect("the manifest loads");
+    let uncertainty = package
+        .uncertainty_policy
+        .as_ref()
+        .expect("the policy is present");
+    assert!(uncertainty.require_author_acceptance);
+    let policy = michelangelo_input::PackagePolicy::from_manifest(&package);
+    assert!(policy.policy_present);
+    assert!(policy.require_author_acceptance);
+}
+
+#[test]
 fn a_non_distinct_coordinate_system_is_rejected() {
     let temp = copy_fixture("valid_full");
     let dir = package_dir(&temp);

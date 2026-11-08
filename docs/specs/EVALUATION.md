@@ -229,9 +229,13 @@ evaluation the acceptance is refused.
   declared measurement that cannot be checked against the geometry (for example a distance
   between two points) yields `unavailable` and blocks the acceptance: a required condition is
   never treated as passed. The format of the input package stays v0.
-* **The hidden claims stay unverified.** The claims of the unknowns and of the supplements have
-  no resolvable evidence until IT-8C: they are reported as `unverified` and the verdict of the
-  hidden part is `pending`. They never block the acceptance of a geometry.
+* **The solver diagnostics are not recomputed.** The evaluation does not rerun the solver; the
+  policy enforcement of IT-8C appears in the run report (`not_applied` supplements,
+  `SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED`, `SUPPLEMENT_RULE_NOT_ALLOWED`, `STUB_FORBIDDEN`).
+* **The hidden claims stay unverified.** The claims of the unknowns are reported as `unverified`
+  and the verdict of the hidden part is `pending`; they never block the acceptance of a geometry.
+  Only an explicit author resolution (`docs/specs/UNKNOWNS.md`) closes an unknown in a later
+  bundle.
 * **The evaluation of the bbox error needs Python.** The pinned comparator does not report the
   bounding box of a render; the error is measured with the PNG reader of the repository. When
   Python is not available the field is `null` and the report stays valid.
@@ -244,10 +248,10 @@ evaluation the acceptance is refused.
 ## The tests
 
 * `crates/michelangelo_evidence/tests/evidence.rs` — the digests, the registry and every code of
-  the gate (21 tests).
+  the gate (23 tests).
 * `crates/michelangelo_eval/tests/evaluation.rs` — the assembly of the report, the pins, the
   regression, the hidden defaults, the author conditions and the held-out rule with a
-  deterministic fake renderer and a deterministic fake comparator (10 tests).
+  deterministic fake renderer and a deterministic fake comparator (12 tests).
 * `crates/michelangelo_edit/tests/gate.rs` — every refusal of the accept gate and the happy
   path (10 tests).
 * `crates/michelangelo_cli/tests/evaluate_cli.rs` — the usage contract of the CLI and the

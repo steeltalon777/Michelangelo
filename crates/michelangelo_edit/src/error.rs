@@ -28,6 +28,22 @@ pub const AUTHOR_CONDITION_FAILED: &str = "AUTHOR_CONDITION_FAILED";
 pub const REGRESSION: &str = "REGRESSION";
 /// The diagnostic code of a missing independent ground truth.
 pub const NO_GROUND_TRUTH: &str = "NO_GROUND_TRUTH";
+/// The diagnostic code of an unknown the run does not know.
+pub const UNKNOWN_NOT_FOUND: &str = "UNKNOWN_NOT_FOUND";
+/// The diagnostic code of an unknown without a binding.
+pub const BINDING_MISSING: &str = "BINDING_MISSING";
+/// The diagnostic code of a missing author confirmation.
+pub const CONFIRMATION_MISSING: &str = "CONFIRMATION_MISSING";
+/// The diagnostic code of a refused resolution.
+pub const RESOLUTION_REFUSED: &str = "RESOLUTION_REFUSED";
+/// The diagnostic code of a change that does not touch the binding.
+pub const BINDING_MISMATCH: &str = "BINDING_MISMATCH";
+/// The diagnostic code of a violation of the uncertainty policy of the package.
+pub const UNKNOWN_POLICY_VIOLATION: &str = "UNKNOWN_POLICY_VIOLATION";
+/// The diagnostic code of a stub that the package forbids.
+pub const STUB_FORBIDDEN: &str = "STUB_FORBIDDEN";
+/// The diagnostic code of an agent that tries to confirm its own work.
+pub const AGENT_CONFIRMATION_REFUSED: &str = "AGENT_CONFIRMATION_REFUSED";
 
 /// A failure of the local edit boundary.
 ///
@@ -123,6 +139,52 @@ pub enum EditError {
         /// The human readable reason.
         message: String,
     },
+    /// The run does not know the unknown (UNKNOWN_NOT_FOUND).
+    UnknownNotFound {
+        /// The human readable reason.
+        message: String,
+    },
+    /// The unknown carries no binding (BINDING_MISSING).
+    BindingMissing {
+        /// The human readable reason.
+        message: String,
+    },
+    /// The unknown carries no author confirmation (CONFIRMATION_MISSING).
+    ConfirmationMissing {
+        /// The human readable reason.
+        message: String,
+    },
+    /// The resolution was refused (RESOLUTION_REFUSED).
+    ResolutionRefused {
+        /// The human readable reason.
+        message: String,
+    },
+    /// The change does not touch the binding of the unknown (BINDING_MISMATCH).
+    BindingMismatch {
+        /// The human readable reason.
+        message: String,
+    },
+    /// The uncertainty policy of the package forbids the resolution
+    /// (UNKNOWN_POLICY_VIOLATION).
+    UnknownPolicyViolation {
+        /// The human readable reason.
+        message: String,
+    },
+    /// The package forbids the stubs (STUB_FORBIDDEN).
+    StubForbidden {
+        /// The human readable reason.
+        message: String,
+    },
+    /// An agent tries to confirm its own work (AGENT_CONFIRMATION_REFUSED).
+    AgentConfirmationRefused {
+        /// The human readable reason.
+        message: String,
+    },
+    /// The arguments of the operation are not usable (USAGE).
+    Usage {
+        /// The human readable reason.
+        message: String,
+    },
 }
 
 impl EditError {
@@ -145,7 +207,16 @@ impl EditError {
             | EditError::VisibleFailed { message }
             | EditError::AuthorConditionFailed { message }
             | EditError::Regression { message }
-            | EditError::NoGroundTruth { message } => message,
+            | EditError::NoGroundTruth { message }
+            | EditError::UnknownNotFound { message }
+            | EditError::BindingMissing { message }
+            | EditError::ConfirmationMissing { message }
+            | EditError::ResolutionRefused { message }
+            | EditError::BindingMismatch { message }
+            | EditError::UnknownPolicyViolation { message }
+            | EditError::StubForbidden { message }
+            | EditError::AgentConfirmationRefused { message }
+            | EditError::Usage { message } => message,
         }
     }
 
@@ -169,6 +240,15 @@ impl EditError {
             EditError::AuthorConditionFailed { .. } => AUTHOR_CONDITION_FAILED,
             EditError::Regression { .. } => REGRESSION,
             EditError::NoGroundTruth { .. } => NO_GROUND_TRUTH,
+            EditError::UnknownNotFound { .. } => UNKNOWN_NOT_FOUND,
+            EditError::BindingMissing { .. } => BINDING_MISSING,
+            EditError::ConfirmationMissing { .. } => CONFIRMATION_MISSING,
+            EditError::ResolutionRefused { .. } => RESOLUTION_REFUSED,
+            EditError::BindingMismatch { .. } => BINDING_MISMATCH,
+            EditError::UnknownPolicyViolation { .. } => UNKNOWN_POLICY_VIOLATION,
+            EditError::StubForbidden { .. } => STUB_FORBIDDEN,
+            EditError::AgentConfirmationRefused { .. } => AGENT_CONFIRMATION_REFUSED,
+            EditError::Usage { .. } => "USAGE",
         }
     }
 
@@ -187,7 +267,15 @@ impl EditError {
             | VISIBLE_FAILED
             | AUTHOR_CONDITION_FAILED
             | REGRESSION
-            | NO_GROUND_TRUTH => 1,
+            | NO_GROUND_TRUTH
+            | UNKNOWN_NOT_FOUND
+            | BINDING_MISSING
+            | CONFIRMATION_MISSING
+            | RESOLUTION_REFUSED
+            | BINDING_MISMATCH
+            | UNKNOWN_POLICY_VIOLATION
+            | STUB_FORBIDDEN
+            | AGENT_CONFIRMATION_REFUSED => 1,
             _ => 2,
         }
     }
@@ -242,6 +330,33 @@ impl std::fmt::Display for EditError {
             }
             EditError::NoGroundTruth { message } => {
                 write!(formatter, "{NO_GROUND_TRUTH}: {message}")
+            }
+            EditError::UnknownNotFound { message } => {
+                write!(formatter, "{UNKNOWN_NOT_FOUND}: {message}")
+            }
+            EditError::BindingMissing { message } => {
+                write!(formatter, "{BINDING_MISSING}: {message}")
+            }
+            EditError::ConfirmationMissing { message } => {
+                write!(formatter, "{CONFIRMATION_MISSING}: {message}")
+            }
+            EditError::ResolutionRefused { message } => {
+                write!(formatter, "{RESOLUTION_REFUSED}: {message}")
+            }
+            EditError::BindingMismatch { message } => {
+                write!(formatter, "{BINDING_MISMATCH}: {message}")
+            }
+            EditError::UnknownPolicyViolation { message } => {
+                write!(formatter, "{UNKNOWN_POLICY_VIOLATION}: {message}")
+            }
+            EditError::StubForbidden { message } => {
+                write!(formatter, "{STUB_FORBIDDEN}: {message}")
+            }
+            EditError::AgentConfirmationRefused { message } => {
+                write!(formatter, "{AGENT_CONFIRMATION_REFUSED}: {message}")
+            }
+            EditError::Usage { message } => {
+                write!(formatter, "USAGE: {message}")
             }
         }
     }

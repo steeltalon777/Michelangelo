@@ -115,6 +115,92 @@ fn the_default_region_is_the_bounding_box_with_a_margin() -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// Write a binding document into the store of a fixture.
+fn bind(
+    fixture: &Fixture,
+    unknown_id: &str,
+    components: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = fixture.run_dir.join("verification/bindings");
+    std::fs::create_dir_all(&directory)?;
+    let bindings: Vec<serde_json::Value> = components
+        .iter()
+        .map(|component| {
+            serde_json::json!({
+                "unknown_id": unknown_id,
+                "components": [component],
+                "region": {"min": [-0.05, 0.04, -0.05], "max": [0.05, 0.10, 0.05]},
+                "by": "alice",
+                "claim": "the inside of the lid is a plain box"
+            })
+        })
+        .collect();
+    let document = serde_json::json!({
+        "schema": "michelangelo.unknown-bindings/0",
+        "version": "b0001",
+        "created_at": "2026-01-02T03:04:05Z",
+        "bindings": bindings
+    });
+    std::fs::write(directory.join("b0001.json"), document.to_string())?;
+    Ok(())
+}
+
+/// The region of the binding of the tests.
+fn binding_region() -> Region {
+    Region {
+        min: [-0.05, 0.04, -0.05],
+        max: [0.05, 0.10, 0.05],
+    }
+}
+
+#[test]
+fn a_task_of_an_unknown_is_narrowed_to_the_binding() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    bind(&fixture, "u_lid_inside", &["lid"])?;
+    let task = task_of(&fixture, &TaskRequest::with_unknown("u_lid_inside"))?;
+    assert_eq!(task.unknown_id.as_deref(), Some("u_lid_inside"));
+    assert_eq!(task.allowed_components, vec!["lid".to_string()]);
+    assert_eq!(task.protected, vec!["base".to_string()]);
+    assert_eq!(task.allowed_region, binding_region());
+    let criteria = task
+        .unknown_criteria
+        .clone()
+        .expect("the criteria of the unknown are present");
+    assert_eq!(criteria.unknown_id, "u_lid_inside");
+    assert_eq!(criteria.components, vec!["lid".to_string()]);
+    assert_eq!(criteria.region, binding_region());
+    assert_eq!(
+        criteria.claim.as_deref(),
+        Some("the inside of the lid is a plain box")
+    );
+    assert!(criteria.requires_confirmation);
+    assert!(criteria.requires_evaluation);
+    assert!(!criteria.conditions.is_empty());
+    // The references are filtered: only the unknown of the binding is listed.
+    assert_eq!(task.unknowns.len(), 1);
+    assert_eq!(task.unknowns[0].id, "u_lid_inside");
+    Ok(())
+}
+
+#[test]
+fn a_task_of_an_unknown_without_a_binding_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    let error = task_of(&fixture, &TaskRequest::with_unknown("u_lid_inside"))
+        .expect_err("the task is refused");
+    assert!(matches!(error, AssistantError::NotFound { .. }));
+    Ok(())
+}
+
+#[test]
+fn a_task_of_an_unknown_that_is_not_bound_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    bind(&fixture, "u_lid_inside", &["lid"])?;
+    let error =
+        task_of(&fixture, &TaskRequest::with_unknown("u_ghost")).expect_err("the task is refused");
+    assert!(matches!(error, AssistantError::NotFound { .. }));
+    Ok(())
+}
+
 #[test]
 fn an_explicit_region_is_used() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = fixture()?;
@@ -125,6 +211,7 @@ fn an_explicit_region_is_used() -> Result<(), Box<dyn std::error::Error>> {
     let request = TaskRequest {
         allowed: Some(vec!["lid".to_string()]),
         region: Some(region),
+        unknown: None,
     };
     let task = task_of(&fixture, &request)?;
     assert_eq!(task.allowed_region, region);
@@ -140,6 +227,7 @@ fn an_inverted_region_is_refused() -> Result<(), Box<dyn std::error::Error>> {
             min: [0.1, 0.1, 0.1],
             max: [-0.1, -0.1, -0.1],
         }),
+        unknown: None,
     };
     let error = task_of(&fixture, &request).expect_err("the inverted region is refused");
     assert!(matches!(error, AssistantError::TaskInvalid { .. }));
@@ -156,6 +244,7 @@ fn a_region_that_does_not_intersect_the_component_is_refused(
             min: [1.0, 1.0, 1.0],
             max: [2.0, 2.0, 2.0],
         }),
+        unknown: None,
     };
     let error = task_of(&fixture, &request).expect_err("the empty region is refused");
     match error {

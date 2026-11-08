@@ -30,19 +30,21 @@ use crate::gate::{self, AcceptOptions};
 use crate::policy::load_policy;
 use crate::scene::{
     component_bytes, list_revisions, load_current, load_index, load_scene, next_revision,
-    publish_revision, write_bytes_atomic, write_current, write_index, CandidateIndexEntry,
-    CurrentPointer, EvaluationRef, RollbackRecord, Scene, SceneComponent, SceneStore,
-    SceneVerification, UnknownStateRef, VerificationPolicies, COMPONENTS_DIR_NAME,
+    publish_revision, write_bytes_atomic, write_current, write_index, BindingRef,
+    CandidateIndexEntry, ConfirmationRef, CurrentPointer, EvaluationRef, ResolutionRef,
+    RollbackRecord, Scene, SceneComponent, SceneStore, SceneVerification, UnknownStateRef,
+    VerificationPolicies, COMPONENTS_DIR_NAME,
 };
+use crate::unknowns::{self, ResolutionMaterial};
 use crate::validate::{
     validate, Check, CheckStatus, Decision, DecisionReport, Diagnostic, Severity,
     ValidationContext, ValidationMode,
 };
 use crate::verification::{
-    aggregate_digest, canonical_json, file_sha256, load_snapshot, load_unknown_state,
-    package_digest, package_policy_digest, snapshot_file_path, tool_versions,
-    unknown_state_relative_path, verify_snapshot, workspace_policy_digest, write_bytes_new,
-    write_unknown_state, SnapshotFile, SnapshotManifest, SnapshotSource, StoreLock, UnknownState,
+    aggregate_digest, canonical_json, file_sha256, load_snapshot, package_digest,
+    package_policy_digest, snapshot_file_path, tool_versions, unknown_state_relative_path,
+    verify_snapshot, workspace_policy_digest, write_bytes_new, write_unknown_state, SnapshotFile,
+    SnapshotManifest, SnapshotSource, StoreLock,
 };
 use crate::{Clock, INDEX_SCHEMA};
 
@@ -291,6 +293,7 @@ pub fn submit_candidate(
     let policy = load_policy(run_dir)?;
     let store_candidate_dir = store.candidate_dir(&candidate_id);
 
+    let package_policy = unknowns::package_policy(&store);
     let context = ValidationContext {
         candidate: &candidate,
         candidate_dir: &store_candidate_dir,
@@ -298,6 +301,7 @@ pub fn submit_candidate(
         current_scene_revision: &pointer.scene_revision,
         mode: ValidationMode::Submit,
         decided_by: None,
+        package_policy: Some(&package_policy),
     };
     let outcome = validate(&context, policy.as_ref());
 
@@ -509,6 +513,7 @@ pub fn accept_candidate_with_hooks_and_options(
     let policy = load_policy(run_dir)?;
 
     let candidate_dir = store.candidate_dir(candidate_id);
+    let package_policy = unknowns::package_policy(&store);
     let context = ValidationContext {
         candidate: &candidate,
         candidate_dir: &candidate_dir,
@@ -516,6 +521,7 @@ pub fn accept_candidate_with_hooks_and_options(
         current_scene_revision: &pointer.scene_revision,
         mode: ValidationMode::Accept,
         decided_by: Some(by),
+        package_policy: Some(&package_policy),
     };
     let outcome = validate(&context, policy.as_ref());
     let decided_at = clock.now_rfc3339_utc();
@@ -611,6 +617,18 @@ pub fn accept_candidate_with_hooks_and_options(
         );
     }
 
+    // The resolution of an unknown (optional): the unknown is closed only
+    // in the revision that references the resolution.
+    let material = match options.resolve.as_deref() {
+        Some(unknown_id) => {
+            let material = unknowns::materialize_resolution_locked(
+                &store, unknown_id, &candidate, &manifest, &binding, by, clock,
+            )?;
+            Some(material)
+        }
+        None => None,
+    };
+
     let revision = publish_snapshot(
         &store,
         &manifest,
@@ -618,6 +636,7 @@ pub fn accept_candidate_with_hooks_and_options(
         &base_scene,
         clock,
         Some(&gate::evaluation_ref(&binding)),
+        material.as_ref(),
     )?;
 
     // The hook runs between the publication of the revision and the switch of
@@ -1027,6 +1046,7 @@ fn publish_snapshot(
     base_scene: &Scene,
     clock: &dyn Clock,
     evaluation: Option<&EvaluationRef>,
+    resolution: Option<&ResolutionMaterial>,
 ) -> Result<String, EditError> {
     if let Some(revision) = find_revision_of_candidate(
         store,
@@ -1073,10 +1093,62 @@ fn publish_snapshot(
     components.sort_by(|left, right| left.name.cmp(&right.name));
     payloads.sort_by(|left, right| left.0.cmp(&right.0));
 
-    // Every revision carries its own immutable state of the unknowns.
+    // Every revision carries its own immutable state of the unknowns. The
+    // state is recomputed: a resolution whose dependencies changed is not
+    // carried forward (the unknown becomes 'open' with the reason
+    // 'evidence_stale').
     let created_at = clock.now_rfc3339_utc();
-    build_unknown_state(store, &revision, &base_scene.scene_revision, &created_at)?;
+    let digests: Vec<(String, String)> = components
+        .iter()
+        .map(|component| (component.name.clone(), component.sha256.clone()))
+        .collect();
+    let state = unknowns::recompute_state(
+        store,
+        &base_scene.scene_revision,
+        &revision,
+        base_scene,
+        &digests,
+        resolution.map(|material| &material.resolution),
+        &created_at,
+    )?;
+    write_unknown_state(store, &state)?;
     let unknown_sha256 = file_sha256(&store.unknown_state_path(&revision))?;
+
+    // The bundle of the revision references the documents of the evidence it
+    // is based on: the bindings, the confirmation and the resolution.
+    let bindings = match unknowns::latest_binding_document(store)? {
+        Some(document) => {
+            let path = store.binding_path(&document.version);
+            vec![BindingRef {
+                version: document.version.clone(),
+                path: unknowns::binding_relative_path(&document.version),
+                sha256: file_sha256(&path)?,
+            }]
+        }
+        None => Vec::new(),
+    };
+    let confirmations = match resolution {
+        Some(material) => {
+            let path = store.confirmation_path(&material.confirmation.confirmation_id);
+            vec![ConfirmationRef {
+                confirmation_id: material.confirmation.confirmation_id.clone(),
+                path: unknowns::confirmation_relative_path(&material.confirmation.confirmation_id),
+                sha256: file_sha256(&path)?,
+            }]
+        }
+        None => Vec::new(),
+    };
+    let resolutions = match resolution {
+        Some(material) => {
+            let path = store.resolution_path(&material.resolution.resolution_id);
+            vec![ResolutionRef {
+                resolution_id: material.resolution.resolution_id.clone(),
+                path: unknowns::resolution_relative_path(&material.resolution.resolution_id),
+                sha256: file_sha256(&path)?,
+            }]
+        }
+        None => Vec::new(),
+    };
 
     let scene = Scene {
         schema: crate::SCENE_SCHEMA.to_string(),
@@ -1090,7 +1162,7 @@ fn publish_snapshot(
         notes: base_scene.notes.clone(),
         verification: Some(SceneVerification {
             geometry_digest: manifest.aggregate_sha256.clone(),
-            bindings: Vec::new(),
+            bindings,
             unknowns: Some(UnknownStateRef {
                 revision: revision.clone(),
                 path: unknown_state_relative_path(&revision),
@@ -1100,8 +1172,8 @@ fn publish_snapshot(
                 Some(reference) => vec![reference.clone()],
                 None => Vec::new(),
             },
-            confirmations: Vec::new(),
-            resolutions: Vec::new(),
+            confirmations,
+            resolutions,
             policies: VerificationPolicies {
                 package_sha256: manifest.package_sha256.clone(),
                 workspace_policy_sha256: workspace_policy_digest(store),
@@ -1112,30 +1184,6 @@ fn publish_snapshot(
     };
     publish_revision(store, &scene, &payloads)?;
     Ok(revision)
-}
-
-/// Build the immutable state of the unknowns of a revision.
-///
-/// The state of a new revision is a copy of the state of its base: only an
-/// explicit resolution (IT-8C) changes it.
-fn build_unknown_state(
-    store: &SceneStore,
-    revision: &str,
-    base_revision: &str,
-    created_at: &str,
-) -> Result<UnknownState, EditError> {
-    if let Some(existing) = load_unknown_state(store, revision)? {
-        return Ok(existing);
-    }
-    let mut state = load_unknown_state(store, base_revision)?
-        .unwrap_or_else(|| UnknownState::empty(revision, created_at));
-    state.revision = revision.to_string();
-    state.created_at = created_at.to_string();
-    write_unknown_state(store, &state)?;
-    match load_unknown_state(store, revision)? {
-        Some(state) => Ok(state),
-        None => Ok(state),
-    }
 }
 
 /// Find the revision that a candidate already produced.

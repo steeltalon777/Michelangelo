@@ -116,8 +116,12 @@ Stage D (ADR §13.4) — optional assistant — ✅ **done (IT-7, 2026-11-07)**:
   decision history and idempotent accept; evaluation of the actual new geometry with pinned
   camera/mask/package inputs, visible vs author conditions vs ground truth vs hidden decision,
   per-view 0.01 IoU regression, and a mandatory accept gate with a Core-registered digest.
-  Remaining: unknown resolution/bindings and policy enforcement (IT-8C) and the external-agent
-  demo (replacing a stub via MCP, with a cube control that does not close the unknown).
+  Unknown resolution (IT-8C): versioned bindings, author confirmations, immutable resolutions
+  materialised only by the accepted bundle, partial acceptance (geometry accepted while the
+  unknown stays open), `evidence_stale` invalidation and rollback-restored state; solver-side
+  package policy enforcement (unaccepted AI supplements not applied, forbidden stubs, allowed
+  completion rules, accepted-author precedence). Remaining: the external-agent demo (replacing a
+  stub via MCP, with a cube control that does not close the unknown).
 - Natural language command interpretation — future (needs a provider under the same bounded-task /
   data-policy rules)
 - Build plan validation → `BlenderJobSpec`; iterative refinement as bounded local-change

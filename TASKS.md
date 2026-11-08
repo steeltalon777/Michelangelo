@@ -158,7 +158,7 @@ TZ: `docs/tz/TZ_ASSISTANT_STAGE_D.md` (branch `dev`; evidence in `target/techlea
   (`-32001`), invalid policy stops the server, audit log complete without absolute paths; the
   candidate is applied only by an explicit `michelangelo edit accept` (→ `s0003`).
 
-## Completed — IT-8 hardening: acceptance integrity & evaluation (A/B)
+## Completed — IT-8 hardening: acceptance integrity, evaluation, unknowns (A/B/C)
 
 TZ: `docs/tz/TZ_IT8_ACCEPTANCE_INTEGRITY.md`; contract: `docs/specs/VERIFICATION_STATE.md`;
 evidence in `target/techlead/IT-8/` and `target/techlead/IT-8B/`.
@@ -173,7 +173,16 @@ evidence in `target/techlead/IT-8/` and `target/techlead/IT-8B/`.
   regression, held-out evaluation, mandatory `edit accept --evaluation`, CLI `evaluate`,
   `docs/specs/EVALUATION.md`; 48 tests; real-Blender acceptance reproduced (source mean 0.9584,
   held-out 0.9450); reviewer GREEN after fixes.
-- [ ] T-0803 Unknown resolution/bindings + policy enforcement (IT-8C) and the external-agent demo.
+- [x] T-0803 Unknown resolution/bindings + policy enforcement (IT-8C) — versioned bindings,
+  author confirmations, immutable resolutions (`unknown sync|list|show|bind|confirm|propose|
+  resolve`, `edit accept --resolve`), closure only via the bundle, partial acceptance,
+  `evidence_stale` invalidation, rollback-restored state, part_id-only/unrelated-change refusal,
+  agent-identity refusal; solver `uncertainty_policy` enforcement (`SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED`,
+  `SUPPLEMENT_RULE_NOT_ALLOWED`, `STUB_FORBIDDEN`, accepted-author precedence, `PACKAGE_POLICY_STRICTER`);
+  `assistant task --unknown` + MCP optional `"unknown"`; 19 edit unknown tests + 17 solver policy
+  tests; Lead real e2e partial accept → resolve → invalidation; reviewer GREEN after fixes.
+- [ ] T-0804 External-agent demo (IT-8): a DSH subagent over MCP replaces a stub with a meaningful
+  part; a cube control does not close the unknown; evidence in `target/techlead/IT-8/`.
 
 ## Not yet started
 

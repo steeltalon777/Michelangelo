@@ -159,6 +159,7 @@ fn an_unregistered_evaluation_is_refused() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect_err("the acceptance is refused");
@@ -181,6 +182,7 @@ fn a_tampered_evaluation_is_refused() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect_err("the acceptance is refused");
@@ -201,6 +203,7 @@ fn an_evaluation_of_another_geometry_is_refused() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect_err("the acceptance is refused");
@@ -227,6 +230,7 @@ fn changed_inputs_are_refused() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect_err("the acceptance is refused");
@@ -246,6 +250,7 @@ fn a_failed_visible_result_is_refused() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect_err("the acceptance is refused");
@@ -269,6 +274,7 @@ fn a_failed_author_condition_is_refused() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect_err("the acceptance is refused");
@@ -290,6 +296,7 @@ fn a_regression_is_refused() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect_err("the acceptance is refused");
@@ -316,6 +323,7 @@ fn a_claim_without_a_ground_truth_is_refused() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect_err("the acceptance is refused");
@@ -333,6 +341,7 @@ fn a_registered_evaluation_publishes_the_revision_and_references_it() {
         &fixture.clock(),
         AcceptOptions {
             evaluation: Some(path),
+            ..Default::default()
         },
     )
     .expect("the candidate is accepted");

@@ -321,8 +321,9 @@ impl McpServer {
         match tool {
             TOOL_GET_TASK => {
                 let run_id = required_string(arguments, "run_id")?;
+                let unknown = optional_string(arguments, "unknown")?;
                 let run_dir = self.resolve_run(&run_id)?;
-                let outcome = tools::get_task(&context, &run_dir)
+                let outcome = tools::get_task(&context, &run_dir, unknown.as_deref())
                     .map_err(|error| map_error(error, &self.workspace))?;
                 outcome
                     .to_value()
@@ -539,10 +540,17 @@ fn tool_descriptors() -> [(&'static str, &'static str, Value); 4] {
     [
         (
             TOOL_GET_TASK,
-            "Return the bounded assistant task of a run.",
+            "Return the bounded assistant task of a run. The task can be \
+             narrowed to one unknown of the run.",
             json!({
                 "type": "object",
-                "properties": {"run_id": {"type": "string", "description": "The run identifier."}},
+                "properties": {
+                    "run_id": {"type": "string", "description": "The run identifier."},
+                    "unknown": {
+                        "type": "string",
+                        "description": "The unknown the task is narrowed to."
+                    }
+                },
                 "required": ["run_id"],
                 "additionalProperties": false
             }),
@@ -599,6 +607,24 @@ fn required_string(arguments: &Value, key: &str) -> Result<String, RpcError> {
             ERROR_INVALID_PARAMS,
             format!("the argument '{key}' is missing"),
         )),
+    }
+}
+
+/// An optional string argument (None when the key is absent).
+fn optional_string(arguments: &Value, key: &str) -> Result<Option<String>, RpcError> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => match value.as_str() {
+            Some(text) if !text.trim().is_empty() => Ok(Some(text.to_string())),
+            Some(_) => Err(RpcError::new(
+                ERROR_INVALID_PARAMS,
+                format!("the argument '{key}' is empty"),
+            )),
+            None => Err(RpcError::new(
+                ERROR_INVALID_PARAMS,
+                format!("the argument '{key}' is not a string"),
+            )),
+        },
     }
 }
 

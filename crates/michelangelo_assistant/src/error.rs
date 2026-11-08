@@ -158,6 +158,40 @@ impl From<michelangelo_edit::EditError> for AssistantError {
             michelangelo_edit::EditError::NoGroundTruth { message } => AssistantError::Invalid {
                 message: format!("NO_GROUND_TRUTH: {message}"),
             },
+            // The refusals of the unknown state machine keep their code.
+            michelangelo_edit::EditError::UnknownNotFound { message } => AssistantError::Invalid {
+                message: format!("UNKNOWN_NOT_FOUND: {message}"),
+            },
+            michelangelo_edit::EditError::BindingMissing { message } => AssistantError::Invalid {
+                message: format!("BINDING_MISSING: {message}"),
+            },
+            michelangelo_edit::EditError::ConfirmationMissing { message } => {
+                AssistantError::Invalid {
+                    message: format!("CONFIRMATION_MISSING: {message}"),
+                }
+            }
+            michelangelo_edit::EditError::ResolutionRefused { message } => {
+                AssistantError::Invalid {
+                    message: format!("RESOLUTION_REFUSED: {message}"),
+                }
+            }
+            michelangelo_edit::EditError::BindingMismatch { message } => AssistantError::Invalid {
+                message: format!("BINDING_MISMATCH: {message}"),
+            },
+            michelangelo_edit::EditError::UnknownPolicyViolation { message } => {
+                AssistantError::Invalid {
+                    message: format!("UNKNOWN_POLICY_VIOLATION: {message}"),
+                }
+            }
+            michelangelo_edit::EditError::StubForbidden { message } => AssistantError::Invalid {
+                message: format!("STUB_FORBIDDEN: {message}"),
+            },
+            michelangelo_edit::EditError::AgentConfirmationRefused { message } => {
+                AssistantError::Invalid {
+                    message: format!("AGENT_CONFIRMATION_REFUSED: {message}"),
+                }
+            }
+            michelangelo_edit::EditError::Usage { message } => AssistantError::Invalid { message },
         }
     }
 }

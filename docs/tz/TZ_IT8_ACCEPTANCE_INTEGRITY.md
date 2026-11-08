@@ -398,6 +398,37 @@ Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 
   helper and fake renderer/comparator are public with `testing` precedent (no CLI path reaches
   them), and the binary-only `unreachable!()` is guarded by an exhaustive match.
 
+### IT-8C (unknown resolution and policy enforcement)
+
+- Code: `michelangelo_edit` unknowns/state machine (`unknowns.rs`, `accept --resolve`, bundle
+  refs, invalidation), CLI `unknown sync|list|show|bind|confirm|propose|resolve`, assistant
+  `task --unknown` + MCP optional `"unknown"`, input `policy.rs`, solver
+  `tools/solver/{policy,solve,supplements}.py`; spec `docs/specs/UNKNOWNS.md`.
+- Tests: `crates/michelangelo_edit/tests/unknowns.rs` (19), solver
+  `tools/solver/tests/test_policy.py` (17; python suite 86 OK), assistant task/MCP tests (3+1).
+  Full ladder green: fmt, clippy, workspace tests (815), CLI build.
+- Lead real e2e (`target/techlead/IT-8C/lead_e2e.py`, real Blender on a copy of a proof run):
+  after rollback the unknown is `open`; **partial acceptance** publishes `s0003` and keeps it
+  `open`; `unknown confirm` + `edit accept --resolve` publishes `s0004` with a bundle reference
+  to `r-0002` and the unknown `resolved`; a later candidate that changes the bound `blockout`
+  publishes `s0005` and reopens the unknown as `open` with `reason: evidence_stale`.
+- Solver policy e2e: unaccepted AI supplement is `not_applied` with
+  `SUPPLEMENT_NOT_ACCEPTED_UNRESOLVED` (does not close the unknown), accepted author decision
+  applies it, forbidden stubs report `STUB_FORBIDDEN` and build no stub, disallowed rules are not
+  applied, candidate flags cannot weaken the package (`PACKAGE_POLICY_STRICTER`), package without
+  `uncertainty_policy` keeps Stage B behaviour.
+- Lead fix during verification: a binding without a claim now lets the author confirmation carry
+  the claim (the TZ `bind` form has no mandatory claim); regression test
+  `a_binding_without_a_claim_uses_the_claim_of_the_confirmation` added.
+- Reviewer verdict: **GREEN** (child `3bb78488`, route `xiaomi/mimo-v2.6-pro`). Three low
+  findings fixed before the commit: (1) invalidation now qualifies the solver `detail` instead of
+  leaving text that contradicts the stale state, (2) the input-policy comment now matches the
+  actual gate (`policy_present && require_author_acceptance`; no policy object means Stage B
+  compatibility), (3) a cross-language pin test added for the omitted
+  `require_author_acceptance` default (Rust `true`, Python default already covered). The reviewer
+  could not execute commands (no shell in the preset); the ladder, solver suite and the Lead e2e
+  are the command evidence.
+
 ### Review log
 
 | блок | attempt | reviewer | route | verdict | findings |
@@ -405,4 +436,4 @@ Stage 0 reproduction: `target/techlead/IT-8/audit-reproduction.json` (9/9, exit 
 | Stage 0 | – | – | – | pending | – |
 | A | 1 | child `f21acc57` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | MINOR: refusal history written outside the lock (fixed: lock before evidence); dead exit-code arm (fixed); `kinds ?` (script display only). Lead reproduced 14/14 after fixes. |
 | B | 1 | child `3788f634` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | MINOR: view-order-sensitive pin comparison (fixed + test); regression limit taken from the report (fixed: pinned to 0.01 + test). NITs: public testing helpers/fakes, guarded `unreachable!()` in the binary. Lead reproduced real-Blender evaluation/accept and tamper refusal. |
-| C | – | – | – | pending | – |
+| C | 1 | child `3bb78488` (read-only) | `xiaomi/mimo-v2.6-pro`, preset `reviewer` | GREEN | LOW: stale solver `detail` after invalidation (fixed); doc wording of the no-policy default (fixed); omitted-`require_author_acceptance` default pin test (added). Lead reproduced partial accept → resolve → invalidation with real Blender and the solver policy suite. |

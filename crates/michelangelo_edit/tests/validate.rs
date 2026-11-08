@@ -61,6 +61,7 @@ impl Fixture {
                 ValidationMode::Accept => Some("alice"),
                 ValidationMode::Submit => None,
             },
+            package_policy: None,
         };
         validate(&context, policy)
     }

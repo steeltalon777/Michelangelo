@@ -144,7 +144,7 @@ impl SnapshotManifest {
 pub struct UnknownStateEntry {
     /// The identifier of the unknown.
     pub unknown_id: String,
-    /// The state of the unknown (`open` in IT-8A).
+    /// The state of the unknown (`open`, `stub_pending` or `resolved`).
     pub status: String,
     /// The status the solver reported (traceability only).
     pub solver_status: String,
@@ -154,6 +154,13 @@ pub struct UnknownStateEntry {
     pub reason: Option<String>,
     /// The detail the solver reported.
     pub detail: Option<String>,
+    /// The version of the binding document the unknown is bound to (None when
+    /// it is not bound).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_version: Option<String>,
+    /// The resolution that closed the unknown (None when it is not closed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_id: Option<String>,
 }
 
 /// The immutable state of the unknowns of a scene revision.
@@ -554,11 +561,19 @@ pub fn seed_unknown_state(store: &SceneStore, revision: &str, created_at: &str) 
             .map(|text| text.to_string());
         state.unknowns.push(UnknownStateEntry {
             unknown_id,
-            status: "open".to_string(),
+            // A stub of the solver waits for its resolution: it stays in the
+            // unresolved list until an explicit resolution closes it.
+            status: if solver_status == "stub" {
+                "stub_pending".to_string()
+            } else {
+                "open".to_string()
+            },
             solver_status: solver_status.clone(),
             stub: solver_status == "stub",
             reason: None,
             detail,
+            binding_version: None,
+            resolution_id: None,
         });
     }
     state

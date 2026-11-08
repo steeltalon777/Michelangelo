@@ -81,6 +81,12 @@ pub enum EditCommand {
         /// candidate.
         #[arg(long, value_name = "REPORT")]
         evaluation: Option<PathBuf>,
+        /// The unknown the acceptance resolves.
+        ///
+        /// The option is optional: an acceptance without it accepts the
+        /// geometry and leaves every unknown open (partial acceptance).
+        #[arg(long, value_name = "ID")]
+        resolve: Option<String>,
         /// Print the decision report instead of a human summary.
         #[arg(long)]
         json: bool,
@@ -153,10 +159,12 @@ pub fn execute(command: &EditCommand) -> ExitCode {
             candidate,
             by,
             evaluation,
+            resolve,
             json,
         } => {
             let options = AcceptOptions {
                 evaluation: evaluation.clone(),
+                resolve: resolve.clone(),
             };
             let report = match accept_candidate_with_options(run, candidate, by, &clock, options) {
                 Ok(report) => report,

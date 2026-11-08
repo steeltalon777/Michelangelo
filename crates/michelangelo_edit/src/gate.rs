@@ -30,6 +30,11 @@ pub struct AcceptOptions {
     /// Core registered for the candidate. A candidate without a registered
     /// evaluation can never be accepted.
     pub evaluation: Option<PathBuf>,
+    /// The unknown the acceptance resolves.
+    ///
+    /// The option is optional: an acceptance without it accepts the geometry
+    /// and leaves every unknown open (partial acceptance, contract §7).
+    pub resolve: Option<String>,
 }
 
 /// The evaluation an acceptance is based on.
@@ -136,6 +141,57 @@ pub fn resolve_evaluation(
             })
         }
     }
+}
+
+/// Resolve a registered evaluation by its identifier.
+///
+/// The report must be registered in the registry of the Core and the digest
+/// of the file is re-computed: an unregistered or a tampered report is never
+/// trusted.
+pub fn resolve_evaluation_by_id(
+    store: &SceneStore,
+    evaluation_id: &str,
+) -> Result<EvaluationBinding, EditError> {
+    let registry = load_registry(&store.run_dir).map_err(EditError::from)?;
+    let entry = registry
+        .entry(evaluation_id)
+        .ok_or_else(|| EditError::EvaluationUnregistered {
+            message: format!(
+                "the evaluation '{evaluation_id}' is not registered in the registry of the run"
+            ),
+        })?;
+    let path = store.run_dir.join(&entry.report_path);
+    if !path.is_file() {
+        return Err(EditError::EvaluationMissing {
+            message: format!(
+                "the report of the evaluation '{evaluation_id}' does not exist: {}",
+                path.display()
+            ),
+        });
+    }
+    let sha256 = file_sha256(&path)?;
+    if sha256 != entry.sha256 {
+        return Err(EditError::EvaluationStale {
+            message: format!(
+                "the evaluation report of '{evaluation_id}' carries the digest {sha256} but the registry pins {}",
+                entry.sha256
+            ),
+        });
+    }
+    let report = michelangelo_evidence::report::EvaluationReport::load(&path).map_err(|error| {
+        EditError::EvaluationStale {
+            message: format!(
+                "the report of the evaluation '{evaluation_id}' is not usable: {}",
+                error.message()
+            ),
+        }
+    })?;
+    Ok(EvaluationBinding {
+        evaluation_id: report.evaluation_id.clone(),
+        report_path: entry.report_path.clone(),
+        sha256,
+        report,
+    })
 }
 
 /// Verify the evaluation of an acceptance against the store.

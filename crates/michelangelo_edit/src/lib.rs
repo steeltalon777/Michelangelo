@@ -35,6 +35,7 @@ pub mod gate;
 pub mod obj;
 pub mod policy;
 pub mod scene;
+pub mod unknowns;
 pub mod validate;
 pub mod verification;
 
@@ -51,6 +52,11 @@ pub use policy::{EditPolicy, PolicyDecision};
 pub use scene::{
     init_scene, load_current, load_index, load_scene, CurrentPointer, Scene, SceneComponent,
     SceneStore, SceneVerification,
+};
+pub use unknowns::{
+    bind_unknown, confirm_unknown, list_unknowns, materialize_resolution, propose_resolution,
+    show_unknowns, sync_unknowns, BindingDocument, Confirmation, Resolution, ResolutionMaterial,
+    UnknownBinding, UnknownEntryView, UnknownView,
 };
 pub use validate::{Check, CheckStatus, Decision, DecisionReport, Diagnostic, Severity};
 pub use verification::{
