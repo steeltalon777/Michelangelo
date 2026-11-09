@@ -1,0 +1,194 @@
+{
+  "template_schema": "michelangelo.adr5-poc.template/draft-0",
+  "template_id": "v0_palette_master",
+  "revision": 1,
+  "level": "V0",
+  "description": "V0 Presentation: 3 визуально различимые палитры (enum) на одном source-ассете house_master.glb. Геометрия не изменяется: только set_material по заранее размеченным объектам walls/roof/door. Цвета берутся ТОЛЬКО из таблицы палитр шаблона; свободный RGB через запрос не проходит.",
+  "capabilities_required": [
+    "worker_job",
+    "gltf_export",
+    "blend_save",
+    "material_variation",
+    "scene_summary"
+  ],
+  "sources": [
+    {
+      "source_id": "house_master",
+      "file": "fixtures/house_master.glb",
+      "sha256": "eb985b8d1b2ca388ccc57dae66d342900616258e5b5751e608d058aa2f57d8a5",
+      "role": "base_candidate"
+    }
+  ],
+  "textures": [],
+  "protected_objects": [],
+  "palette_objects": [
+    "walls",
+    "roof",
+    "door"
+  ],
+  "parameters": {
+    "palette_id": {
+      "type": "enum",
+      "values": [
+        "brick-dark",
+        "plaster-warm",
+        "paint-teal"
+      ],
+      "description": "Палитра из таблицы ниже; цвета в линейном RGBA 0..=1"
+    }
+  },
+  "palette_table": {
+    "brick-dark": {
+      "walls": [
+        0.3,
+        0.21,
+        0.17,
+        1.0
+      ],
+      "roof": [
+        0.24,
+        0.18,
+        0.15,
+        1.0
+      ],
+      "door": [
+        0.14,
+        0.1,
+        0.08,
+        1.0
+      ]
+    },
+    "plaster-warm": {
+      "walls": [
+        0.87,
+        0.8,
+        0.68,
+        1.0
+      ],
+      "roof": [
+        0.45,
+        0.3,
+        0.22,
+        1.0
+      ],
+      "door": [
+        0.35,
+        0.22,
+        0.14,
+        1.0
+      ]
+    },
+    "paint-teal": {
+      "walls": [
+        0.16,
+        0.45,
+        0.44,
+        1.0
+      ],
+      "roof": [
+        0.9,
+        0.88,
+        0.84,
+        1.0
+      ],
+      "door": [
+        0.2,
+        0.25,
+        0.28,
+        1.0
+      ]
+    }
+  },
+  "source_bounds": {
+    "min": [
+      -2.2,
+      -1.7,
+      0.0
+    ],
+    "max": [
+      2.2,
+      1.7,
+      2.65
+    ]
+  },
+  "source_counts": {
+    "vertices": 72,
+    "triangles": 36,
+    "note": "scene-side counts for the VARIANT job: glTF round-trip splits cube vertices at UV seams (24 per box, triangulated); the fixture creation scene showed 24/36 before export"
+  },
+  "job_plan": {
+    "base_operations": [
+      {
+        "op": "import_mesh",
+        "path": "inputs/house_master.glb"
+      },
+      {
+        "op": "get_scene_summary"
+      },
+      {
+        "op": "set_material",
+        "object": "walls",
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "op": "set_material",
+        "object": "roof",
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "op": "set_material",
+        "object": "door",
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "op": "get_scene_summary"
+      }
+    ],
+    "component_blocks": {},
+    "tail_operations": [
+      {
+        "op": "save_blend",
+        "path": "outputs/@stem@/variant.blend"
+      },
+      {
+        "op": "export_glb",
+        "path": "outputs/@stem@/variant.glb"
+      }
+    ]
+  },
+  "slots": [
+    {
+      "op_index": 2,
+      "field": "color",
+      "source": "palette",
+      "target_object": "walls"
+    },
+    {
+      "op_index": 3,
+      "field": "color",
+      "source": "palette",
+      "target_object": "roof"
+    },
+    {
+      "op_index": 4,
+      "field": "color",
+      "source": "palette",
+      "target_object": "door"
+    }
+  ]
+}

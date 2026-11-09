@@ -1,0 +1,24 @@
+{
+  "registry_schema": "michelangelo.adr5-poc.template-registry/draft-0",
+  "note": "Registered templates for the GLM-5 PoC. sha256 pins the template file bytes under digest_rule 'sha256-lf' (SHA-256 over CRLF->LF normalized bytes), so the pin equals the git blob of the text file and survives CRLF/LF checkouts; the executor refuses a template whose bytes do not match (TEMPLATE_HASH_MISMATCH). Binary fixtures are pinned by raw bytes. Data-only manifests: the registry loader rejects code vectors (F10).",
+  "templates": [
+    {
+      "template_id": "v0_palette_master",
+      "file": "v0_palette_master.json",
+      "sha256": "6d080a13d1676bee29dbaf45578ea5189abff604441672afd45b34a63248ddef",
+      "digest_rule": "sha256-lf"
+    },
+    {
+      "template_id": "v0_textured_probe",
+      "file": "v0_textured_probe.json",
+      "sha256": "7791381f77b85e7713624e08f8120eaf7eab8d3a17500aa01c47cc81925e45f1",
+      "digest_rule": "sha256-lf"
+    },
+    {
+      "template_id": "v1_roof_assembly",
+      "file": "v1_roof_assembly.json",
+      "sha256": "4a1c21c2ceafd86686ee35777e2d5810bdb693c0a4b0dd2862f52fdad5c9084b",
+      "digest_rule": "sha256-lf"
+    }
+  ]
+}

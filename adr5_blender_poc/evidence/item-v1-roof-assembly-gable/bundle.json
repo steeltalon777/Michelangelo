@@ -1,0 +1,61 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "variant_blend",
+      "content_kind": "other",
+      "path": "outputs/v1_roof_assembly_gable/variant.blend",
+      "sha256": "d8016bf7c5797782af286b5f3751e517395a226096416db2cc3f1e0441b787d6",
+      "size_bytes": 91579,
+      "source": "generated"
+    },
+    {
+      "artifact_id": "variant_glb",
+      "content_kind": "scene_layout",
+      "path": "outputs/v1_roof_assembly_gable/variant.glb",
+      "sha256": "ccbfdd8b8315601619fde5f689c2c0e8afa1505ab89f1ebd91edfb949b498b71",
+      "size_bytes": 4912,
+      "source": "generated"
+    }
+  ],
+  "asset_digest": "3e061f3456f9334687675bd88f85459cfd0bb2514187290c660077833aeef54e",
+  "asset_id": "v1-walls-roof-assembly",
+  "base_ref": {
+    "id": "walls_module",
+    "kind": "source_snapshot",
+    "sha256": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e"
+  },
+  "candidate_id": "cand-item-v1-roof-assembly-gable",
+  "created_at": "2026-11-08T14:05:45Z",
+  "dependency_digests": {
+    "template_file": "a47aa9ea89c980ad9c72e9a4d840e46a8644c22bd46339911e5cee568492d731",
+    "walls_module": "a2111677d1298c438db21206aaa29dc04bc8ebaef5a018693ea5150a7cd2200e",
+    "worker_blender_py": "9c7c24f3311aa0a5cdc168ff0b5d336067ce6c4200d6b2b3ac6f17e53cb96ee3"
+  },
+  "diff_to_base": {
+    "added": [
+      "variant_blend",
+      "variant_glb"
+    ],
+    "changed": [],
+    "removed": []
+  },
+  "item_id": "item-v1-roof-assembly-gable",
+  "provenance_chain": [
+    {
+      "actor_role": "core",
+      "ref": {
+        "path": "adr5_blender_poc/templates/v1_roof_assembly.json",
+        "sha256": "a47aa9ea89c980ad9c72e9a4d840e46a8644c22bd46339911e5cee568492d731"
+      },
+      "stage": "variant_generation"
+    }
+  ],
+  "schema": "michelangelo.candidate-asset-bundle/draft-0.1",
+  "status": "proposed",
+  "unresolved_issues": [
+    "PoC: appearance is verified only via glTF baseColorFactor of the exported GLB; no EEVEE/Cycles render validation was performed",
+    "No UE readiness is claimed: no engine import/playback validation exists",
+    "--factory-startup is not a sandbox; only known trusted fixtures were loaded, no untrusted .blend intake is supported",
+    "V1 socket compatibility is verified statically from registered template data plus a planned-bounds runtime check; not a physics/fit simulation"
+  ]
+}
