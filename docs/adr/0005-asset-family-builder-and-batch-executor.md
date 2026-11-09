@@ -589,3 +589,16 @@ GUI automation для CLI-first объёма не требуется. UE smoke �
 P3-мелочи (косметика/документация, перечень в отчётах delta-review): пин негативных фикстур по сообщению, breadth тестов тегов/маркера, четвёртая digest-конвенция `sha256-lf` (включить в таблицу §9.7 отчёта DSH), явная фиксация остаточных LOW-4..7 blender, судьба контрольного снимка smoke, doc-контракт `insert_attempt`, зарезервированные имена Windows, суффикс-коллизии orphan.
 
 **Статус:** P0/P1 волны 1 закрыты; ветки PoC-готовы к интеграции. Далее по решению владельца: merge веток в `dev`, merged-tip регрессия, push. Contract freeze схем draft-0.1 — после закрытия P2-остатков; миграция provisional-тегов family и digest-таблица — раунд 2.
+
+### Интеграция в `dev` (2026-11-09, по мере готовности; решение владельца)
+
+Смержены (порядок `07_INTEGRATION_AND_REVIEW.md`, `--no-ff`, после fix-раунда и delta-review PASS):
+
+| Поток | Merge-коммит |
+|---|---|
+| Contracts | `272069a` |
+| Intake | `9c58d87` |
+| Family | `595f1eb` |
+| Blender | `3774cb6` |
+
+Merged-tip регрессия (частичная, на момент четырёх веток): корневой workspace `cargo test --workspace` green (существующие крейты не затронуты); standalone `adr5-lanes/intake` и `crates/michelangelo_family` green на merged-tip. Batch и Validation интегрируются после закрытия их P2-остатков (fix в работе). Push — только с явного разрешения владельца.
