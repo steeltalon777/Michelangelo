@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/recipe_lock.schema.json",
+  "title": "Michelangelo recipe lock draft 0.1",
+  "description": "michelangelo.recipe-lock/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). Exact dependency hashes, tool/template versions, pinned profile/policy digests and the PRNG algorithm fixed before execution. Floating 'latest' never enters an executable plan; changing any dependency creates a new lock.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "lock_id", "created_at", "recipe_ref", "dependencies", "tool_versions", "prng", "floating_latest_allowed"],
+  "properties": {
+    "schema": { "const": "michelangelo.recipe-lock/draft-0.1" },
+    "lock_id": { "$ref": "#/$defs/idToken" },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "recipe_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recipe_id", "revision", "recipe_sha256"],
+      "properties": {
+        "recipe_id": { "$ref": "#/$defs/idToken" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "recipe_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dep_id", "revision", "sha256"],
+        "properties": {
+          "dep_id": { "$ref": "#/$defs/token32" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "kind": { "$ref": "#/$defs/contentKind" }
+        }
+      }
+    },
+    "tool_versions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^(?![Ll][Aa][Tt][Ee][Ss][Tt]$).+"
+      },
+      "description": "At least 'blender' and 'michelangelo'; exact versions, no ranges. The floating value 'latest' (any case) is rejected here, not only via the flag: floating_latest_allowed is the constant false, so floating versions can never enter an executable plan (ADR 0005 section 5.2)."
+    },
+    "prng": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "derivation_version"],
+      "properties": {
+        "algorithm": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "derivation_version": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "pinned_profiles": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "style_profile_sha256": { "$ref": "#/$defs/sha256" },
+        "validation_profile_sha256": { "$ref": "#/$defs/sha256" },
+        "approval_policy_sha256": { "$ref": "#/$defs/sha256" },
+        "skeleton_profile_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "declared_settings": {
+      "type": ["object", "null"],
+      "description": "Explicit map of pinned render/export/platform settings relevant to reproducibility; keys are setting names, values are their pinned spellings.",
+      "additionalProperties": { "type": "string", "maxLength": 256 }
+    },
+    "floating_latest_allowed": { "const": false }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "contentKind": {
+      "enum": ["geometry", "material", "texture", "rig_definition", "animation", "scene_layout", "node_group", "linked_library", "metadata", "other"]
+    }
+  }
+}

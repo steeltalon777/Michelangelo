@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/validation_report.schema.json",
+  "title": "Michelangelo validation report draft 0.1",
+  "description": "michelangelo.validation-report/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). Measurements only, never a decision. Immutable, registered no-clobber by the Core with a computed digest; hashes are over actually read bytes. Result values pass/fail/unavailable/not_required are scoped to THIS schema: 'not_required' does not exist in the IT-8 evaluation enum and must never be back-ported there; it is legal only with an applicability justification from the profile.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "report_id", "created_at", "bundle_ref", "profile_ref", "input_digests", "checks", "verdict", "evaluator_versions"],
+  "properties": {
+    "schema": { "const": "michelangelo.validation-report/draft-0.1" },
+    "report_id": { "$ref": "#/$defs/idToken" },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "bundle_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "sha256"],
+      "properties": {
+        "kind": { "enum": ["candidate_asset_bundle", "asset_revision", "source_snapshot"] },
+        "id": { "$ref": "#/$defs/idToken" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "profile_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "revision", "profile_sha256"],
+      "properties": {
+        "profile_id": { "$ref": "#/$defs/idToken" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "profile_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "input_digests": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/relPath" },
+      "additionalProperties": { "$ref": "#/$defs/sha256" },
+      "description": "Digests of the bytes actually read for this evaluation (IT-8D D1.2 rule); a changed input after the report is VALIDATION_INPUT_CHANGED."
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check_id", "result"],
+        "properties": {
+          "check_id": { "$ref": "#/$defs/checkId" },
+          "result": { "enum": ["pass", "fail", "unavailable", "not_required"] },
+          "value": { "type": ["number", "null"] },
+          "detail": { "type": ["string", "null"], "maxLength": 1000 },
+          "applicability_ref": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Mandatory when result is 'not_required': points at the profile applicability condition that exempts this check."
+          },
+          "evidence": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/docRef" } }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "result": { "const": "not_required" } },
+              "required": ["result"]
+            },
+            "then": {
+              "required": ["applicability_ref"],
+              "properties": { "applicability_ref": { "type": "string", "minLength": 1 } }
+            },
+            "description": "Per check: every not_required check must carry a non-empty applicability_ref pointing at the profile applicability condition; not_required without an applicability justification masks unavailable."
+          }
+        ]
+      }
+    },
+    "verdict": {
+      "enum": ["pass", "fail", "unavailable"],
+      "description": "Fold: any fail -> fail; else any unavailable -> unavailable; else pass. 'not_required' is never a verdict. Missing ground truth is unavailable, never a pass."
+    },
+    "evaluator_versions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 128 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "relPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Workspace-relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "docRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "checkId": {
+      "enum": ["payload_integrity", "dependency_closure", "path_containment", "asset_digest_full", "budget_geometry", "protected_roles", "connector_compatibility", "minimum_clearance", "maximum_dimension", "material_presence", "texture_integrity", "export_roundtrip", "uv_preservation", "rig_bindings", "animation_clips", "silhouette_conformance", "style_review", "format_loss_declared"],
+      "description": "Closed check_id registry v0.1 (CONTRACT_GATE.md section 6)."
+    }
+  }
+}

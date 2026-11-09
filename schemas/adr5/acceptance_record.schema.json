@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/acceptance_record.schema.json",
+  "title": "Michelangelo acceptance record draft 0.1",
+  "description": "michelangelo.acceptance-record/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). An author decision document, separate from measurements. Binds exactly one candidate bundle digest to one registered validation report digest. There is no 'approved: true' input field anywhere on the wire: self-reported approval never authorizes acceptance. The record scopes a single candidate digest, never a whole family.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "record_id", "created_at", "decision", "target", "basis", "actor"],
+  "properties": {
+    "schema": { "const": "michelangelo.acceptance-record/draft-0.1" },
+    "record_id": { "$ref": "#/$defs/idToken" },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "decision": { "enum": ["accepted", "rejected"] },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "candidate_id", "bundle_sha256", "asset_id", "expected_current_revision"],
+      "properties": {
+        "kind": { "const": "candidate_asset_bundle" },
+        "candidate_id": { "$ref": "#/$defs/idToken" },
+        "bundle_sha256": { "$ref": "#/$defs/sha256" },
+        "asset_id": { "$ref": "#/$defs/idToken" },
+        "expected_current_revision": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "null = create with no-clobber; a value = compare-and-swap against the current revision of this identity under lock."
+        }
+      }
+    },
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validation_report_sha256", "report_registered", "profile_sha256"],
+      "properties": {
+        "validation_report_sha256": { "$ref": "#/$defs/sha256" },
+        "report_registered": { "const": true, "description": "The referenced report must be registered in the no-clobber registry before the decision; the digest is recomputed." },
+        "profile_sha256": { "$ref": "#/$defs/sha256" },
+        "policy_refs": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/docRef" } },
+        "reason": { "type": ["string", "null"], "maxLength": 2000 }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Audit attribution only, not authentication or OS-user separation (ADR 0005 section 13)." },
+        "role": { "enum": ["owner", "delegate"] }
+      }
+    },
+    "scope_note": {
+      "type": ["string", "null"],
+      "maxLength": 1000,
+      "description": "Optional human note; it never widens the decision beyond the single bundle digest."
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "docRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "relPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Workspace-relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    }
+  }
+}

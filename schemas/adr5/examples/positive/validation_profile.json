@@ -1,0 +1,22 @@
+{
+  "schema": "michelangelo.validation-profile/draft-0.1",
+  "profile_id": "urban-house-validation",
+  "revision": 1,
+  "created_at": "2026-11-08T12:22:00Z",
+  "kind": "family_static",
+  "applies_to": {
+    "targets": ["candidate_asset_bundle"],
+    "export_targets": ["blend", "glb"],
+    "conditions": ["applies to urban-house-family variants only"]
+  },
+  "required_checks": ["payload_integrity", "dependency_closure", "path_containment", "asset_digest_full", "protected_roles", "connector_compatibility", "export_roundtrip"],
+  "optional_checks": ["uv_preservation", "material_presence"],
+  "thresholds": [
+    { "check_id": "maximum_dimension", "metric": "bbox_z_m", "comparison": "le", "value": 20.0 }
+  ],
+  "references": {
+    "reference_digests": { "master_silhouette": "b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5" }
+  },
+  "evaluator_versions": { "michelangelo_validation": "adr5-draft-0.1" },
+  "coverage_notes": "silhouette_conformance intentionally not applied: family variants intentionally change the silhouette (ADR 0005 section 8.1)"
+}

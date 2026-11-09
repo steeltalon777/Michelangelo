@@ -1,0 +1,21 @@
+{
+  "schema": "michelangelo.acceptance-record/draft-0.1",
+  "record_id": "urban-house-v-001-acc-0001",
+  "created_at": "2026-11-08T15:00:00Z",
+  "decision": "accepted",
+  "target": {
+    "kind": "candidate_asset_bundle",
+    "candidate_id": "urban-house-v-001-cand",
+    "bundle_sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+    "asset_id": "urban-house-v-001",
+    "expected_current_revision": null
+  },
+  "basis": {
+    "validation_report_sha256": "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+    "report_registered": true,
+    "profile_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+    "policy_refs": [ { "path": "families/urban-house/policy-1.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888" } ],
+    "reason": "visual review passed for this variant; scope is this single bundle digest"
+  },
+  "actor": { "name": "max", "role": "owner" }
+}

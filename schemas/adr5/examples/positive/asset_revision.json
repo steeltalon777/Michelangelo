@@ -1,0 +1,27 @@
+{
+  "schema": "michelangelo.asset-revision/draft-0.1",
+  "asset_id": "urban-house-master",
+  "revision": 1,
+  "revision_id": "urban-house-master-r1",
+  "created_at": "2026-11-08T12:10:00Z",
+  "origin": {
+    "kind": "source_snapshot",
+    "snapshot_ref": {
+      "snapshot_id": "house-master-src",
+      "snapshot_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
+  },
+  "artifacts": [
+    { "artifact_id": "body_geometry", "path": "assets/urban-house-master/r1/body.glb", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "size_bytes": 48213344, "content_kind": "geometry", "component_id": "body" },
+    { "artifact_id": "body_material", "path": "assets/urban-house-master/r1/body.materials.json", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "size_bytes": 4096, "content_kind": "material", "component_id": "body" },
+    { "artifact_id": "layout", "path": "assets/urban-house-master/r1/scene_layout.json", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "size_bytes": 512, "content_kind": "scene_layout" }
+  ],
+  "components": [
+    { "component_id": "body", "role": "facade", "protected": false }
+  ],
+  "parents": [],
+  "asset_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "validation_refs": [],
+  "unknowns": [],
+  "notes": ["v0.1 example: material and scene_layout are separate artifacts so their changes cannot hide behind a geometry hash"]
+}

@@ -1,0 +1,32 @@
+{
+  "schema": "michelangelo.batch-plan/draft-0.1",
+  "batch_id": "cyclic-batch",
+  "plan_revision": 1,
+  "created_at": "2026-11-08T12:35:00Z",
+  "creator": { "role": "agent", "name": "helper" },
+  "source_kind": "independent_items",
+  "items": [
+    {
+      "item_id": "item-a",
+      "source_kind": "independent_asset",
+      "asset_input": { "snapshot_id": "snap-a", "snapshot_sha256": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0" },
+      "resolved_parameters": {},
+      "input_fingerprints": { "snap_a": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0" },
+      "depends_on_items": ["item-b"],
+      "output_namespace": "batches/cyclic-batch/a",
+      "max_attempts": 1
+    },
+    {
+      "item_id": "item-b",
+      "source_kind": "independent_asset",
+      "asset_input": { "snapshot_id": "snap-b", "snapshot_sha256": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1" },
+      "resolved_parameters": {},
+      "input_fingerprints": { "snap_b": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1" },
+      "depends_on_items": ["item-a"],
+      "output_namespace": "batches/cyclic-batch/b",
+      "max_attempts": 1
+    }
+  ],
+  "limits": { "admission_profile": "single_heavy_process_v0", "max_parallel_heavy": 1 },
+  "cycle_check": { "checked": false, "acyclic": false, "roots": [] }
+}

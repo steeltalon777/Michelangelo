@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/preparation_plan.schema.json",
+  "title": "Michelangelo preparation plan draft 0.1",
+  "description": "michelangelo.preparation-plan/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). Explicit allowed changes and preservation requirements for an optional preparation of a source snapshot. Absent plan means no changes, never 'improve automatically'. Hidden remesh/retopo/decimation are not permitted kinds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "plan_id", "created_at", "snapshot_ref", "changes", "preservation", "declared_losses", "tool_versions"],
+  "properties": {
+    "schema": { "const": "michelangelo.preparation-plan/draft-0.1" },
+    "plan_id": { "$ref": "#/$defs/idToken" },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "snapshot_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot_id", "snapshot_sha256"],
+      "properties": {
+        "snapshot_id": { "$ref": "#/$defs/idToken" },
+        "snapshot_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "changes": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["change_id", "kind", "target", "tool"],
+        "properties": {
+          "change_id": { "$ref": "#/$defs/token32" },
+          "kind": {
+            "enum": ["axis_conversion", "unit_normalization", "component_rename", "material_reassignment", "metadata_annotation", "uv_repack", "texture_relink", "cleanup_orphan_data"],
+            "description": "Closed v0.1 set. Geometry-rewriting kinds (remesh, retopo, decimation, repair) are intentionally absent; they require a new contract revision."
+          },
+          "target": { "type": "string", "minLength": 1, "maxLength": 200, "description": "component_id, role or '*' for the whole asset." },
+          "tool": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "params": {
+            "type": ["object", "null"],
+            "minProperties": 1,
+            "description": "Typed tool parameters; the required members depend on the change kind."
+          },
+          "before_sha256": { "$ref": "#/$defs/sha256" },
+          "after_sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "preservation": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "enum": ["geometry", "uv", "materials", "textures", "rig", "animation", "morphs", "node_groups", "hierarchy", "component_ids"] }
+    },
+    "declared_losses": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "detail"],
+        "properties": {
+          "kind": { "$ref": "#/$defs/token32" },
+          "detail": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    },
+    "tool_versions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "maxLength": 128 }
+    },
+    "budgets": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "max_duration_seconds": { "type": "integer", "minimum": 1 },
+        "max_output_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": { "enum": ["human", "ai_author", "computed"] },
+        "detail": { "type": ["string", "null"], "maxLength": 1000 }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" }
+  }
+}

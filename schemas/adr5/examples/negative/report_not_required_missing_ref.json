@@ -1,0 +1,16 @@
+{
+  "schema": "michelangelo.validation-report/draft-0.1",
+  "report_id": "urban-house-v-001-ev-unjustified",
+  "created_at": "2026-11-09T09:10:00Z",
+  "bundle_ref": { "kind": "candidate_asset_bundle", "id": "urban-house-v-001-cand", "sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4" },
+  "profile_ref": { "profile_id": "urban-house-validation", "revision": 1, "profile_sha256": "7777777777777777777777777777777777777777777777777777777777777777" },
+  "input_digests": {
+    "batches/urban-house-batch-1/v-001/bundle/body.glb": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+  },
+  "checks": [
+    { "check_id": "payload_integrity", "result": "not_required", "applicability_ref": "profile applicability: payload_integrity optional for passthrough_preservation" },
+    { "check_id": "dependency_closure", "result": "not_required" }
+  ],
+  "verdict": "pass",
+  "evaluator_versions": { "michelangelo_validation": "adr5-draft-0.1" }
+}

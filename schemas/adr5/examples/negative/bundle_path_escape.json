@@ -1,0 +1,16 @@
+{
+  "schema": "michelangelo.candidate-asset-bundle/draft-0.1",
+  "candidate_id": "escape-cand",
+  "status": "proposed",
+  "created_at": "2026-11-08T13:40:00Z",
+  "asset_id": "escape-asset",
+  "expected_current_revision": null,
+  "artifacts": [
+    { "artifact_id": "evil_geometry", "path": "../../outside/mesh.glb", "sha256": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0", "size_bytes": 100, "content_kind": "geometry" }
+  ],
+  "dependency_digests": { "dep": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1" },
+  "asset_digest": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+  "provenance_chain": [
+    { "stage": "variant_generation", "ref": { "path": "batches/x/bundle.json", "sha256": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3" } }
+  ]
+}

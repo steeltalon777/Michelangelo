@@ -1,0 +1,29 @@
+{
+  "schema": "michelangelo.candidate-asset-bundle/draft-0.1",
+  "candidate_id": "urban-house-v-001-cand",
+  "status": "proposed",
+  "created_at": "2026-11-08T13:40:00Z",
+  "asset_id": "urban-house-v-001",
+  "expected_current_revision": null,
+  "base_ref": { "kind": "asset_revision", "id": "urban-house-master-r1", "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+  "recipe_ref": { "recipe_id": "urban-house-family", "revision": 1, "recipe_lock_digest": "abababababababababababababababababababababababababababababababab" },
+  "item_id": "urban-house-v-001",
+  "artifacts": [
+    { "artifact_id": "body_geometry", "path": "batches/urban-house-batch-1/v-001/bundle/body.glb", "sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", "size_bytes": 51200000, "content_kind": "geometry", "component_id": "body", "source": "generated" },
+    { "artifact_id": "body_material", "path": "batches/urban-house-batch-1/v-001/bundle/body.materials.json", "sha256": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", "size_bytes": 4096, "content_kind": "material", "component_id": "body", "source": "generated" },
+    { "artifact_id": "facade_texture", "path": "shared/textures/facade.png", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "size_bytes": 1048576, "content_kind": "texture", "source": "shared" },
+    { "artifact_id": "layout", "path": "batches/urban-house-batch-1/v-001/bundle/scene_layout.json", "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3", "size_bytes": 512, "content_kind": "scene_layout", "source": "generated" }
+  ],
+  "diff_to_base": { "changed": ["body_material"], "added": [], "removed": [] },
+  "parents": [
+    { "asset_id": "urban-house-master", "revision": 1, "revision_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "relation": "base" }
+  ],
+  "dependency_digests": { "facade_texture": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "facade_kit": "5555555555555555555555555555555555555555555555555555555555555555" },
+  "asset_digest": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+  "provenance_chain": [
+    { "stage": "intake", "ref": { "path": "sources/house-master/snapshot.json", "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" }, "at": "2026-11-08T12:00:00Z", "actor_role": "core" },
+    { "stage": "recipe_lock", "ref": { "path": "families/urban-house/lock-1.json", "sha256": "abababababababababababababababababababababababababababababababab" }, "at": "2026-11-08T12:25:00Z", "actor_role": "core" },
+    { "stage": "variant_generation", "ref": { "path": "batches/urban-house-batch-1/v-001/bundle/bundle.json", "sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4" }, "at": "2026-11-08T13:40:00Z", "actor_role": "core" }
+  ],
+  "unresolved_issues": []
+}

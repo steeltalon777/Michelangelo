@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/variant_request.schema.json",
+  "title": "Michelangelo variant request draft 0.1",
+  "description": "michelangelo.variant-request/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). One stable item of a family: item_id independent of launch order, full resolved parameter values, seed, target purpose and export. Carries no scope/capabilities/validation fields by construction: it cannot widen the recipe or workspace scope.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "item_id", "created_at", "recipe_ref", "recipe_lock_digest", "parameters", "purpose"],
+  "properties": {
+    "schema": { "const": "michelangelo.variant-request/draft-0.1" },
+    "item_id": { "$ref": "#/$defs/idToken" },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "recipe_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recipe_id", "revision", "recipe_sha256"],
+      "properties": {
+        "recipe_id": { "$ref": "#/$defs/idToken" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "recipe_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "recipe_lock_digest": { "$ref": "#/$defs/sha256" },
+    "parameters": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": { "$ref": "#/$defs/token32" },
+      "additionalProperties": { "type": ["integer", "number", "boolean", "string"] },
+      "description": "The complete allowed value set; completeness against the recipe parameters and range/compatibility checks are validator duties (PARAMETER_INVALID), not schema duties."
+    },
+    "seed": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "null means derive from (recipe_lock_digest, item_id) per the locked PRNG; an explicit seed is recorded, it does not replace the derivation version."
+    },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "export_targets": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": { "enum": ["blend", "glb"] }
+    },
+    "notes": { "type": ["string", "null"], "maxLength": 1000 }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" }
+  }
+}

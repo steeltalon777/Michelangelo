@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/source_set.schema.json",
+  "title": "Michelangelo source set draft 0.1",
+  "description": "michelangelo.source-set/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). Immutable list of source revisions with roles and allowed usage, alignment/correspondence profile references, author constraints and explicit conflict policy. Held-out resources are separated from generator/agent inputs. File order never implies priority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source_set_id", "revision", "created_at", "sources", "conflict_policy"],
+  "properties": {
+    "schema": { "const": "michelangelo.source-set/draft-0.1" },
+    "source_set_id": { "$ref": "#/$defs/idToken" },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "asset_id", "manifest_ref", "roles", "usage"],
+        "properties": {
+          "source_id": { "$ref": "#/$defs/token32" },
+          "asset_id": { "$ref": "#/$defs/idToken" },
+          "manifest_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "id", "sha256"],
+            "properties": {
+              "kind": { "enum": ["source_snapshot", "asset_revision"] },
+              "id": { "$ref": "#/$defs/idToken" },
+              "sha256": { "$ref": "#/$defs/sha256" }
+            }
+          },
+          "roles": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 6,
+            "uniqueItems": true,
+            "items": {
+              "enum": ["base_candidate", "module_donor", "variation_exemplar", "style_reference", "geometric_constraint_reference", "independent_validation_reference"]
+            }
+          },
+          "usage": { "enum": ["build_input", "reference_only", "held_out"] },
+          "allowed_parts": {
+            "type": "array",
+            "maxItems": 64,
+            "items": { "$ref": "#/$defs/token32" },
+            "description": "Explicit parts a donor may contribute; absence of a part grant is not a permission."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "roles": { "contains": { "const": "independent_validation_reference" } } },
+              "required": ["roles"]
+            },
+            "then": { "properties": { "usage": { "const": "held_out" } } },
+            "description": "Per source (ADR 0005 section 4.4): every source carrying the independent_validation_reference role must have usage=held_out, so it can never simultaneously feed the generator."
+          },
+          {
+            "if": {
+              "properties": { "usage": { "const": "held_out" } },
+              "required": ["usage"]
+            },
+            "then": {
+              "properties": { "roles": { "items": { "const": "independent_validation_reference" } } }
+            },
+            "description": "Per source (ADR 0005 section 5.2): a held_out source may carry only independent_validation_reference; held-out resources are separated from every build/reference role (any other role would leak it into generator inputs)."
+          }
+        ]
+      }
+    },
+    "alignment_profile_ref": { "$ref": "#/$defs/docRef" },
+    "correspondence_profiles": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/docRef" }
+    },
+    "conflict_policy": {
+      "enum": ["require_explicit_resolution", "reject_conflict"],
+      "description": "No silent averaging: contradictions require an explicit author resolution or a refused dependent item (ADR 0005 section 4.4)."
+    },
+    "author_constraints": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["area", "constraint"],
+        "properties": {
+          "area": { "$ref": "#/$defs/token32" },
+          "constraint": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "docRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "relPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Workspace-relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    }
+  }
+}

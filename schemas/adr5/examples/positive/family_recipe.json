@@ -1,0 +1,57 @@
+{
+  "schema": "michelangelo.family-recipe/draft-0.1",
+  "recipe_id": "urban-house-family",
+  "revision": 1,
+  "created_at": "2026-11-08T12:20:00Z",
+  "source_set_ref": { "source_set_id": "urban-house-sources", "revision": 1, "sha256": "3333333333333333333333333333333333333333333333333333333333333333" },
+  "style_profile_ref": { "id": "northern-port-style", "revision": 2, "sha256": "4444444444444444444444444444444444444444444444444444444444444444" },
+  "dependencies": [
+    { "id": "facade_kit", "revision": 3, "sha256": "5555555555555555555555555555555555555555555555555555555555555555" },
+    { "id": "source_alignment", "revision": 1, "sha256": "cccc2222cccc2222cccc2222cccc2222cccc2222cccc2222cccc2222cccc2222" },
+    { "id": "house_generator", "revision": 2, "sha256": "6666666666666666666666666666666666666666666666666666666666666666" },
+    { "id": "house_validation", "revision": 1, "sha256": "7777777777777777777777777777777777777777777777777777777777777777" },
+    { "id": "family_owner_policy", "revision": 1, "sha256": "8888888888888888888888888888888888888888888888888888888888888888" }
+  ],
+  "coordinates": { "unit": "m", "up_axis": "Z" },
+  "parameters": {
+    "floors": { "type": "integer", "min": 2, "max": 5, "default": 3 },
+    "bays": { "type": "integer", "min": 3, "max": 7 },
+    "roof": { "type": "enum", "values": ["gable", "hip"] },
+    "palette": { "type": "enum", "values": ["brick-dark", "plaster-warm"] },
+    "wear": { "type": "number", "min": 0.0, "max": 0.35 }
+  },
+  "generator": {
+    "kind": "registered_blender_template_v0",
+    "template_ref": "house_generator",
+    "capabilities": ["module_assembly", "material_variation"],
+    "parameter_bindings": {
+      "floors": "facade.floor_count",
+      "bays": "facade.bay_count",
+      "roof": "roof.module_choice",
+      "palette": "materials.palette_choice",
+      "wear": "materials.wear_amount"
+    }
+  },
+  "scope": {
+    "allowed_roles": ["facade", "roof", "ornaments", "materials"],
+    "protected_roles": ["entry-anchor"],
+    "allow_arbitrary_code": false
+  },
+  "constraints": [
+    { "id": "module_fit", "kind": "connector_compatibility", "profile_ref": "wall_sockets" },
+    { "id": "entrance", "kind": "minimum_clearance", "role": "entrance", "value_m": 1.2 },
+    { "id": "height", "kind": "maximum_dimension", "axis": "Z", "value_m": 20.0 }
+  ],
+  "randomness": { "algorithm": "sha256_counter_v0", "derivation_version": "adr5-v0.1", "default_seed": 1742, "per_item_seed": "from_locked_recipe_and_stable_item_id" },
+  "validation": {
+    "profile_ref": { "profile_id": "urban-house-validation", "revision": 1, "sha256": "7777777777777777777777777777777777777777777777777777777777777777" },
+    "required_checks": ["payload_integrity", "protected_roles", "connector_compatibility", "export_roundtrip"],
+    "visual_review": "per_variant"
+  },
+  "approval": {
+    "policy_ref": { "id": "family-owner-policy", "revision": 1, "sha256": "8888888888888888888888888888888888888888888888888888888888888888" },
+    "new_agent_design": "explicit_owner_decision"
+  },
+  "budget": { "max_items_per_plan": 30, "max_evaluated_triangles_per_item": 250000 },
+  "outputs": { "editable": "blend", "exchange": "glb" }
+}

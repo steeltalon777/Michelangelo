@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/validation_profile.schema.json",
+  "title": "Michelangelo validation profile draft 0.1",
+  "description": "michelangelo.validation-profile/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). Applicability, required/optional checks from the closed check_id registry, thresholds and evaluator versions, fixed BEFORE generation. An unknown mandatory check blocks acceptance (VALIDATION_UNKNOWN_REQUIRED). A weaker profile cannot be self-selected by an agent to authorize publication.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "profile_id", "revision", "created_at", "kind", "applies_to", "required_checks", "optional_checks", "evaluator_versions"],
+  "properties": {
+    "schema": { "const": "michelangelo.validation-profile/draft-0.1" },
+    "profile_id": { "$ref": "#/$defs/idToken" },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "kind": {
+      "enum": ["reconstruction", "passthrough_preservation", "family_static", "family_rig_compatible", "anatomy_change"],
+      "description": "ADR 0005 section 8.1 profile kinds."
+    },
+    "applies_to": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targets"],
+      "properties": {
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "enum": ["candidate_asset_bundle", "asset_revision", "source_snapshot"] }
+        },
+        "export_targets": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "enum": ["blend", "glb"] } },
+        "conditions": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
+      }
+    },
+    "required_checks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/checkId" }
+    },
+    "optional_checks": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/checkId" }
+    },
+    "thresholds": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check_id", "metric", "comparison", "value"],
+        "properties": {
+          "check_id": { "$ref": "#/$defs/checkId" },
+          "metric": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "comparison": { "enum": ["le", "ge", "eq"] },
+          "value": { "type": "number" }
+        }
+      }
+    },
+    "references": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "reference_digests": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/token32" },
+          "additionalProperties": { "$ref": "#/$defs/sha256" }
+        },
+        "skeleton_profile_sha256": { "$ref": "#/$defs/sha256" },
+        "animation_clips": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/docRef" } }
+      }
+    },
+    "evaluator_versions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "coverage_notes": { "type": ["string", "null"], "maxLength": 2000 }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "docRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "checkId": {
+      "enum": ["payload_integrity", "dependency_closure", "path_containment", "asset_digest_full", "budget_geometry", "protected_roles", "connector_compatibility", "minimum_clearance", "maximum_dimension", "material_presence", "texture_integrity", "export_roundtrip", "uv_preservation", "rig_bindings", "animation_clips", "silhouette_conformance", "style_review", "format_loss_declared"],
+      "description": "Closed check_id registry v0.1 (CONTRACT_GATE.md section 6)."
+    }
+  }
+}

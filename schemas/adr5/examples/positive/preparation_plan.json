@@ -1,0 +1,25 @@
+{
+  "schema": "michelangelo.preparation-plan/draft-0.1",
+  "plan_id": "house-master-prep1",
+  "created_at": "2026-11-08T12:05:00Z",
+  "snapshot_ref": {
+    "snapshot_id": "house-master-src",
+    "snapshot_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  "changes": [
+    {
+      "change_id": "repack_uv",
+      "kind": "uv_repack",
+      "target": "*",
+      "tool": "blender_smart_uv_project",
+      "params": { "angle_limit_deg": 66, "island_margin": 0.005 }
+    }
+  ],
+  "preservation": ["geometry", "materials", "textures", "component_ids"],
+  "declared_losses": [
+    { "kind": "uv_layout", "detail": "Original UV packing is replaced; texture placement is preserved by re-pack only" }
+  ],
+  "tool_versions": { "blender": "5.2.3 LTS" },
+  "budgets": { "max_duration_seconds": 600 },
+  "provenance": { "origin": "human" }
+}

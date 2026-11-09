@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://michelangelo.local/schemas/adr5/asset_revision.schema.json",
+  "title": "Michelangelo asset revision draft 0.1",
+  "description": "michelangelo.asset-revision/draft-0.1. DRAFT contract gate (ADR 0005 / GLM-1). A manifest around native data: full multi-artifact set with digests of actual bytes, stable component IDs, transforms as a scene_layout artifact, lineage, validation references. The asset_digest covers every artifact kind, so a material, transform or rig change cannot stay invisible behind a geometry-only hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "asset_id", "revision", "created_at", "artifacts", "parents", "asset_digest"],
+  "properties": {
+    "schema": { "const": "michelangelo.asset-revision/draft-0.1" },
+    "asset_id": { "$ref": "#/$defs/idToken" },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "revision_id": { "$ref": "#/$defs/idToken" },
+    "created_at": { "$ref": "#/$defs/rfc3339" },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["source_snapshot", "preparation_result", "family_variant", "michelangelo_reconstruction"] },
+        "snapshot_ref": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["snapshot_id", "snapshot_sha256"],
+          "properties": {
+            "snapshot_id": { "$ref": "#/$defs/idToken" },
+            "snapshot_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "preparation_plan_ref": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["plan_id", "plan_sha256"],
+          "properties": {
+            "plan_id": { "$ref": "#/$defs/idToken" },
+            "plan_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "detail": { "type": ["string", "null"], "maxLength": 2000 }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8192,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifact_id", "path", "sha256", "size_bytes", "content_kind"],
+        "properties": {
+          "artifact_id": { "$ref": "#/$defs/token32" },
+          "path": { "$ref": "#/$defs/relPath" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size_bytes": { "type": "integer", "minimum": 1, "maximum": 1e12 },
+          "content_kind": { "$ref": "#/$defs/contentKind" },
+          "component_id": { "$ref": "#/$defs/idToken" },
+          "format": { "type": ["string", "null"], "maxLength": 32 }
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["component_id"],
+        "properties": {
+          "component_id": { "$ref": "#/$defs/idToken" },
+          "role": { "$ref": "#/$defs/token32" },
+          "protected": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "parents": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "Provenance DAG; a multi-source family variant may have several parents.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["asset_id", "revision", "revision_sha256"],
+        "properties": {
+          "asset_id": { "$ref": "#/$defs/idToken" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "revision_sha256": { "$ref": "#/$defs/sha256" },
+          "relation": { "$ref": "#/$defs/token32" }
+        }
+      }
+    },
+    "asset_digest": {
+      "$ref": "#/$defs/sha256",
+      "description": "Per schemas/adr5/README.md rule 4: sha256 over lines '<artifact_id>\\u0000<path>\\u0000<content_kind>\\u0000<sha256>\\n' sorted by (artifact_id, path). Declared here, recomputed by Core from actual bytes."
+    },
+    "validation_refs": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/docRef" }
+    },
+    "unknowns": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description"],
+        "properties": {
+          "id": { "$ref": "#/$defs/token32" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "policy": { "enum": ["author_required", "rule_allowed", "stub_allowed", null] }
+        }
+      }
+    },
+    "notes": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 1000 } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },
+    "token32": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "maxLength": 32 },
+    "relPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\u0000\\\\:]+$",
+      "description": "Workspace-relative path, '/'-separated, no leading '/', no '..' segment, no backslash, no drive letter, no NUL."
+    },
+    "rfc3339": { "type": "string", "minLength": 20, "maxLength": 64, "format": "date-time" },
+    "contentKind": {
+      "enum": ["geometry", "material", "texture", "rig_definition", "animation", "scene_layout", "node_group", "linked_library", "metadata", "other"]
+    },
+    "docRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relPath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}
