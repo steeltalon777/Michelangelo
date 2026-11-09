@@ -32,13 +32,19 @@ fn passthrough_profile(ws: &FinalizedWorkspace) -> ValidationProfile {
             CheckId::DependencyClosure,
             CheckId::PathContainment,
             CheckId::AssetDigestFull,
+            CheckId::BudgetGeometry,
             CheckId::FormatLossDeclared,
             CheckId::MaterialPresence,
             CheckId::TextureIntegrity,
             CheckId::UvPreservation,
         ],
         vec![CheckId::ProtectedRoles],
-        Vec::new(),
+        vec![threshold(
+            CheckId::BudgetGeometry,
+            "max_evaluated_triangles",
+            Comparison::AtMost,
+            100_000.0,
+        )],
         vec![
             "materials_preserved".to_string(),
             "textures_preserved".to_string(),
@@ -84,6 +90,7 @@ fn passthrough_profile_a_passes_honestly() {
         CheckId::DependencyClosure,
         CheckId::PathContainment,
         CheckId::AssetDigestFull,
+        CheckId::BudgetGeometry,
         CheckId::FormatLossDeclared,
         CheckId::MaterialPresence,
         CheckId::TextureIntegrity,
@@ -183,6 +190,7 @@ fn passthrough_with_declared_export_is_unavailable_without_backend() {
             CheckId::DependencyClosure,
             CheckId::PathContainment,
             CheckId::AssetDigestFull,
+            CheckId::BudgetGeometry,
             CheckId::FormatLossDeclared,
             CheckId::MaterialPresence,
             CheckId::TextureIntegrity,
@@ -190,7 +198,12 @@ fn passthrough_with_declared_export_is_unavailable_without_backend() {
             CheckId::ExportRoundtrip,
         ],
         Vec::new(),
-        Vec::new(),
+        vec![threshold(
+            CheckId::BudgetGeometry,
+            "max_evaluated_triangles",
+            Comparison::AtMost,
+            100_000.0,
+        )],
         vec![
             "materials_preserved".to_string(),
             "textures_preserved".to_string(),
@@ -280,6 +293,10 @@ fn family_rig_compatible_marks_clips_unavailable_without_backend() {
     let mut ws = WorkspaceBuilder::new(&temp, "cand-creature-v1");
     let obj = block_obj(1.0, 2);
     ws.add_obj("body", "artifacts/body.obj", &obj, &["body"], false);
+    // The material check is matrix-required for family_rig_compatible: the
+    // OBJ uses "wall", so an MTL defining it keeps the fixture honest.
+    let mtl = wall_mtl("textures/wall.png");
+    ws.add_dependency("wall-mtl", "deps/wall.mtl", mtl.as_bytes(), 1);
     let bones = vec![bone("root", None)];
     let skeleton = serde_json::json!({"skeleton_id": "base-skeleton", "bones": bones});
     let skeleton_pin = write_reference(ws.root(), "skeleton_profile", &skeleton);
@@ -305,6 +322,9 @@ fn family_rig_compatible_marks_clips_unavailable_without_backend() {
             CheckId::PathContainment,
             CheckId::AssetDigestFull,
             CheckId::BudgetGeometry,
+            CheckId::ProtectedRoles,
+            CheckId::MaterialPresence,
+            CheckId::UvPreservation,
             CheckId::RigBindings,
             CheckId::AnimationClips,
         ],

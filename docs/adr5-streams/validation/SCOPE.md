@@ -16,7 +16,7 @@
 |---|---|
 | `michelangelo_asset_validation/` | standalone crate, свой `Cargo.toml` с пустой секцией `[workspace]` (cargo не присоединяет его к корневому workspace и не трогает корневой `Cargo.lock`); собственный `Cargo.lock` в своей директории |
 | `michelangelo_asset_validation/src/` | profile, check (реестр check_id + новая модель результата), checks/* (детерминированные evaluators), report, registry (reservation + no-clobber + verify), acceptance (seam), canonical, ids, error, testing (fixture builders, test-only) |
-| `michelangelo_asset_validation/tests/` | `positive_paths.rs` (9 тестов), `adversarial.rs` (14 негативов, включая H2/M1/M2/M3/M4) |
+| `michelangelo_asset_validation/tests/` | `positive_paths.rs` (9 тестов), `adversarial.rs` (17 негативов, включая H2/M1/M2/M3/M4, P2/P3) |
 | `michelangelo_asset_validation/examples/dump_validation_report.rs` | локальный smoke-harness |
 | `docs/adr5-streams/validation/` | этот SCOPE, TEST_EVIDENCE.md, INTEGRATION_NOTES.md |
 
@@ -45,7 +45,7 @@ crates, IT-8D edit accept, reconstruction evaluator, текущий IT-8 enum �
 | Пункт handoff | Реализация |
 |---|---|
 | check_id реестр (OP-4) | закрытый enum 18 id в `src/check.rs`, расширение — новая ревизия; unknown id отказывается с `VALIDATION_UNKNOWN_REQUIRED`/`VALIDATION_UNKNOWN_OPTIONAL` |
-| Матрица применимости (VALIDATION_MATRIX §1) | `applicability(kind, check)` — Required / RequiredWithCondition(token) / Optional / Human / NotApplicable; конфликт required ∩ NotApplicable → `VALIDATION_APPLICABILITY_CONFLICT` |
+| Матрица применимости (VALIDATION_MATRIX §1) | `applicability(kind, check)` — Required / RequiredWithCondition(token) / Optional / Human / NotApplicable; конфликт required ∩ NotApplicable, conditional без токена, optional для matrix-required, а также omission: каждый matrix-Required (или triggered conditional) ОБЯЗАН быть в `required_checks` → `VALIDATION_APPLICABILITY_CONFLICT` |
 | `not_required` вне IT-8 enum (OP-7) | `CheckStatus::NotRequired` — только в новой модели отчёта, только для optional-проверок и только с `applicability_ref`; `Verdict` не имеет `not_required`; F16-тесты |
 | F2 input changed | `verify_registered_report` перечитывает все `input_digests` → `VALIDATION_INPUT_CHANGED` |
 | F5 replay | запись привязана к одному bundle digest: `PrerequisiteReport.bundle_binding_matches=false` для чужого бандла + `LocalReplayIndex` (test device) отказывает `ACCEPTANCE_REPLAY`; реестр отчётов append-only (повтор с другим digest → `NO_CLOBBER_VIOLATION`) |
@@ -82,11 +82,12 @@ crates, IT-8D edit accept, reconstruction evaluator, текущий IT-8 enum �
 ## 6. Статус реализации
 
 - Реализовано и протестировано: profile validation + applicability guard
-  (включая optional-сторону, M2), 12 детерминированных проверок на
-  fixture-форматах, assembly/свёртка, reservation/no-clobber реестр с
-  live-reservation по диску (M1), verify (F2/F3/F19, H2), acceptance seam
-  prerequisites (F5/F14/F19, H2), 9 позитивных + 14 adversarial тестов,
-  smoke, кросс-валидация против GLM-1 схем.
+  (включая optional-сторону, M2, и обратное покрытие matrix-Required, P2),
+  12 детерминированных проверок на fixture-форматах, assembly/свёртка,
+  reservation/no-clobber реестр с live-reservation по диску (M1), verify
+  (F2/F3/F19, H2, обязательный pinned basis P3-1, дубликат-записи P3-2),
+  acceptance seam prerequisites (F5/F14/F19, H2), 9 позитивных + 17
+  adversarial тестов, smoke, кросс-валидация против GLM-1 схем.
 - Не входит в этот PoC: реальный Blender worker, SQLite, CLI, миграции,
   canonical publisher (seam только), UE-проверки, style-review автоматизация
   (запрещена ADR §4.1).

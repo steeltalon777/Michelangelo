@@ -127,6 +127,38 @@ fn record_of(report: &ValidationReport, check: CheckId) -> &CheckRecord {
         .unwrap_or_else(|| panic!("missing record for {}", check.as_str()))
 }
 
+/// The family_static column of the applicability matrix: the checks that are
+/// unconditionally Required for the kind and therefore must appear in every
+/// family_static profile (VALIDATION_MATRIX §1).
+fn family_static_matrix_required() -> Vec<CheckId> {
+    vec![
+        CheckId::PayloadIntegrity,
+        CheckId::DependencyClosure,
+        CheckId::PathContainment,
+        CheckId::AssetDigestFull,
+        CheckId::BudgetGeometry,
+        CheckId::ProtectedRoles,
+        CheckId::MaterialPresence,
+    ]
+}
+
+/// The family_rig_compatible column of the applicability matrix, likewise.
+/// `animation_clips` is conditional on the `clips_pinned` token and is not
+/// part of the unconditional set.
+fn family_rig_matrix_required() -> Vec<CheckId> {
+    vec![
+        CheckId::PayloadIntegrity,
+        CheckId::DependencyClosure,
+        CheckId::PathContainment,
+        CheckId::AssetDigestFull,
+        CheckId::BudgetGeometry,
+        CheckId::ProtectedRoles,
+        CheckId::MaterialPresence,
+        CheckId::UvPreservation,
+        CheckId::RigBindings,
+    ]
+}
+
 /// F1: the attacker replaces the geometry bytes and repairs the manifest
 /// (declared sha256 + asset_digest recomputed). payload_integrity passes,
 /// but the pinned pre-generation expected_asset_digest refuses: a repaired
@@ -717,7 +749,7 @@ fn m2_conditional_check_cannot_be_optional_when_condition_is_present() {
         "m2-v0",
         ProfileKind::FamilyStatic,
         1,
-        vec![CheckId::PayloadIntegrity],
+        family_static_matrix_required(),
         vec![CheckId::MinimumClearance],
         Vec::new(),
         vec!["constraints:clearance".to_string()],
@@ -730,11 +762,15 @@ fn m2_conditional_check_cannot_be_optional_when_condition_is_present() {
     );
 
     // An unconditionally required matrix check cannot be optional either.
+    // The required set deliberately omits protected_roles: the optional-side
+    // guard must refuse the entry before reverse coverage does.
+    let mut required_minus_protected = family_static_matrix_required();
+    required_minus_protected.retain(|check| *check != CheckId::ProtectedRoles);
     let required_optional = make_profile(
         "m2-v1",
         ProfileKind::FamilyStatic,
         1,
-        vec![CheckId::PayloadIntegrity],
+        required_minus_protected,
         vec![CheckId::ProtectedRoles],
         Vec::new(),
         Vec::new(),
@@ -752,6 +788,63 @@ fn m2_conditional_check_cannot_be_optional_when_condition_is_present() {
     let mut relaxed = conflict;
     relaxed.applies_to.conditions.clear();
     relaxed.validate().expect("optional without the condition");
+}
+
+/// P2 (matrix coverage): a profile cannot silently omit a check the matrix
+/// marks Required (or RequiredWithCondition whose token the profile carries).
+/// Omission would leave the check unmeasured while the report still folds to
+/// pass — the sibling of the closed not_required masking.
+#[test]
+fn p2_matrix_required_checks_cannot_be_omitted_from_the_profile() {
+    use michelangelo_asset_validation::error::VALIDATION_APPLICABILITY_CONFLICT;
+
+    let temp = std::env::temp_dir().join("gav-adv-p2");
+    let _ = std::fs::remove_dir_all(&temp);
+    let (ws, family_profile) = build_family_workspace(&temp, "cand-rig-p2");
+
+    // The reviewer's counterexample: family_rig_compatible carrying
+    // clips_pinned but requiring only payload_integrity. rig_bindings (matrix
+    // Required) and animation_clips (triggered Required) are not measured.
+    let mut omitted = family_profile.clone();
+    omitted.kind = ProfileKind::FamilyRigCompatible;
+    omitted.required_checks = vec![CheckId::PayloadIntegrity];
+    omitted.optional_checks = Vec::new();
+    omitted.applies_to.conditions = vec!["clips_pinned".to_string()];
+    let error = omitted
+        .validate()
+        .expect_err("P2: matrix-required omission");
+    assert_eq!(error.code(), VALIDATION_APPLICABILITY_CONFLICT);
+
+    // The evaluation path must refuse it too: no report can be produced and
+    // therefore no registration/seam verdict can be obtained.
+    let error = evaluate_fixture(&ws, &omitted, "vr-p2a").expect_err("P2 evaluation");
+    assert_eq!(error.code(), VALIDATION_APPLICABILITY_CONFLICT);
+
+    // Triggered conditional omission: every unconditional matrix Required
+    // check is present, but animation_clips is missing while clips_pinned is
+    // carried.
+    let mut missing_triggered = omitted.clone();
+    missing_triggered.required_checks = family_rig_matrix_required();
+    let error = missing_triggered
+        .validate()
+        .expect_err("P2: triggered conditional omission");
+    assert_eq!(error.code(), VALIDATION_APPLICABILITY_CONFLICT);
+
+    // Without the token the conditional check is NOT required: the same
+    // unconditional set is a valid profile.
+    let mut without_token = missing_triggered.clone();
+    without_token.applies_to.conditions.clear();
+    without_token
+        .validate()
+        .expect("a conditional check without its token is not required");
+
+    // Positive: the complete family_rig_compatible profile with every matrix
+    // Required check and the triggered conditional check is valid.
+    let mut complete = missing_triggered;
+    complete.required_checks.push(CheckId::AnimationClips);
+    complete
+        .validate()
+        .expect("complete family_rig_compatible profile");
 }
 
 /// M3: ghost fields in the report, a check record or the profile are rejected
@@ -884,12 +977,13 @@ fn h2_required_check_cannot_be_not_required() {
         error.code(),
         michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
     );
-    // Without a stored basis profile a not_required report is unprovable and
-    // is refused rather than accepted.
+    // Without a pinned basis profile verification refuses ANY report (P3):
+    // the required-check guard cannot be re-applied, so the report is
+    // unprovable even before its not_required record is inspected.
     let error = verify_registered_report(&temp, "vr-h2", None).expect_err("H2 no basis");
     assert_eq!(
         error.code(),
-        michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
+        michelangelo_asset_validation::error::VALIDATION_PROFILE_BASIS_MISSING
     );
     // Even with the pinned profile copy present the guard fires.
     store_pinned_profile(&temp, &profile).expect("pinned profile");
@@ -931,6 +1025,86 @@ fn h2_required_check_cannot_be_not_required() {
     assert_eq!(
         error.code(),
         michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
+    );
+}
+
+/// P3 (verify basis): `verify(None)` must not accept a report whose pinned
+/// profile copy is missing, even when the report carries no `not_required`
+/// records — the required-check guard cannot be re-applied to an unprovable
+/// basis. A forged registry entry (bypassing registration) is refused; the
+/// same report verifies once the pinned copy exists.
+#[test]
+fn p3_verify_without_a_pinned_profile_basis_is_refused() {
+    let temp = std::env::temp_dir().join("gav-adv-p3-basis");
+    let _ = std::fs::remove_dir_all(&temp);
+    let (ws, profile) = build_family_workspace(&temp, "cand-house-p3b");
+
+    let (report, _) = evaluate_fixture(&ws, &profile, "vr-p3-basis").expect("evaluation");
+    assert_eq!(report.verdict, Verdict::Pass);
+
+    // force_register writes the report bytes and the index entry but NOT the
+    // digest-named profile copy registration always stores.
+    force_register(&temp, &report);
+    let error = verify_registered_report(&temp, "vr-p3-basis", None).expect_err("P3 no basis");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::VALIDATION_PROFILE_BASIS_MISSING
+    );
+
+    // With the pinned basis restored the same report verifies.
+    store_pinned_profile(&temp, &profile).expect("pinned profile");
+    let outcome = verify_registered_report(&temp, "vr-p3-basis", None).expect("verify with basis");
+    assert_eq!(outcome.verdict, Verdict::Pass);
+}
+
+/// P3 (duplicate records): registration must refuse a report where the same
+/// check id appears twice ([pass, not_required]) — the first-match guard
+/// would otherwise pass while verification (re-assembly) rejects the stored
+/// bytes. The reservation is not consumed and nothing is written.
+#[test]
+fn p3_registration_refuses_duplicate_check_records() {
+    let temp = std::env::temp_dir().join("gav-adv-p3-duplicate");
+    let _ = std::fs::remove_dir_all(&temp);
+    let (ws, profile) = build_family_workspace(&temp, "cand-house-p3d");
+
+    let (report, _) = evaluate_fixture(&ws, &profile, "vr-p3-dup").expect("evaluation");
+    // Direct struct construction: `assemble`/parse refuse duplicates, so a
+    // bypassing writer is exactly the threat registration must stop.
+    let mut duplicate = report.clone();
+    duplicate.checks = vec![
+        CheckRecord {
+            check_id: CheckId::PayloadIntegrity,
+            result: CheckStatus::Pass,
+            value: None,
+            detail: None,
+            applicability_ref: None,
+            evidence: Vec::new(),
+        },
+        CheckRecord {
+            check_id: CheckId::PayloadIntegrity,
+            result: CheckStatus::NotRequired,
+            value: None,
+            detail: Some("the duplicate that would mask the first record".to_string()),
+            applicability_ref: Some("bundle_scope:forged".to_string()),
+            evidence: Vec::new(),
+        },
+    ];
+
+    let reservation = Reservation::reserve(&temp, "vr-p3-dup", &ws.manifest_sha256, TIMESTAMP)
+        .expect("reservation");
+    let error = write_and_register(&temp, &reservation, &duplicate, &profile)
+        .expect_err("P3 duplicate registration");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::DOCUMENT_INVALID
+    );
+    assert!(
+        load_registry(&temp).expect("registry").entries.is_empty(),
+        "nothing may be registered"
+    );
+    assert!(
+        !report_file_path(&temp, "vr-p3-dup").exists(),
+        "no report bytes may be written"
     );
 }
 

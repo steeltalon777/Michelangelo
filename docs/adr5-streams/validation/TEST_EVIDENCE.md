@@ -1,13 +1,14 @@
 # TEST EVIDENCE — GLM-6 Asset Validation (feat/adr5-validation)
 
-- **Дата:** 2026-11-09 (fix-раунд поверх `592da2f`). **База:** `dev@b8615477b735c1f60c93518b59f8fe32613a7556`.
+- **Дата:** 2026-11-09 (fix-раунд 2 поверх `bda61b8`; раунд 1 — `592da2f`). **База:** `dev@b8615477b735c1f60c93518b59f8fe32613a7556`.
 - Все команды выполнялись в `I:/prog/michelangelo-adr5-validation/michelangelo_asset_validation`
   (standalone crate, offline). Ни один статус ниже не выдуман: вывод команд
   зафиксирован в этом документе.
-- Fix-раунд закрывает findings независимого ревью §8: H1 (fmt/clippy gate),
-  H2 (`not_required` на required), M1 (live reservation по диску), M2
-  (условные проверки/optional), M3 (`deny_unknown_fields`), M4
-  (`uv_preservation` без пина/порога).
+- Fix-раунд 2 закрывает findings delta-review: P2 (omission-маскирование
+  matrix-Required проверок: обязательную проверку можно было не включить в
+  профиль), P3-1 (`verify(None)` без pinned-копии профиля принимал отчёт без
+  `not_required`), P3-2 (дубль check_id обходил first-match registration
+  guard). Раунд 1 закрыл H1/H2/M1–M4.
 
 ## 1. Команды и фактические результаты
 
@@ -21,7 +22,7 @@ CARGO_NET_OFFLINE=true cargo test --offline
 
 ```
 running 0 tests  (unittests src/lib.rs)   test result: ok. 0 passed; 0 failed
-running 14 tests (tests/adversarial.rs)   test result: ok. 14 passed; 0 failed
+running 17 tests (tests/adversarial.rs)   test result: ok. 17 passed; 0 failed
 running 9 tests  (tests/positive_paths.rs) test result: ok. 9 passed; 0 failed
 Doc-tests: test result: ok. 0 passed
 ```
@@ -89,10 +90,10 @@ Emitted JSON отчёта и профиля проходит соответст�
 
 | Тест | Что доказывает |
 |---|---|
-| `passthrough_profile_a_passes_honestly` | Profile A: payload/dependency/asset-digest по фактическим bytes, source-unchanged pin, declared losses, UV против `expected_uv_counts`-пина (M4: без пина/порога UV даёт unavailable), материалы/текстуры; optional protected_roles → `not_required` с applicability_ref; детерминированный digest; round-trip bytes→parse идентичен |
+| `passthrough_profile_a_passes_honestly` | Profile A: payload/dependency/asset-digest/budget (порог `max_evaluated_triangles`) по фактическим bytes, source-unchanged pin, declared losses, UV против `expected_uv_counts`-пина (M4: без пина/порога UV даёт unavailable), материалы/текстуры; optional protected_roles → `not_required` с applicability_ref; детерминированный digest; round-trip bytes→parse идентичен |
 | `passthrough_with_declared_export_is_unavailable_without_backend` | требуемый export_roundtrip без backend → `unavailable` (BLOCKED), вердикт `unavailable`, не pass |
 | `family_static_profile_b_passes` | Profile B: budget, protected roles (bytes + effective transforms), socket fit, clearance, dimensions, materials/textures/UV против пинов; not_required для optional при отсутствии контента |
-| `family_rig_compatible_marks_clips_unavailable_without_backend` | rig_bindings против pinned skeleton; clips с верифицированными digest → `unavailable` без плеера (импорт+digest ≠ совместимость) |
+| `family_rig_compatible_marks_clips_unavailable_without_backend` | rig_bindings против pinned skeleton; профиль честно содержит весь matrix-Required набор family_rig_compatible (включая protected_roles/material_presence/uv_preservation; MTL-фикстура закрывает material_presence); clips с верифицированными digest → `unavailable` без плеера (импорт+digest ≠ совместимость) |
 | `reconstruction_kind_is_refused_not_reimplemented` | kind=reconstruction → `UNSUPPORTED_PROFILE_KIND` (IT-8D evaluator остаётся владельцем) |
 | `unknown_required_check_refuses_with_gate_code` | F8 schema-слой: `ghost_check` → `VALIDATION_UNKNOWN_REQUIRED` |
 | `registry_lifecycle_reserve_register_verify` | reservation до вычислений, конфликт reservation, idempotent re-register, append-only индекс |
@@ -113,10 +114,13 @@ Emitted JSON отчёта и профиля проходит соответст�
 | `f13_path_escape_is_refused` | F13-adj | `../outside.obj` в манифесте → `PATH_ESCAPE` до любого чтения |
 | `registry_refuses_overwrite_and_unreserved_registration` | D1.3 | регистрация без reservation → `RESERVATION_REQUIRED`; тот же id с другим digest → `NO_CLOBBER_VIOLATION`; индекс хранит ровно один entry |
 | `m1_registration_requires_a_live_on_disk_reservation` | M1 | in-memory `Reservation` (публичные поля) без файла на диске → `RESERVATION_REQUIRED`; live-reservation на другой bundle digest → `RESERVATION_REQUIRED`; реестр пуст |
-| `m2_conditional_check_cannot_be_optional_when_condition_is_present` | M2 | `minimum_clearance` в optional при токене `constraints:clearance` → `VALIDATION_APPLICABILITY_CONFLICT`; matrix-required `protected_roles` в optional → конфликт; без токена optional легален |
+| `m2_conditional_check_cannot_be_optional_when_condition_is_present` | M2 | `minimum_clearance` в optional при токене `constraints:clearance` → `VALIDATION_APPLICABILITY_CONFLICT`; matrix-required `protected_roles` в optional (required-набор — полный matrix-Required минус сама проверка) → конфликт; без токена optional легален |
 | `m3_ghost_fields_are_rejected` | M3 | ghost-поле в report / check record / profile → `DOCUMENT_INVALID` (не отбрасывается молча) |
 | `m4_uv_preservation_without_pin_or_threshold_is_unavailable` | M4 | vt-строки есть, но нет `expected_uv_counts` пина и `min_uv_count` порога → `unavailable`, вердикт `unavailable`, не pass |
-| `h2_required_check_cannot_be_not_required` | H2 | required `payload_integrity: not_required` собирается структурно (verdict pass), но регистрация → `INVALID_NOT_REQUIRED`; forged entry: verify с профилем, verify без пина, verify с pinned-копией и seam (`check_prerequisites`) → `INVALID_NOT_REQUIRED`; accept-факты не выдаются |
+| `h2_required_check_cannot_be_not_required` | H2 | required `payload_integrity: not_required` собирается структурно (verdict pass), но регистрация → `INVALID_NOT_REQUIRED`; forged entry: verify с профилем → `INVALID_NOT_REQUIRED`; verify без пина → `VALIDATION_PROFILE_BASIS_MISSING` (P3-1); verify с pinned-копией и seam (`check_prerequisites`) → `INVALID_NOT_REQUIRED`; accept-факты не выдаются |
+| `p2_matrix_required_checks_cannot_be_omitted_from_the_profile` | P2 | контрпример ревьюера `family_rig_compatible` + `clips_pinned` + `required_checks:[payload_integrity]` → `VALIDATION_APPLICABILITY_CONFLICT` (omitted `rig_bindings` и triggered `animation_clips`); evaluate отказывает до выпуска отчёта; полный unconditional-набор без `animation_clips` при наличии токена → конфликт; без токена — валиден; полный профиль с матричными Required + triggered-проверкой — валиден |
+| `p3_verify_without_a_pinned_profile_basis_is_refused` | P3-1 | forged entry (без pinned-копии) для pass-отчёта без `not_required` → `verify(None)` отказывает `VALIDATION_PROFILE_BASIS_MISSING`; после `store_pinned_profile` тот же отчёт verify проходит |
+| `p3_registration_refuses_duplicate_check_records` | P3-2 | прямая конструкция отчёта с дублем `payload_integrity` `[pass, not_required]` → регистрация `DOCUMENT_INVALID`; реестр пуст, bytes отчёта не записаны; verify отверг бы дубль на re-assemble |
 
 ## 4. Честные пределы этого evidence
 

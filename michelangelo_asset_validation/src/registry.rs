@@ -382,13 +382,14 @@ fn guard_required_results(
 /// Rules: registration requires a LIVE on-disk reservation of the same id and
 /// bundle (M1: an in-memory `Reservation` value alone is not evidence); the
 /// passed profile must be the pinned basis of the report and every required
-/// check must be `pass|fail|unavailable` (H2); the report file is written
-/// exclusively (temp + hard-link / create-new) so a concurrent process can
-/// never clobber it; the same id + same digest is an idempotent no-op; the
-/// same id + different digest refuses with `NO_CLOBBER_VIOLATION`. The pinned
-/// profile is stored next to the registry (digest-named, no-clobber) so that
-/// verification can re-apply the required-check guard. The reservation is
-/// consumed on success.
+/// check must be `pass|fail|unavailable` (H2); a check id may appear at most
+/// once (a duplicate [pass, not_required] pair must not slip past the
+/// first-match guard); the report file is written exclusively (temp +
+/// hard-link / create-new) so a concurrent process can never clobber it; the
+/// same id + same digest is an idempotent no-op; the same id + different
+/// digest refuses with `NO_CLOBBER_VIOLATION`. The pinned profile is stored
+/// next to the registry (digest-named, no-clobber) so that verification can
+/// re-apply the required-check guard. The reservation is consumed on success.
 pub fn write_and_register(
     root: &Path,
     reservation: &Reservation,
@@ -439,6 +440,24 @@ pub fn write_and_register(
                 report.profile_ref.profile_sha256
             ),
         ));
+    }
+    // Registration-side structural guard (P3): at most one record per check
+    // id. `guard_required_results` inspects the first match, so a duplicate
+    // pair [pass, not_required] would otherwise pass registration while
+    // verification (re-assembly from the stored bytes) refuses the document.
+    // The registry must never accept a report it can never verify.
+    let mut seen_checks = std::collections::BTreeSet::new();
+    for record in &report.checks {
+        if !seen_checks.insert(record.check_id) {
+            return Err(ValidationError::rule(
+                crate::error::DOCUMENT_INVALID,
+                format!(
+                    "the check '{}' has more than one result; registration never accepts a \
+                     report that verification would refuse",
+                    record.check_id.as_str()
+                ),
+            ));
+        }
     }
     guard_required_results(profile, &report.checks)?;
 
@@ -563,8 +582,9 @@ pub struct VerifyOutcome {
 /// (F19); with the pinned basis profile (the supplied current profile or the
 /// digest-named copy stored at registration): every required check has a
 /// `pass|fail|unavailable` result — a required check recorded as
-/// `not_required` is refused (H2). A report that carries `not_required`
-/// records but has no retrievable basis profile is refused as unprovable.
+/// `not_required` is refused (H2). A report with no retrievable basis profile
+/// is refused as unprovable: the required-check guard cannot be re-applied to
+/// ANY report, so `basis=None` without a pinned copy never verifies.
 pub fn verify_registered_report(
     root: &std::path::Path,
     report_id: &str,
@@ -659,25 +679,25 @@ pub fn verify_registered_report(
         }
         None => load_pinned_profile(root, &report.profile_ref.profile_sha256)?,
     };
-    if let Some(basis) = &basis {
-        // Required-check coverage plus the H2 result guard.
-        guard_required_results(basis, &report.checks)?;
-    } else if report
-        .checks
-        .iter()
-        .any(|record| record.result == CheckStatus::NotRequired)
-    {
-        // Without a basis profile the optionality of a `not_required` record
-        // cannot be proven; refusing is the only honest outcome.
+    // The basis profile is mandatory for verification: without it neither the
+    // required-check coverage nor the optionality of a `not_required` record
+    // can be proven. Registration always stores the digest-named copy, so a
+    // registered report whose basis cannot be loaded is forged or damaged;
+    // refusing is the only honest outcome for ANY report, not only for
+    // reports that happen to carry `not_required` records.
+    let Some(basis) = basis else {
         return Err(ValidationError::rule(
-            crate::error::INVALID_NOT_REQUIRED,
+            crate::error::VALIDATION_PROFILE_BASIS_MISSING,
             format!(
-                "the report '{}' records not_required results but no pinned profile is \
-                 available to prove those checks are optional",
-                report_id
+                "the report '{}' pins the profile basis {} but no pinned profile copy is \
+                 available and no current profile was supplied; the required-check guard \
+                 cannot be re-applied",
+                report_id, report.profile_ref.profile_sha256
             ),
         ));
-    }
+    };
+    // Required-check coverage plus the H2 result guard.
+    guard_required_results(&basis, &report.checks)?;
 
     Ok(VerifyOutcome {
         report_sha256: entry.sha256.clone(),

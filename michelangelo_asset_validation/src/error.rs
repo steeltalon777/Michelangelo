@@ -17,6 +17,9 @@ pub const VALIDATION_INPUT_CHANGED: &str = "VALIDATION_INPUT_CHANGED";
 pub const VALIDATION_INPUT_MISSING: &str = "VALIDATION_INPUT_MISSING";
 /// Pinned profile/threshold digest differs from the basis of the report (F19).
 pub const VALIDATION_PROFILE_CHANGED: &str = "VALIDATION_PROFILE_CHANGED";
+/// Verification has no pinned profile basis to re-apply the required-check
+/// guard: the report is unprovable (registration always stores the copy).
+pub const VALIDATION_PROFILE_BASIS_MISSING: &str = "VALIDATION_PROFILE_BASIS_MISSING";
 /// Acceptance cites a report digest that is not registered (F14).
 pub const VALIDATION_REPORT_NOT_REGISTERED: &str = "VALIDATION_REPORT_NOT_REGISTERED";
 /// Acceptance of an `accepted` decision cites a report whose verdict is not pass.

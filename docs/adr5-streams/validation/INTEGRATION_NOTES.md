@@ -49,11 +49,20 @@ D1.2/D1.3-аналогов IT-8D.
 5. **not_required только для optional.** Теперь это не только поведение
    evaluator: регистрация (`write_and_register`) и verify
    (`verify_registered_report`) требуют result ∈ {pass, fail, unavailable}
-   для каждой required-проверки профиля (`INVALID_NOT_REQUIRED`); проверка
-   без pinned-копии профиля, но с `not_required`-записями, отказывается как
-   недоказуемая. Профиль, где matrix-required проверка объявлена optional,
-   отвергается applicability-guard (M2). Это stricter, чем текст
-   CONTRACT_GATE §5 — предложение зафиксировать как правило (F16-безопасно).
+   для каждой required-проверки профиля (`INVALID_NOT_REQUIRED`). Профиль,
+   где matrix-required проверка объявлена optional, отвергается
+   applicability-guard (M2). Симметрично omission: каждая проверка, которую
+   матрица помечает Required (или RequiredWithCondition при присутствующем
+   токене), ОБЯЗАНА быть в `required_checks`; иначе
+   `VALIDATION_APPLICABILITY_CONFLICT` (P2) — «отсутствие = unavailable»
+   из легенды §1 не маскируется пропуском. Verify без pinned-копии профиля
+   (и без current profile) отказывает ЛЮБОМУ отчёту
+   (`VALIDATION_PROFILE_BASIS_MISSING`), а не только отчёту с
+   `not_required`-записями: required-guard нечем применить (P3-1).
+   Регистрация дополнительно отвергает отчёт с дублем check_id
+   (`DOCUMENT_INVALID`), чтобы first-match guard не был обойдён (P3-2).
+   Это stricter, чем текст CONTRACT_GATE §5 — предложение зафиксировать как
+   правило (F16-безопасно).
 6. **Registration-time structural guard.** Регистрация требует live-
    reservation на диске (M1; in-memory значение не доказательство) и
    совпадения переданного профиля с пинованным basis отчёта; pinned-профиль

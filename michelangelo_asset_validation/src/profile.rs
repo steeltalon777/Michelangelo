@@ -381,6 +381,35 @@ impl ValidationProfile {
                 _ => {}
             }
         }
+
+        // Reverse coverage (P2): the forward loops above only inspect the
+        // entries the profile lists, so an OMITTED matrix-required check
+        // would never be measured while the report still folds to pass. The
+        // matrix legend (§1) treats absence of an R check as unavailable and
+        // blocking; an omission is therefore a profile conflict, symmetric to
+        // the not_required masking guard. Every Required check, and every
+        // RequiredWithCondition check whose token the profile carries, MUST be
+        // present in required_checks. NotApplicable / Optional / Human are not
+        // required; a conditional check without its token is not required.
+        for check in CheckId::ALL {
+            let required = match applicability(self.kind, check) {
+                Applicability::Required => true,
+                Applicability::RequiredWithCondition(condition) => self.has_condition(condition),
+                _ => false,
+            };
+            if required && !self.required_checks.contains(&check) {
+                return Err(ValidationError::rule(
+                    crate::error::VALIDATION_APPLICABILITY_CONFLICT,
+                    format!(
+                        "the check '{}' is required by the applicability matrix for the kind \
+                         '{}' but is missing from required_checks; omission would mask the \
+                         measurement",
+                        check.as_str(),
+                        self.kind.as_str()
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
