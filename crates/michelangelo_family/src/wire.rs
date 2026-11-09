@@ -1,11 +1,18 @@
 //! Strict wire adapters from JSON documents to provisional DTOs.
 //!
-//! PROVISIONAL: accepts documents shaped like GLM-1 `schemas/adr5` draft-0.1
-//! (as understood by this stream) and maps them onto private DTOs. Unknown
-//! top-level keys are rejected (mirrors `additionalProperties: false`), which
-//! gives wire-level negative coverage for F7 (scope-field injection) and F10
-//! (`allow_arbitrary_code: true`). This is NOT an approved protocol parser
-//! until the contract gate lands.
+//! PROVISIONAL: accepts documents shaped like the GLM-1 `schemas/adr5`
+//! documents (as understood by this stream) and maps them onto private DTOs.
+//! The accepted tag namespace is the private one of this stream
+//! (`michelangelo.family.<doc>/draft-0`); the GLM-1 tags
+//! (`michelangelo.<doc>/draft-0.1`) are rejected, because these documents do
+//! not satisfy the GLM-1 schemas and must not be dispatched as GLM-1
+//! artifacts. Every accepted document must additionally declare the explicit
+//! marker `provisional: true`.
+//!
+//! Unknown top-level keys are rejected (mirrors `additionalProperties:
+//! false`), which gives wire-level negative coverage for F7 (scope-field
+//! injection) and F10 (`allow_arbitrary_code: true`). This is NOT an approved
+//! protocol parser until the contract gate lands.
 
 use std::collections::BTreeMap;
 
@@ -14,7 +21,7 @@ use crate::json::Json;
 use crate::model::{
     Capability, ConflictPolicy, DepRef, FamilyRecipe, Generator, GeneratorKind, HeightModel,
     ManifestKind, ManifestRef, ParamSpec, ParamValue, Randomness, RecipeLock, Scope, SocketProfile,
-    SourceEntry, SourceRole, SourceSet, SourceUsage, VariantRequest,
+    SourceEntry, SourceRole, SourceSet, SourceUsage, VariantRequest, PROVISIONAL_MARKER_KEY,
 };
 
 fn obj<'a>(v: &'a Json, what: &str) -> FamilyResult<&'a BTreeMap<String, Json>> {
@@ -54,15 +61,27 @@ fn int_field(v: &Json, key: &str, what: &str) -> FamilyResult<i64> {
 /// `additionalProperties: false`. Used to catch scope-widening injections
 /// (`scope`, `validation`, `capabilities`, `allow_arbitrary_code`, ...) on
 /// documents that must not carry them.
-fn reject_unknown_keys(m: &BTreeMap<String, Json>, allowed: &[&str], what: &str) -> FamilyResult<()> {
+fn reject_unknown_keys(
+    m: &BTreeMap<String, Json>,
+    allowed: &[&str],
+    what: &str,
+) -> FamilyResult<()> {
     for key in m.keys() {
         if !allowed.contains(&key.as_str()) {
             // A document that tries to attach scope/capability/validation
             // controls is scope widening (F7), not merely malformed.
             let widening = matches!(
                 key.as_str(),
-                "scope" | "validation" | "capabilities" | "allowed_roles" | "protected_roles"
-                    | "approval" | "policy" | "budget" | "generator" | "constraints"
+                "scope"
+                    | "validation"
+                    | "capabilities"
+                    | "allowed_roles"
+                    | "protected_roles"
+                    | "approval"
+                    | "policy"
+                    | "budget"
+                    | "generator"
+                    | "constraints"
             );
             return Err(FamilyError::new(
                 if widening {
@@ -79,6 +98,34 @@ fn reject_unknown_keys(m: &BTreeMap<String, Json>, allowed: &[&str], what: &str)
 
 fn is_lower_hex64(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The explicit provisional marker must be present and `true`.
+///
+/// A document without the marker does not declare its provisional status; a
+/// document with `provisional: false` contradicts the provisional tag it
+/// carries. Both are rejected — "not yet contracted" is a property of the
+/// payload, not a comment in the docs.
+fn require_provisional(m: &BTreeMap<String, Json>, what: &str) -> FamilyResult<()> {
+    match m.get(PROVISIONAL_MARKER_KEY) {
+        Some(Json::Bool(true)) => Ok(()),
+        Some(Json::Bool(false)) => Err(FamilyError::new(
+            FamilyErrorCode::SchemaInvalid,
+            format!(
+                "{what}: '{PROVISIONAL_MARKER_KEY}=false' contradicts the provisional tag: this document is not an approved GLM-1 artifact"
+            ),
+        )),
+        Some(_) => Err(FamilyError::new(
+            FamilyErrorCode::SchemaInvalid,
+            format!("{what}: '{PROVISIONAL_MARKER_KEY}' must be a boolean"),
+        )),
+        None => Err(FamilyError::new(
+            FamilyErrorCode::SchemaInvalid,
+            format!(
+                "{what}: missing '{PROVISIONAL_MARKER_KEY}' marker: provisional documents must declare it explicitly"
+            ),
+        )),
+    }
 }
 
 fn parse_sha256(v: &Json, what: &str) -> FamilyResult<String> {
@@ -104,11 +151,17 @@ pub fn parse_source_set(doc: &Json) -> FamilyResult<SourceSet> {
     reject_unknown_keys(
         m,
         &[
-            "schema", "source_set_id", "revision", "sources", "conflict_policy",
+            "schema",
+            PROVISIONAL_MARKER_KEY,
+            "source_set_id",
+            "revision",
+            "sources",
+            "conflict_policy",
             "alignment_profile_sha256",
         ],
         "source_set",
     )?;
+    require_provisional(m, "source_set")?;
     let sources_json = obj(doc, "source_set")?
         .get("sources")
         .and_then(Json::as_array)
@@ -125,8 +178,15 @@ pub fn parse_source_set(doc: &Json) -> FamilyResult<SourceSet> {
         let sm = obj(s, "source entry")?;
         reject_unknown_keys(
             sm,
-            &["source_id", "asset_id", "manifest_ref", "roles", "usage", "allowed_parts",
-              "skeleton_profile_sha256"],
+            &[
+                "source_id",
+                "asset_id",
+                "manifest_ref",
+                "roles",
+                "usage",
+                "allowed_parts",
+                "skeleton_profile_sha256",
+            ],
             "source entry",
         )?;
         let roles_json = sm.get("roles").and_then(Json::as_array).ok_or_else(|| {
@@ -146,14 +206,12 @@ pub fn parse_source_set(doc: &Json) -> FamilyResult<SourceSet> {
             roles.push(SourceRole::parse(rs)?); // unknown role string => ROLE_INVALID (F6)
         }
         let usage = SourceUsage::parse(str_field(s, "usage", "source entry")?.as_str())?;
-        let manifest = obj(s, "source entry")?
-            .get("manifest_ref")
-            .ok_or_else(|| {
-                FamilyError::new(
-                    FamilyErrorCode::SchemaInvalid,
-                    "source entry: missing 'manifest_ref'",
-                )
-            })?;
+        let manifest = obj(s, "source entry")?.get("manifest_ref").ok_or_else(|| {
+            FamilyError::new(
+                FamilyErrorCode::SchemaInvalid,
+                "source entry: missing 'manifest_ref'",
+            )
+        })?;
         let kind_str = str_field(manifest, "kind", "manifest_ref")?;
         let kind = match kind_str.as_str() {
             "source_snapshot" => ManifestKind::SourceSnapshot,
@@ -245,25 +303,49 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
     reject_unknown_keys(
         m,
         &[
-            "schema", "recipe_id", "revision", "source_set_ref", "style_profile_sha256",
-            "parameters", "generator", "scope", "constraints", "height_model", "sockets",
-            "randomness", "budget", "dependencies",
+            "schema",
+            PROVISIONAL_MARKER_KEY,
+            "recipe_id",
+            "revision",
+            "source_set_ref",
+            "style_profile_sha256",
+            "parameters",
+            "generator",
+            "scope",
+            "constraints",
+            "height_model",
+            "sockets",
+            "randomness",
+            "budget",
+            "dependencies",
         ],
         "recipe",
     )?;
+    require_provisional(m, "recipe")?;
 
-    let ss_ref = m
-        .get("source_set_ref")
-        .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "recipe: missing 'source_set_ref'"))?;
+    let ss_ref = m.get("source_set_ref").ok_or_else(|| {
+        FamilyError::new(
+            FamilyErrorCode::SchemaInvalid,
+            "recipe: missing 'source_set_ref'",
+        )
+    })?;
     let params_json = m
         .get("parameters")
         .and_then(Json::as_object)
-        .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "recipe: missing 'parameters'"))?;
+        .ok_or_else(|| {
+            FamilyError::new(
+                FamilyErrorCode::SchemaInvalid,
+                "recipe: missing 'parameters'",
+            )
+        })?;
     let mut parameters = BTreeMap::new();
     for (name, spec) in params_json {
         let sm = obj(spec, "parameter spec")?;
         let t = sm.get("type").and_then(Json::as_str).ok_or_else(|| {
-            FamilyError::new(FamilyErrorCode::SchemaInvalid, "parameter spec: missing 'type'")
+            FamilyError::new(
+                FamilyErrorCode::SchemaInvalid,
+                "parameter spec: missing 'type'",
+            )
         })?;
         let spec = match t {
             "integer" => ParamSpec::Integer {
@@ -271,19 +353,34 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
                 max: int_field(spec, "max", "parameter spec")?,
             },
             "number" => ParamSpec::Number {
-                min: obj(spec, "parameter spec")?.get("min").and_then(Json::as_f64).ok_or_else(|| {
-                    FamilyError::new(FamilyErrorCode::SchemaInvalid, "parameter spec: missing 'min'")
-                })?,
-                max: obj(spec, "parameter spec")?.get("max").and_then(Json::as_f64).ok_or_else(|| {
-                    FamilyError::new(FamilyErrorCode::SchemaInvalid, "parameter spec: missing 'max'")
-                })?,
+                min: obj(spec, "parameter spec")?
+                    .get("min")
+                    .and_then(Json::as_f64)
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "parameter spec: missing 'min'",
+                        )
+                    })?,
+                max: obj(spec, "parameter spec")?
+                    .get("max")
+                    .and_then(Json::as_f64)
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "parameter spec: missing 'max'",
+                        )
+                    })?,
             },
             "enum" => ParamSpec::Enum {
                 values: sm
                     .get("values")
                     .and_then(Json::as_array)
                     .ok_or_else(|| {
-                        FamilyError::new(FamilyErrorCode::SchemaInvalid, "enum parameter: missing 'values'")
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "enum parameter: missing 'values'",
+                        )
                     })?
                     .iter()
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -300,13 +397,22 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
         parameters.insert(name.clone(), spec);
     }
 
-    let gen = m
-        .get("generator")
-        .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "recipe: missing 'generator'"))?;
+    let gen = m.get("generator").ok_or_else(|| {
+        FamilyError::new(
+            FamilyErrorCode::SchemaInvalid,
+            "recipe: missing 'generator'",
+        )
+    })?;
     let gm = obj(gen, "generator")?;
     reject_unknown_keys(
         gm,
-        &["kind", "template_ref", "capabilities", "parameter_bindings", "source_inputs"],
+        &[
+            "kind",
+            "template_ref",
+            "capabilities",
+            "parameter_bindings",
+            "source_inputs",
+        ],
         "generator",
     )?;
     // V2–V4 kinds and unknown kinds are capability-denied here (F10-family
@@ -316,10 +422,18 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
     for c in gm
         .get("capabilities")
         .and_then(Json::as_array)
-        .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "generator: missing 'capabilities'"))?
+        .ok_or_else(|| {
+            FamilyError::new(
+                FamilyErrorCode::SchemaInvalid,
+                "generator: missing 'capabilities'",
+            )
+        })?
     {
         capabilities.push(Capability::parse(c.as_str().ok_or_else(|| {
-            FamilyError::new(FamilyErrorCode::SchemaInvalid, "capability must be a string")
+            FamilyError::new(
+                FamilyErrorCode::SchemaInvalid,
+                "capability must be a string",
+            )
         })?)?);
     }
     let mut parameter_bindings = BTreeMap::new();
@@ -343,13 +457,17 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
         source_inputs: gm
             .get("source_inputs")
             .and_then(Json::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default(),
     };
 
-    let scope_json = m
-        .get("scope")
-        .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "recipe: missing 'scope'"))?;
+    let scope_json = m.get("scope").ok_or_else(|| {
+        FamilyError::new(FamilyErrorCode::SchemaInvalid, "recipe: missing 'scope'")
+    })?;
     let sm = obj(scope_json, "scope")?;
     reject_unknown_keys(
         sm,
@@ -368,14 +486,23 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
         allowed_roles: sm
             .get("allowed_roles")
             .and_then(Json::as_array)
-            .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "scope: missing 'allowed_roles'"))?
+            .ok_or_else(|| {
+                FamilyError::new(
+                    FamilyErrorCode::SchemaInvalid,
+                    "scope: missing 'allowed_roles'",
+                )
+            })?
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect(),
         protected_roles: sm
             .get("protected_roles")
             .and_then(Json::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default(),
     };
 
@@ -383,10 +510,9 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
     if let Some(cs) = m.get("constraints").and_then(Json::as_array) {
         for c in cs {
             let cm = obj(c, "constraint")?;
-            let kind_str = cm
-                .get("kind")
-                .and_then(Json::as_str)
-                .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'kind'"))?;
+            let kind_str = cm.get("kind").and_then(Json::as_str).ok_or_else(|| {
+                FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'kind'")
+            })?;
             match kind_str {
                 "param_pair_incompatible" => constraints.push(Constraint::from_wire(cm)?),
                 "requires_socket" => constraints.push(Constraint::from_wire(cm)?),
@@ -407,20 +533,29 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
                 .get("floors_param")
                 .and_then(Json::as_str)
                 .ok_or_else(|| {
-                    FamilyError::new(FamilyErrorCode::SchemaInvalid, "height_model: missing 'floors_param'")
+                    FamilyError::new(
+                        FamilyErrorCode::SchemaInvalid,
+                        "height_model: missing 'floors_param'",
+                    )
                 })?
                 .to_string(),
             height_per_floor_m: hm
                 .get("height_per_floor_m")
                 .and_then(Json::as_f64)
                 .ok_or_else(|| {
-                    FamilyError::new(FamilyErrorCode::SchemaInvalid, "height_model: missing 'height_per_floor_m'")
+                    FamilyError::new(
+                        FamilyErrorCode::SchemaInvalid,
+                        "height_model: missing 'height_per_floor_m'",
+                    )
                 })?,
             roof_param: hm
                 .get("roof_param")
                 .and_then(Json::as_str)
                 .ok_or_else(|| {
-                    FamilyError::new(FamilyErrorCode::SchemaInvalid, "height_model: missing 'roof_param'")
+                    FamilyError::new(
+                        FamilyErrorCode::SchemaInvalid,
+                        "height_model: missing 'roof_param'",
+                    )
                 })?
                 .to_string(),
             roof_rise_m: hm
@@ -441,29 +576,41 @@ pub fn parse_recipe(doc: &Json) -> FamilyResult<FamilyRecipe> {
             profile_ref: sp
                 .get("profile_ref")
                 .and_then(Json::as_str)
-                .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "sockets: missing 'profile_ref'"))?
+                .ok_or_else(|| {
+                    FamilyError::new(
+                        FamilyErrorCode::SchemaInvalid,
+                        "sockets: missing 'profile_ref'",
+                    )
+                })?
                 .to_string(),
             available_sockets: sp
                 .get("available_sockets")
                 .and_then(Json::as_array)
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default(),
         }),
         _ => None,
     };
 
-    let rand = m
-        .get("randomness")
-        .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "recipe: missing 'randomness'"))?;
+    let rand = m.get("randomness").ok_or_else(|| {
+        FamilyError::new(
+            FamilyErrorCode::SchemaInvalid,
+            "recipe: missing 'randomness'",
+        )
+    })?;
     let randomness = Randomness {
         algorithm: str_field(rand, "algorithm", "randomness")?,
         derivation_version: str_field(rand, "derivation_version", "randomness")?,
         default_seed: int_field(rand, "default_seed", "randomness")? as u64,
     };
 
-    let budget = m
-        .get("budget")
-        .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "recipe: missing 'budget'"))?;
+    let budget = m.get("budget").ok_or_else(|| {
+        FamilyError::new(FamilyErrorCode::SchemaInvalid, "recipe: missing 'budget'")
+    })?;
     let budget_val = crate::model::Budget {
         max_items_per_plan: int_field(budget, "max_items_per_plan", "budget")? as u64,
         max_combinations: int_field(budget, "max_combinations", "budget")? as u64,
@@ -519,46 +666,83 @@ impl ConstraintWire for Constraint {
                 param: m
                     .get("param")
                     .and_then(Json::as_str)
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'param'"))?
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "constraint: missing 'param'",
+                        )
+                    })?
                     .to_string(),
                 value: m
                     .get("value")
                     .and_then(Json::as_str)
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'value'"))?
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "constraint: missing 'value'",
+                        )
+                    })?
                     .to_string(),
                 forbids_param: m
                     .get("forbids_param")
                     .and_then(Json::as_str)
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'forbids_param'"))?
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "constraint: missing 'forbids_param'",
+                        )
+                    })?
                     .to_string(),
                 forbids_value: m
                     .get("forbids_value")
                     .and_then(Json::as_str)
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'forbids_value'"))?
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "constraint: missing 'forbids_value'",
+                        )
+                    })?
                     .to_string(),
             },
             "requires_socket" => Constraint::RequiresSocket {
                 param: m
                     .get("param")
                     .and_then(Json::as_str)
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'param'"))?
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "constraint: missing 'param'",
+                        )
+                    })?
                     .to_string(),
                 value: m
                     .get("value")
                     .and_then(Json::as_str)
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'value'"))?
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "constraint: missing 'value'",
+                        )
+                    })?
                     .to_string(),
                 socket_id: m
                     .get("socket_id")
                     .and_then(Json::as_str)
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'socket_id'"))?
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "constraint: missing 'socket_id'",
+                        )
+                    })?
                     .to_string(),
             },
             "maximum_dimension" => Constraint::MaximumDimensionZ {
-                value_m: m
-                    .get("value_m")
-                    .and_then(Json::as_f64)
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "constraint: missing 'value_m'"))?,
+                value_m: m.get("value_m").and_then(Json::as_f64).ok_or_else(|| {
+                    FamilyError::new(
+                        FamilyErrorCode::SchemaInvalid,
+                        "constraint: missing 'value_m'",
+                    )
+                })?,
             },
             _ => {
                 return Err(FamilyError::new(
@@ -581,11 +765,20 @@ pub fn parse_lock(doc: &Json) -> FamilyResult<RecipeLock> {
     reject_unknown_keys(
         m,
         &[
-            "schema", "lock_id", "recipe_ref", "source_set_sha256", "dependencies",
-            "tool_versions", "prng", "pinned_profiles", "floating_latest_allowed",
+            "schema",
+            PROVISIONAL_MARKER_KEY,
+            "lock_id",
+            "recipe_ref",
+            "source_set_sha256",
+            "dependencies",
+            "tool_versions",
+            "prng",
+            "pinned_profiles",
+            "floating_latest_allowed",
         ],
         "lock",
     )?;
+    require_provisional(m, "lock")?;
     // F12 on the wire: a lock that claims floating versions are allowed is invalid.
     if m.get("floating_latest_allowed").and_then(Json::as_bool) == Some(true) {
         return Err(FamilyError::new(
@@ -596,9 +789,12 @@ pub fn parse_lock(doc: &Json) -> FamilyResult<RecipeLock> {
     let mut tool_versions = BTreeMap::new();
     if let Some(tv) = m.get("tool_versions").and_then(Json::as_object) {
         for (k, v) in tv {
-            let version = v
-                .as_str()
-                .ok_or_else(|| FamilyError::new(FamilyErrorCode::FloatingVersion, "tool version must be a string"))?;
+            let version = v.as_str().ok_or_else(|| {
+                FamilyError::new(
+                    FamilyErrorCode::FloatingVersion,
+                    "tool version must be a string",
+                )
+            })?;
             RecipeLock::check_tool_version(k, version)?; // rejects latest/*/ranges (F12)
             tool_versions.insert(k.clone(), version.to_string());
         }
@@ -613,9 +809,9 @@ pub fn parse_lock(doc: &Json) -> FamilyResult<RecipeLock> {
             });
         }
     }
-    let recipe_ref = m
-        .get("recipe_ref")
-        .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "lock: missing 'recipe_ref'"))?;
+    let recipe_ref = m.get("recipe_ref").ok_or_else(|| {
+        FamilyError::new(FamilyErrorCode::SchemaInvalid, "lock: missing 'recipe_ref'")
+    })?;
     let prng = m
         .get("prng")
         .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "lock: missing 'prng'"))?;
@@ -625,7 +821,12 @@ pub fn parse_lock(doc: &Json) -> FamilyResult<RecipeLock> {
             pinned_profiles.insert(
                 k.clone(),
                 v.as_str()
-                    .ok_or_else(|| FamilyError::new(FamilyErrorCode::SchemaInvalid, "pinned profile must be a string"))?
+                    .ok_or_else(|| {
+                        FamilyError::new(
+                            FamilyErrorCode::SchemaInvalid,
+                            "pinned profile must be a string",
+                        )
+                    })?
                     .to_string(),
             );
         }
@@ -661,7 +862,10 @@ pub fn parse_lock(doc: &Json) -> FamilyResult<RecipeLock> {
         prng: Randomness {
             algorithm: str_field(prng, "algorithm", "prng")?,
             derivation_version: str_field(prng, "derivation_version", "prng")?,
-            default_seed: prng.as_object().map(|pm| pm.get("default_seed").and_then(Json::as_i64).unwrap_or(0)).unwrap_or(0) as u64,
+            default_seed: prng
+                .as_object()
+                .map(|pm| pm.get("default_seed").and_then(Json::as_i64).unwrap_or(0))
+                .unwrap_or(0) as u64,
         },
         pinned_profiles,
     };
@@ -680,9 +884,17 @@ pub fn parse_variant_request(doc: &Json) -> FamilyResult<VariantRequest> {
     // F7: a variant request cannot carry scope/capability/validation controls.
     reject_unknown_keys(
         m,
-        &["schema", "item_id", "parameters", "purpose", "export_targets"],
+        &[
+            "schema",
+            PROVISIONAL_MARKER_KEY,
+            "item_id",
+            "parameters",
+            "purpose",
+            "export_targets",
+        ],
         "variant_request",
     )?;
+    require_provisional(m, "variant_request")?;
     let mut parameters = BTreeMap::new();
     if let Some(pm) = m.get("parameters").and_then(Json::as_object) {
         for (k, v) in pm {
@@ -696,7 +908,11 @@ pub fn parse_variant_request(doc: &Json) -> FamilyResult<VariantRequest> {
         export_targets: m
             .get("export_targets")
             .and_then(Json::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default(),
     })
 }

@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use crate::model::{
     Budget, Capability, ConflictPolicy, DepRef, FamilyRecipe, Generator, GeneratorKind,
-    HeightModel, ManifestKind, ManifestRef, ParamSpec, Randomness, RecipeLock, Scope, SocketProfile,
-    SourceEntry, SourceRole, SourceSet, SourceUsage,
+    HeightModel, ManifestKind, ManifestRef, ParamSpec, Randomness, RecipeLock, Scope,
+    SocketProfile, SourceEntry, SourceRole, SourceSet, SourceUsage,
 };
 use crate::sha256::sha256_hex;
 
@@ -43,7 +43,12 @@ pub fn test_house_source_set() -> SourceSet {
             SourceEntry {
                 source_id: "master".to_string(),
                 asset_id: "urban-house-master".to_string(),
-                manifest: mk("master", "urban-house-master", PAYLOAD_MASTER, ManifestKind::AssetRevision),
+                manifest: mk(
+                    "master",
+                    "urban-house-master",
+                    PAYLOAD_MASTER,
+                    ManifestKind::AssetRevision,
+                ),
                 roles: vec![SourceRole::BaseCandidate],
                 usage: SourceUsage::BuildInput,
                 allowed_parts: vec![],
@@ -52,7 +57,12 @@ pub fn test_house_source_set() -> SourceSet {
             SourceEntry {
                 source_id: "roof-donor".to_string(),
                 asset_id: "port-roofs".to_string(),
-                manifest: mk("roof-donor", "port-roofs", PAYLOAD_ROOFS, ManifestKind::AssetRevision),
+                manifest: mk(
+                    "roof-donor",
+                    "port-roofs",
+                    PAYLOAD_ROOFS,
+                    ManifestKind::AssetRevision,
+                ),
                 roles: vec![SourceRole::ModuleDonor],
                 usage: SourceUsage::BuildInput,
                 allowed_parts: vec!["roof".to_string()],
@@ -162,8 +172,14 @@ pub fn test_house_recipe(source_set_digest: &str) -> FamilyRecipe {
                 ("floors".to_string(), "facade.floor_count".to_string()),
                 ("bays".to_string(), "facade.bay_count".to_string()),
                 ("roof".to_string(), "roof.module_choice".to_string()),
-                ("palette".to_string(), "materials.palette_choice".to_string()),
-                ("wear_permille".to_string(), "materials.wear_amount".to_string()),
+                (
+                    "palette".to_string(),
+                    "materials.palette_choice".to_string(),
+                ),
+                (
+                    "wear_permille".to_string(),
+                    "materials.wear_amount".to_string(),
+                ),
                 ("trim".to_string(), "ornaments.trim_choice".to_string()),
             ]),
             source_inputs: vec![
@@ -231,10 +247,26 @@ pub fn test_house_recipe(source_set_digest: &str) -> FamilyRecipe {
             max_combinations: 2000,
         },
         dependencies: vec![
-            DepRef { id: "facade-kit".to_string(), revision: 3, sha256: sha256_hex(b"fixture:facade-kit v3 body") },
-            DepRef { id: "house-generator".to_string(), revision: 2, sha256: sha256_hex(DEP_TEMPLATE.as_bytes()) },
-            DepRef { id: "house-validation".to_string(), revision: 1, sha256: sha256_hex(DEP_VALIDATION.as_bytes()) },
-            DepRef { id: "family-owner-policy".to_string(), revision: 1, sha256: sha256_hex(DEP_POLICY.as_bytes()) },
+            DepRef {
+                id: "facade-kit".to_string(),
+                revision: 3,
+                sha256: sha256_hex(b"fixture:facade-kit v3 body"),
+            },
+            DepRef {
+                id: "house-generator".to_string(),
+                revision: 2,
+                sha256: sha256_hex(DEP_TEMPLATE.as_bytes()),
+            },
+            DepRef {
+                id: "house-validation".to_string(),
+                revision: 1,
+                sha256: sha256_hex(DEP_VALIDATION.as_bytes()),
+            },
+            DepRef {
+                id: "family-owner-policy".to_string(),
+                revision: 1,
+                sha256: sha256_hex(DEP_POLICY.as_bytes()),
+            },
         ],
     }
 }
@@ -260,12 +292,10 @@ pub fn test_house_lock(recipe: &FamilyRecipe, sources: &SourceSet) -> RecipeLock
             ("michelangelo".to_string(), "0.1.0".to_string()),
         ]),
         prng: recipe.randomness.clone(),
-        pinned_profiles: BTreeMap::from([
-            (
-                "style_profile_sha256".to_string(),
-                recipe.style_profile_sha256.clone().unwrap_or_default(),
-            ),
-        ]),
+        pinned_profiles: BTreeMap::from([(
+            "style_profile_sha256".to_string(),
+            recipe.style_profile_sha256.clone().unwrap_or_default(),
+        )]),
     }
 }
 

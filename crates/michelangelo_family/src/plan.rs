@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use crate::errors::{FamilyError, FamilyErrorCode, FamilyResult};
 use crate::json::Json;
 use crate::model::{
-    Constraint, FamilyRecipe, ParamSpec, ParamValue, RecipeLock, SourceRole, SourceSet,
-    VariantRequest,
+    provisional_marker, Constraint, FamilyRecipe, ParamSpec, ParamValue, RecipeLock, SourceRole,
+    SourceSet, VariantRequest, WIRE_SCHEMA_BATCH_PLAN,
 };
 use crate::sha256::sha256_hex;
 
@@ -56,7 +56,8 @@ pub struct PlannedItem {
 }
 
 /// Immutable dry plan: shows what WOULD be created; approves nothing and
-/// executes nothing. PROVISIONAL mirror of `michelangelo.batch-plan/draft-0.1`.
+/// executes nothing. PROVISIONAL mirror of the GLM-1 `batch_plan` shape,
+/// carried under the private tag `michelangelo.family.batch-plan/draft-0`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedBatchPlan {
     pub batch_id: String,
@@ -77,15 +78,28 @@ pub struct ResolvedBatchPlan {
 impl ResolvedBatchPlan {
     pub fn to_json(&self) -> Json {
         Json::Object(BTreeMap::from([
-            ("schema".to_string(), Json::Str("michelangelo.batch-plan/draft-0.1".to_string())),
+            (
+                "schema".to_string(),
+                Json::Str(WIRE_SCHEMA_BATCH_PLAN.to_string()),
+            ),
+            provisional_marker(),
             ("batch_id".to_string(), Json::Str(self.batch_id.clone())),
             (
                 "recipe_ref".to_string(),
                 Json::Object(BTreeMap::from([
                     ("recipe_id".to_string(), Json::Str(self.recipe_id.clone())),
-                    ("revision".to_string(), Json::Int(self.recipe_revision as i64)),
-                    ("recipe_sha256".to_string(), Json::Str(self.recipe_sha256.clone())),
-                    ("recipe_lock_digest".to_string(), Json::Str(self.recipe_lock_digest.clone())),
+                    (
+                        "revision".to_string(),
+                        Json::Int(self.recipe_revision as i64),
+                    ),
+                    (
+                        "recipe_sha256".to_string(),
+                        Json::Str(self.recipe_sha256.clone()),
+                    ),
+                    (
+                        "recipe_lock_digest".to_string(),
+                        Json::Str(self.recipe_lock_digest.clone()),
+                    ),
                 ])),
             ),
             (
@@ -119,8 +133,14 @@ impl ResolvedBatchPlan {
                                     "output_namespace".to_string(),
                                     Json::Str(it.output_namespace.clone()),
                                 ),
-                                ("max_attempts".to_string(), Json::Int(it.max_attempts as i64)),
-                                ("source_kind".to_string(), Json::Str("variant_request".to_string())),
+                                (
+                                    "max_attempts".to_string(),
+                                    Json::Int(it.max_attempts as i64),
+                                ),
+                                (
+                                    "source_kind".to_string(),
+                                    Json::Str("variant_request".to_string()),
+                                ),
                                 ("depends_on_items".to_string(), Json::Array(vec![])),
                             ]))
                         })
@@ -130,8 +150,14 @@ impl ResolvedBatchPlan {
             (
                 "limits".to_string(),
                 Json::Object(BTreeMap::from([
-                    ("admission_profile".to_string(), Json::Str(self.admission_profile.to_string())),
-                    ("max_parallel_heavy".to_string(), Json::Int(self.max_parallel_heavy as i64)),
+                    (
+                        "admission_profile".to_string(),
+                        Json::Str(self.admission_profile.to_string()),
+                    ),
+                    (
+                        "max_parallel_heavy".to_string(),
+                        Json::Int(self.max_parallel_heavy as i64),
+                    ),
                 ])),
             ),
             (
@@ -173,7 +199,12 @@ pub fn combination_allowed(
 ) -> FamilyResult<()> {
     for c in &recipe.constraints {
         match c {
-            Constraint::ParamPairIncompatible { param, value, forbids_param, forbids_value } => {
+            Constraint::ParamPairIncompatible {
+                param,
+                value,
+                forbids_param,
+                forbids_value,
+            } => {
                 let a = params.get(param).and_then(|v| match v {
                     ParamValue::Text(s) => Some(s.as_str()),
                     _ => None,
@@ -189,7 +220,11 @@ pub fn combination_allowed(
                     ));
                 }
             }
-            Constraint::RequiresSocket { param, value, socket_id } => {
+            Constraint::RequiresSocket {
+                param,
+                value,
+                socket_id,
+            } => {
                 let a = params.get(param).and_then(|v| match v {
                     ParamValue::Text(s) => Some(s.as_str()),
                     _ => None,
@@ -418,7 +453,10 @@ impl FamilyPlanner {
                     .collect(),
             )
             .to_canonical();
-            fingerprints.insert("resolved_parameters".to_string(), sha256_hex(param_canonical.as_bytes()));
+            fingerprints.insert(
+                "resolved_parameters".to_string(),
+                sha256_hex(param_canonical.as_bytes()),
+            );
             items.push(PlannedItem {
                 item_id: r.item_id.clone(),
                 resolved_parameters: r.parameters.clone(),

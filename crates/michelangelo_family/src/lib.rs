@@ -3,9 +3,15 @@
 //!
 //! **PROVISIONAL until the GLM-1 contract gate lands.** The DTOs in
 //! [`model`], the planner in [`plan`] and the port in [`port`] are private
-//! draft shapes oriented on GLM-1 `schemas/adr5` draft-0.1 (branch
+//! draft shapes oriented on the GLM-1 `schemas/adr5` documents (branch
 //! `feat/adr5-contracts`, commit `4597c43`); they are not the approved wire
-//! protocol. Round 2 reconciles them.
+//! protocol and do not satisfy the GLM-1 schemas. Round 2 reconciles them.
+//!
+//! **Own tag namespace (finding L):** the emitted documents carry the
+//! private tags `michelangelo.family.<doc>/draft-0` (never the GLM-1 tags
+//! `michelangelo.<doc>/draft-0.1`) plus the explicit marker field
+//! `provisional: true`, so a consumer dispatching by tag cannot mistake
+//! these provisional artifacts for GLM-1 documents.
 //!
 //! Responsibilities implemented here (ADR 0005 §§4–6, 11.1):
 //! - single- and multi-source `SourceSet` with six closed roles, allowed
@@ -34,14 +40,15 @@ pub mod wire;
 
 pub use errors::{FamilyError, FamilyErrorCode, FamilyResult};
 pub use model::{
-    Capability, ConflictPolicy, Constraint, DepRef, FamilyRecipe, Generator, GeneratorKind,
-    HeightModel, ManifestKind, ManifestRef, ParamSpec, ParamValue, Randomness, Budget, RecipeLock,
-    Scope, SocketProfile, SourceEntry, SourceRole, SourceSet, SourceUsage, VariantRequest,
+    Budget, Capability, ConflictPolicy, Constraint, DepRef, FamilyRecipe, Generator, GeneratorKind,
+    HeightModel, ManifestKind, ManifestRef, ParamSpec, ParamValue, Randomness, RecipeLock, Scope,
+    SocketProfile, SourceEntry, SourceRole, SourceSet, SourceUsage, VariantRequest,
+    PROVISIONAL_MARKER_KEY, WIRE_SCHEMA_BATCH_PLAN, WIRE_SCHEMA_LOCK, WIRE_SCHEMA_RECIPE,
+    WIRE_SCHEMA_REQUEST, WIRE_SCHEMA_SOURCE_SET,
 };
 pub use plan::{
-    combination_allowed, derive_seed, enumerate_valid_combinations, sample_requests,
-    FamilyPlanner, PlannedItem, ResolvedBatchPlan, SEED_DERIVATION_ALGORITHM,
-    SEED_DERIVATION_VERSION,
+    combination_allowed, derive_seed, enumerate_valid_combinations, sample_requests, FamilyPlanner,
+    PlannedItem, ResolvedBatchPlan, SEED_DERIVATION_ALGORITHM, SEED_DERIVATION_VERSION,
 };
 pub use port::{BatchExecutorPort, NullBatchExecutor, PlanAck};
 pub use sha256::{sha256, sha256_hex};

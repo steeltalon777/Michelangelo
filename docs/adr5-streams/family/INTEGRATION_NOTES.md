@@ -2,7 +2,27 @@
 
 - **Статус:** draft-0, всё provisional. Читалось read-only: `I:/prog/michelangelo-adr5-contracts` (`schemas/adr5/*.schema.json`, `docs/adr5-contracts/CONTRACT_GATE.md`, `NEGATIVE_TEST_MATRIX.md`, `HANDOFF.md`). Ничего не копировано в зону владения кроме ориентира по полям; ни один документ GLM-1 не изменён.
 
-## 1. Маппинг provisional DTO → GLM-1 draft-0.1 (для раунда 2)
+## 1a. Теги документов: свои provisional, не GLM-1 (fix-раунд, finding L)
+
+**Проблема (найдена независимым ревью).** Документы потока несли теги GLM-1 (`michelangelo.source-set/draft-0.1`, `michelangelo.family-recipe/draft-0.1`, `michelangelo.recipe-lock/draft-0.1`, `michelangelo.variant-request/draft-0.1`, `michelangelo.batch-plan/draft-0.1`), но схемам GLM-1 **не соответствуют** (проверено ревьюером: source_set — 6 ошибок, recipe_lock — 22, family_recipe — 23, dry_plan_15 — 20). Потребитель, диспетчеризующий по тегу, взял бы их как GLM-1-артефакты и упал бы на валидации.
+
+**Решение владельца (применено).** Переход на собственные provisional-теги + явное поле `provisional: true` (по образцу GLM-2: `michelangelo.asset-source-snapshot/draft-0` + `provisional: true`):
+
+| Документ | Тег до (GLM-1, невалидный) | Тег сейчас (provisional, приватный) |
+|---|---|---|
+| source set | `michelangelo.source-set/draft-0.1` | `michelangelo.family.source-set/draft-0` |
+| family recipe | `michelangelo.family-recipe/draft-0.1` | `michelangelo.family.family-recipe/draft-0` |
+| recipe lock | `michelangelo.recipe-lock/draft-0.1` | `michelangelo.family.recipe-lock/draft-0` |
+| variant request | `michelangelo.variant-request/draft-0.1` | `michelangelo.family.variant-request/draft-0` |
+| dry (batch) plan | `michelangelo.batch-plan/draft-0.1` | `michelangelo.family.batch-plan/draft-0` |
+
+- Единственный источник тегов — константы `WIRE_SCHEMA_*` в `src/model.rs`; дублирующих литералов в коде/тестах/фикстурах нет.
+- Каждый документ дополнительно несёт **явное** поле `"provisional": true`. Wire-парсер отвергает: GLM-1-теги (`schema constant mismatch`), документ без маркера и документ с `provisional: false` (все три — `SCHEMA_INVALID`). То есть «не утверждено» видно в самом payload, а не только в теге и не только в документации.
+- Фикстуры (`crates/michelangelo_family/fixtures/*.json`) и пример (`docs/adr5-streams/family/examples/dry_plan_15.json`) **перегенерированы кодом** (`cargo run -- --regen fixtures` и прогон планировщика), руками не правились.
+- **Следствие для digest'ов:** тег и маркер входят в хешируемый canonical JSON, поэтому `source_set_sha256`, `recipe_sha256`, `recipe_lock_digest` и все производные seed'ы изменились. Новые значения — в `fixtures/*.json` и `examples/dry_plan_15.json`; старые (до фикса) больше не валидны.
+- **Следствие для round 2:** при принятии контракта GLM-1 теги переезжают в утверждённое пространство GLM-1 (или схемы получают `michelangelo.family.*`), а поле `provisional` удаляется/переименовывается. **До раунда 2 теги provisional — это осознанное состояние, а не недосмотр.**
+
+## 1. Маппинг provisional DTO → GLM-1 (черновик, для раунда 2)
 
 | Мой DTO/поле | GLM-1 schema | Совпадение | Расхождение / предложение |
 |---|---|---|---|
@@ -35,7 +55,9 @@ trait BatchExecutorPort { fn accept_plan(&self, plan: &ResolvedBatchPlan) -> Fam
 - `NullBatchExecutor` — дефолт, отказ `NOT_PLANNABLE`: граница pure planning видна в рантайме, GLM-3 подменит реализацией.
 - Для `family.plan` и Batch Executor: `derive_seed(lock_digest, item_id)` — единственная точка seed derivation; Batch должен НЕ переизобретать.
 
-## 3. Что изменить в моём коде при принятии draft-0.1 (минимальный план раунда 2)
+## 3. Что изменить в моём коде при принятии контракта GLM-1 (минимальный план раунда 2)
+
+0. Перевести теги и маркер (§1a): `WIRE_SCHEMA_*` → утверждённое пространство GLM-1 (или схемы получают `michelangelo.family.*`), поле `provisional: true` удаляется/переименовывается. Пока это не сделано — документы остаются provisional и не должны попадать в GLM-1-диспетчер.
 
 1. Переименовать/переставить поля под `family_recipe.schema.json` (например `source_set_ref.{source_set_id,revision,sha256}` — уже совпадает).
 2. Добавить `created_at` (RFC3339) во все документы — у меня нет времени создания (determinism важнее, но wire требует).
@@ -60,6 +82,7 @@ trait BatchExecutorPort { fn accept_plan(&self, plan: &ResolvedBatchPlan) -> Fam
 4. **План без `created_at` и без `creator`:** my ResolvedBatchPlan не содержит автора плана; в batch_plan.schema.json есть creator. Proposal: creator живёт в CLI-слое, не в planner — согласовать.
 5. **Float-хеширование:** canonical JSON сейчас форматирует f64 shortest-round-trip Rust; в fixture float-значений в хешируемых местах нет (wear — enum). Требуется решение (op-3-подобное): запретить float в hash-области либо зафиксировать формат.
 6. **INSUFFICIENT_UNIQUE_COMBINATIONS:** честная ошибка при 720 валидных комбинациях и запросе, например, 1000 — подтверждает ли владелец, что план обязан падать, а не уменьшать count?
+7. **Provisional-теги (§1a):** достаточно ли конвенции «приватное пространство `michelangelo.family.*/draft-0` + явное `provisional: true`», чтобы потребитель не принял документ потока за GLM-1-артефакт? Предложите правило реестра (например: тег `michelangelo.*/draft-0.1` принимается только от потока-владельца схемы; иначе — отказ по тегу, а не по содержимому).
 
 ## 6. Изменения общих файлов
 

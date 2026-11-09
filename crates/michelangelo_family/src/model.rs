@@ -1,9 +1,19 @@
 //! PROVISIONAL private DTOs for ADR 0005 Family Builder (GLM-4 stream).
 //!
 //! **Status: draft-0, provisional until the GLM-1 contract gate lands.** These
-//! types mirror the shape of `schemas/adr5/*.schema.json` (draft-0.1, GLM-1
-//! worktree `feat/adr5-contracts`) but are NOT the approved wire protocol.
-//! Round 2 of the dispatch will reconcile them with the contract gate.
+//! types mirror the shape of `schemas/adr5/*.schema.json` (GLM-1 worktree
+//! `feat/adr5-contracts`) but are NOT the approved wire protocol and do not
+//! satisfy the GLM-1 schemas. Round 2 of the dispatch will reconcile them with
+//! the contract gate.
+//!
+//! **Own tag namespace (finding L).** The documents emitted here deliberately
+//! carry *private* tags of the form `michelangelo.family.<doc>/draft-0` and
+//! never the GLM-1 tags `michelangelo.<doc>/draft-0.1`. The GLM-1 tags name
+//! the approved contract; reusing them for documents that do not satisfy the
+//! GLM-1 schemas would make a tag-dispatching consumer pick these artifacts
+//! up as GLM-1 documents and fail on them. Every document additionally
+//! carries the explicit marker field `provisional: true`, so "not yet
+//! contracted" is visible in the payload and not only in the tag.
 //!
 //! Pure planning only: no Blender calls, no publication, no self-approval.
 
@@ -13,12 +23,23 @@ use crate::errors::{FamilyError, FamilyErrorCode, FamilyResult};
 use crate::json::Json;
 use crate::sha256::sha256_hex;
 
-pub const WIRE_SCHEMA_SOURCE_SET: &str = "michelangelo.source-set/draft-0.1";
-pub const WIRE_SCHEMA_RECIPE: &str = "michelangelo.family-recipe/draft-0.1";
-pub const WIRE_SCHEMA_LOCK: &str = "michelangelo.recipe-lock/draft-0.1";
-pub const WIRE_SCHEMA_REQUEST: &str = "michelangelo.variant-request/draft-0.1";
+/// Provisional wire tags of THIS stream. Private namespace, never GLM-1.
+pub const WIRE_SCHEMA_SOURCE_SET: &str = "michelangelo.family.source-set/draft-0";
+pub const WIRE_SCHEMA_RECIPE: &str = "michelangelo.family.family-recipe/draft-0";
+pub const WIRE_SCHEMA_LOCK: &str = "michelangelo.family.recipe-lock/draft-0";
+pub const WIRE_SCHEMA_REQUEST: &str = "michelangelo.family.variant-request/draft-0";
+pub const WIRE_SCHEMA_BATCH_PLAN: &str = "michelangelo.family.batch-plan/draft-0";
 
-/// Six closed source roles (ADR 0005 §4.4 / GLM-1 draft-0.1, OP-5). PROVISIONAL.
+/// Key of the explicit provisional marker carried by every emitted document.
+pub const PROVISIONAL_MARKER_KEY: &str = "provisional";
+
+/// The marker value every emitted document carries: these artifacts are
+/// provisional until round 2 reconciles them with the GLM-1 contract.
+pub fn provisional_marker() -> (String, Json) {
+    (PROVISIONAL_MARKER_KEY.to_string(), Json::Bool(true))
+}
+
+/// Six closed source roles (ADR 0005 §4.4 / GLM-1 role enum, OP-5). PROVISIONAL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceRole {
     BaseCandidate,
@@ -131,8 +152,9 @@ pub enum ConflictPolicy {
     RejectConflict,
 }
 
-/// Immutable list of source revisions. PROVISIONAL mirror of
-/// `michelangelo.source-set/draft-0.1`.
+/// Immutable list of source revisions. PROVISIONAL mirror of the GLM-1
+/// `source_set` shape, carried under the private tag
+/// `michelangelo.family.source-set/draft-0`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceSet {
     pub source_set_id: String,
@@ -165,7 +187,8 @@ impl SourceSet {
             // Held-out invariant (GLM-1 source_set allOf): the validation
             // reference role must be held_out so it cannot feed the generator.
             // Checked first: role/usage mixing is the core leakage.
-            if s.roles.contains(&SourceRole::IndependentValidationReference)
+            if s.roles
+                .contains(&SourceRole::IndependentValidationReference)
                 && s.usage != SourceUsage::HeldOut
             {
                 return Err(FamilyError::new(
@@ -178,7 +201,9 @@ impl SourceSet {
             }
             // A held-out source must not carry any build role either.
             if s.usage == SourceUsage::HeldOut
-                && s.roles.iter().any(|r| *r != SourceRole::IndependentValidationReference)
+                && s.roles
+                    .iter()
+                    .any(|r| *r != SourceRole::IndependentValidationReference)
             {
                 return Err(FamilyError::new(
                     FamilyErrorCode::HeldoutLeakage,
@@ -200,8 +225,10 @@ impl SourceSet {
             // Role/usage coherence.
             for role in &s.roles {
                 match role {
-                    SourceRole::BaseCandidate | SourceRole::ModuleDonor
-                    | SourceRole::VariationExemplar | SourceRole::GeometricConstraintReference => {
+                    SourceRole::BaseCandidate
+                    | SourceRole::ModuleDonor
+                    | SourceRole::VariationExemplar
+                    | SourceRole::GeometricConstraintReference => {
                         if s.usage != SourceUsage::BuildInput {
                             return Err(FamilyError::new(
                                 FamilyErrorCode::RoleInvalid,
@@ -259,7 +286,11 @@ impl SourceSet {
                     "schema".to_string(),
                     Json::Str(WIRE_SCHEMA_SOURCE_SET.to_string()),
                 ),
-                ("source_set_id".to_string(), Json::Str(self.source_set_id.clone())),
+                provisional_marker(),
+                (
+                    "source_set_id".to_string(),
+                    Json::Str(self.source_set_id.clone()),
+                ),
                 ("revision".to_string(), Json::Int(self.revision as i64)),
                 (
                     "sources".to_string(),
@@ -277,10 +308,12 @@ impl SourceSet {
                                                 "kind".to_string(),
                                                 Json::Str(
                                                     match s.manifest.kind {
-                                                        ManifestKind::SourceSnapshot =>
-                                                            "source_snapshot",
-                                                        ManifestKind::AssetRevision =>
-                                                            "asset_revision",
+                                                        ManifestKind::SourceSnapshot => {
+                                                            "source_snapshot"
+                                                        }
+                                                        ManifestKind::AssetRevision => {
+                                                            "asset_revision"
+                                                        }
                                                     }
                                                     .to_string(),
                                                 ),
@@ -327,8 +360,9 @@ impl SourceSet {
                     "conflict_policy".to_string(),
                     Json::Str(
                         match self.conflict_policy {
-                            ConflictPolicy::RequireExplicitResolution =>
-                                "require_explicit_resolution",
+                            ConflictPolicy::RequireExplicitResolution => {
+                                "require_explicit_resolution"
+                            }
                             ConflictPolicy::RejectConflict => "reject_conflict",
                         }
                         .to_string(),
@@ -600,7 +634,8 @@ pub struct SocketProfile {
 }
 
 /// Immutable recipe describing the ALLOWED SET of results (not a program, not
-/// geometry). PROVISIONAL mirror of `michelangelo.family-recipe/draft-0.1`.
+/// geometry). PROVISIONAL mirror of the GLM-1 `family_recipe` shape, carried
+/// under the private tag `michelangelo.family.family-recipe/draft-0`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FamilyRecipe {
     pub recipe_id: String,
@@ -630,8 +665,12 @@ impl FamilyRecipe {
                 "scope.allowed_roles must not be empty",
             ));
         }
-        let allowed: std::collections::BTreeSet<&str> =
-            self.scope.allowed_roles.iter().map(|s| s.as_str()).collect();
+        let allowed: std::collections::BTreeSet<&str> = self
+            .scope
+            .allowed_roles
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
         for p in &self.scope.protected_roles {
             if allowed.contains(p.as_str()) {
                 return Err(FamilyError::new(
@@ -652,9 +691,12 @@ impl FamilyRecipe {
             }
             let segments: Vec<&str> = binding.split('.').collect();
             if segments.len() != 2
-                || segments
-                    .iter()
-                    .any(|s| s.is_empty() || !s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+                || segments.iter().any(|s| {
+                    s.is_empty()
+                        || !s
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                })
             {
                 return Err(FamilyError::new(
                     FamilyErrorCode::ArbitraryCode,
@@ -664,8 +706,9 @@ impl FamilyRecipe {
                 ));
             }
             // Script/exec host vocabulary never appears in typed bindings (F10).
-            const FORBIDDEN: [&str; 7] =
-                ["exec", "script", "python", "eval", "shell", "command", "code"];
+            const FORBIDDEN: [&str; 7] = [
+                "exec", "script", "python", "eval", "shell", "command", "code",
+            ];
             if segments.iter().any(|s| FORBIDDEN.contains(s)) {
                 return Err(FamilyError::new(
                     FamilyErrorCode::ArbitraryCode,
@@ -714,9 +757,10 @@ impl FamilyRecipe {
                         Json::Array(values.iter().map(|v| Json::Str(v.clone())).collect()),
                     ),
                 ])),
-                ParamSpec::Boolean => Json::Object(BTreeMap::from([
-                    ("type".to_string(), Json::Str("boolean".to_string())),
-                ])),
+                ParamSpec::Boolean => Json::Object(BTreeMap::from([(
+                    "type".to_string(),
+                    Json::Str("boolean".to_string()),
+                )])),
             };
             params.insert(name.clone(), spec_json);
         }
@@ -725,52 +769,92 @@ impl FamilyRecipe {
             .constraints
             .iter()
             .map(|c| match c {
-                Constraint::ParamPairIncompatible { param, value, forbids_param, forbids_value } =>
-                    Json::Object(BTreeMap::from([
-                        ("kind".to_string(), Json::Str("param_pair_incompatible".to_string())),
-                        ("param".to_string(), Json::Str(param.clone())),
-                        ("value".to_string(), Json::Str(value.clone())),
-                        ("forbids_param".to_string(), Json::Str(forbids_param.clone())),
-                        ("forbids_value".to_string(), Json::Str(forbids_value.clone())),
-                    ])),
-                Constraint::RequiresSocket { param, value, socket_id } =>
-                    Json::Object(BTreeMap::from([
-                        ("kind".to_string(), Json::Str("requires_socket".to_string())),
-                        ("param".to_string(), Json::Str(param.clone())),
-                        ("value".to_string(), Json::Str(value.clone())),
-                        ("socket_id".to_string(), Json::Str(socket_id.clone())),
-                    ])),
-                Constraint::MaximumDimensionZ { value_m } =>
-                    Json::Object(BTreeMap::from([
-                        ("kind".to_string(), Json::Str("maximum_dimension".to_string())),
-                        ("axis".to_string(), Json::Str("Z".to_string())),
-                        ("value_m".to_string(), Json::Float(*value_m)),
-                    ])),
+                Constraint::ParamPairIncompatible {
+                    param,
+                    value,
+                    forbids_param,
+                    forbids_value,
+                } => Json::Object(BTreeMap::from([
+                    (
+                        "kind".to_string(),
+                        Json::Str("param_pair_incompatible".to_string()),
+                    ),
+                    ("param".to_string(), Json::Str(param.clone())),
+                    ("value".to_string(), Json::Str(value.clone())),
+                    (
+                        "forbids_param".to_string(),
+                        Json::Str(forbids_param.clone()),
+                    ),
+                    (
+                        "forbids_value".to_string(),
+                        Json::Str(forbids_value.clone()),
+                    ),
+                ])),
+                Constraint::RequiresSocket {
+                    param,
+                    value,
+                    socket_id,
+                } => Json::Object(BTreeMap::from([
+                    ("kind".to_string(), Json::Str("requires_socket".to_string())),
+                    ("param".to_string(), Json::Str(param.clone())),
+                    ("value".to_string(), Json::Str(value.clone())),
+                    ("socket_id".to_string(), Json::Str(socket_id.clone())),
+                ])),
+                Constraint::MaximumDimensionZ { value_m } => Json::Object(BTreeMap::from([
+                    (
+                        "kind".to_string(),
+                        Json::Str("maximum_dimension".to_string()),
+                    ),
+                    ("axis".to_string(), Json::Str("Z".to_string())),
+                    ("value_m".to_string(), Json::Float(*value_m)),
+                ])),
             })
             .collect();
 
         Json::Object(BTreeMap::from([
-            ("schema".to_string(), Json::Str(WIRE_SCHEMA_RECIPE.to_string())),
+            (
+                "schema".to_string(),
+                Json::Str(WIRE_SCHEMA_RECIPE.to_string()),
+            ),
+            provisional_marker(),
             ("recipe_id".to_string(), Json::Str(self.recipe_id.clone())),
             ("revision".to_string(), Json::Int(self.revision as i64)),
             (
                 "source_set_ref".to_string(),
                 Json::Object(BTreeMap::from([
-                    ("source_set_id".to_string(), Json::Str(self.source_set_id.clone())),
-                    ("revision".to_string(), Json::Int(self.source_set_revision as i64)),
-                    ("sha256".to_string(), Json::Str(self.source_set_sha256.clone())),
+                    (
+                        "source_set_id".to_string(),
+                        Json::Str(self.source_set_id.clone()),
+                    ),
+                    (
+                        "revision".to_string(),
+                        Json::Int(self.source_set_revision as i64),
+                    ),
+                    (
+                        "sha256".to_string(),
+                        Json::Str(self.source_set_sha256.clone()),
+                    ),
                 ])),
             ),
             (
                 "style_profile_sha256".to_string(),
-                self.style_profile_sha256.clone().map(Json::Str).unwrap_or(Json::Null),
+                self.style_profile_sha256
+                    .clone()
+                    .map(Json::Str)
+                    .unwrap_or(Json::Null),
             ),
             ("parameters".to_string(), Json::Object(params)),
             (
                 "generator".to_string(),
                 Json::Object(BTreeMap::from([
-                    ("kind".to_string(), Json::Str(self.generator.kind.as_str().to_string())),
-                    ("template_ref".to_string(), Json::Str(self.generator.template_ref.clone())),
+                    (
+                        "kind".to_string(),
+                        Json::Str(self.generator.kind.as_str().to_string()),
+                    ),
+                    (
+                        "template_ref".to_string(),
+                        Json::Str(self.generator.template_ref.clone()),
+                    ),
                     (
                         "capabilities".to_string(),
                         Json::Array(
@@ -809,13 +893,21 @@ impl FamilyRecipe {
                     (
                         "allowed_roles".to_string(),
                         Json::Array(
-                            self.scope.allowed_roles.iter().map(|r| Json::Str(r.clone())).collect(),
+                            self.scope
+                                .allowed_roles
+                                .iter()
+                                .map(|r| Json::Str(r.clone()))
+                                .collect(),
                         ),
                     ),
                     (
                         "protected_roles".to_string(),
                         Json::Array(
-                            self.scope.protected_roles.iter().map(|r| Json::Str(r.clone())).collect(),
+                            self.scope
+                                .protected_roles
+                                .iter()
+                                .map(|r| Json::Str(r.clone()))
+                                .collect(),
                         ),
                     ),
                     // Constant false by construction; wire-level `true` is rejected.
@@ -827,8 +919,14 @@ impl FamilyRecipe {
                 "height_model".to_string(),
                 match &self.height_model {
                     Some(hm) => Json::Object(BTreeMap::from([
-                        ("floors_param".to_string(), Json::Str(hm.floors_param.clone())),
-                        ("height_per_floor_m".to_string(), Json::Float(hm.height_per_floor_m)),
+                        (
+                            "floors_param".to_string(),
+                            Json::Str(hm.floors_param.clone()),
+                        ),
+                        (
+                            "height_per_floor_m".to_string(),
+                            Json::Float(hm.height_per_floor_m),
+                        ),
                         ("roof_param".to_string(), Json::Str(hm.roof_param.clone())),
                         (
                             "roof_rise_m".to_string(),
@@ -846,12 +944,18 @@ impl FamilyRecipe {
             (
                 "randomness".to_string(),
                 Json::Object(BTreeMap::from([
-                    ("algorithm".to_string(), Json::Str(self.randomness.algorithm.clone())),
+                    (
+                        "algorithm".to_string(),
+                        Json::Str(self.randomness.algorithm.clone()),
+                    ),
                     (
                         "derivation_version".to_string(),
                         Json::Str(self.randomness.derivation_version.clone()),
                     ),
-                    ("default_seed".to_string(), Json::Int(self.randomness.default_seed as i64)),
+                    (
+                        "default_seed".to_string(),
+                        Json::Int(self.randomness.default_seed as i64),
+                    ),
                 ])),
             ),
             (
@@ -890,7 +994,10 @@ impl FamilyRecipe {
                         (
                             "available_sockets".to_string(),
                             Json::Array(
-                                sp.available_sockets.iter().map(|s| Json::Str(s.clone())).collect(),
+                                sp.available_sockets
+                                    .iter()
+                                    .map(|s| Json::Str(s.clone()))
+                                    .collect(),
                             ),
                         ),
                     ])),
@@ -907,7 +1014,8 @@ impl FamilyRecipe {
 
 /// Immutable lock over exact dependency hashes, tool versions and PRNG
 /// algorithm. Floating `latest` never enters an executable plan (F12).
-/// PROVISIONAL mirror of `michelangelo.recipe-lock/draft-0.1`.
+/// PROVISIONAL mirror of the GLM-1 `recipe_lock` shape, carried under the
+/// private tag `michelangelo.family.recipe-lock/draft-0`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecipeLock {
     pub lock_id: String,
@@ -993,7 +1101,10 @@ impl RecipeLock {
             if locked.sha256 != dep.sha256 {
                 return Err(FamilyError::new(
                     FamilyErrorCode::StaleDependency,
-                    format!("dependency '{}' hash changed since lock: lock is stale", dep.id),
+                    format!(
+                        "dependency '{}' hash changed since lock: lock is stale",
+                        dep.id
+                    ),
                 ));
             }
         }
@@ -1036,20 +1147,34 @@ impl RecipeLock {
         Ok(())
     }
 
-    /// Canonical digest over the lock content (excluding the digest itself).
-    pub fn digest(&self) -> String {
-        let json = Json::Object(BTreeMap::from([
-            ("schema".to_string(), Json::Str(WIRE_SCHEMA_LOCK.to_string())),
+    /// Canonical wire document of the lock (provisional private tag).
+    /// `floating_latest_allowed` is constant false by construction.
+    pub fn to_json(&self) -> Json {
+        Json::Object(BTreeMap::from([
+            (
+                "schema".to_string(),
+                Json::Str(WIRE_SCHEMA_LOCK.to_string()),
+            ),
+            provisional_marker(),
             ("lock_id".to_string(), Json::Str(self.lock_id.clone())),
             (
                 "recipe_ref".to_string(),
                 Json::Object(BTreeMap::from([
                     ("recipe_id".to_string(), Json::Str(self.recipe_id.clone())),
-                    ("recipe_revision".to_string(), Json::Int(self.recipe_revision as i64)),
-                    ("recipe_sha256".to_string(), Json::Str(self.recipe_sha256.clone())),
+                    (
+                        "recipe_revision".to_string(),
+                        Json::Int(self.recipe_revision as i64),
+                    ),
+                    (
+                        "recipe_sha256".to_string(),
+                        Json::Str(self.recipe_sha256.clone()),
+                    ),
                 ])),
             ),
-            ("source_set_sha256".to_string(), Json::Str(self.source_set_sha256.clone())),
+            (
+                "source_set_sha256".to_string(),
+                Json::Str(self.source_set_sha256.clone()),
+            ),
             (
                 "dependencies".to_string(),
                 Json::Array(
@@ -1077,12 +1202,18 @@ impl RecipeLock {
             (
                 "prng".to_string(),
                 Json::Object(BTreeMap::from([
-                    ("algorithm".to_string(), Json::Str(self.prng.algorithm.clone())),
+                    (
+                        "algorithm".to_string(),
+                        Json::Str(self.prng.algorithm.clone()),
+                    ),
                     (
                         "derivation_version".to_string(),
                         Json::Str(self.prng.derivation_version.clone()),
                     ),
-                    ("default_seed".to_string(), Json::Int(self.prng.default_seed as i64)),
+                    (
+                        "default_seed".to_string(),
+                        Json::Int(self.prng.default_seed as i64),
+                    ),
                 ])),
             ),
             (
@@ -1095,14 +1226,21 @@ impl RecipeLock {
                 ),
             ),
             ("floating_latest_allowed".to_string(), Json::Bool(false)),
-        ]));
-        sha256_hex(json.to_canonical().as_bytes())
+        ]))
+    }
+
+    /// Canonical digest over the lock content (excluding the digest itself).
+    /// Equal to `sha256(canonical wire document)`: the lock digest pins
+    /// exactly the bytes that are published.
+    pub fn digest(&self) -> String {
+        sha256_hex(self.to_json().to_canonical().as_bytes())
     }
 }
 
 /// One stable family item: full resolved parameter set, no scope/capability/
-/// validation fields by construction. PROVISIONAL mirror of
-/// `michelangelo.variant-request/draft-0.1`.
+/// validation fields by construction. PROVISIONAL mirror of the GLM-1
+/// `variant_request` shape, carried under the private tag
+/// `michelangelo.family.variant-request/draft-0`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantRequest {
     pub item_id: String,
@@ -1112,6 +1250,38 @@ pub struct VariantRequest {
 }
 
 impl VariantRequest {
+    /// Canonical wire document of the request (provisional private tag plus
+    /// the explicit `provisional: true` marker).
+    pub fn to_json(&self) -> Json {
+        Json::Object(BTreeMap::from([
+            (
+                "schema".to_string(),
+                Json::Str(WIRE_SCHEMA_REQUEST.to_string()),
+            ),
+            provisional_marker(),
+            ("item_id".to_string(), Json::Str(self.item_id.clone())),
+            (
+                "parameters".to_string(),
+                Json::Object(
+                    self.parameters
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_json()))
+                        .collect(),
+                ),
+            ),
+            ("purpose".to_string(), Json::Str(self.purpose.clone())),
+            (
+                "export_targets".to_string(),
+                Json::Array(
+                    self.export_targets
+                        .iter()
+                        .map(|t| Json::Str(t.clone()))
+                        .collect(),
+                ),
+            ),
+        ]))
+    }
+
     /// Completeness + typed validation against the recipe (F17). Unknown
     /// parameters, missing values, out-of-range values, wrong types and
     /// enum misses are all explicit rejections, never silent ignores.

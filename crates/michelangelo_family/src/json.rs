@@ -1,7 +1,7 @@
 //! Minimal JSON value type with a strict parser and a canonical writer.
 //!
 //! Zero-dependency stand-in (provisional) for the serde-based wire layer that
-//! GLM-1's draft-0.1 schemas imply. The parser deliberately rejects trailing
+//! GLM-1's draft schemas imply. The parser deliberately rejects trailing
 //! content, duplicate object keys and invalid escapes so that wire-level
 //! negative fixtures fail loudly instead of silently.
 //!
@@ -327,8 +327,7 @@ impl<'a> Parser<'a> {
                 Some(_) => {
                     // Consume one UTF-8 char.
                     let rest = &self.bytes[self.pos..];
-                    let s = std::str::from_utf8(rest)
-                        .map_err(|_| self.err("invalid utf-8"))?;
+                    let s = std::str::from_utf8(rest).map_err(|_| self.err("invalid utf-8"))?;
                     let ch = s.chars().next().unwrap();
                     out.push(ch);
                     self.pos += ch.len_utf8();
@@ -388,10 +387,7 @@ mod tests {
     fn parse_canonical_roundtrip() {
         let src = r#"{"b":[1,2,{"a":null}],"a":"x\ny"}"#;
         let v = parse(src).unwrap();
-        assert_eq!(
-            v.to_canonical(),
-            r#"{"a":"x\ny","b":[1,2,{"a":null}]}"#
-        );
+        assert_eq!(v.to_canonical(), r#"{"a":"x\ny","b":[1,2,{"a":null}]}"#);
     }
 
     #[test]

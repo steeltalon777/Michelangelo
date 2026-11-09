@@ -50,64 +50,7 @@ fn regen(dir: &str) -> FamilyResult<()> {
     let docs: BTreeMap<&str, Json> = BTreeMap::from([
         ("source_set.json", sources.to_json()),
         ("family_recipe.json", recipe.to_json()),
-        (
-            "recipe_lock.json",
-            Json::Object(BTreeMap::from([
-                ("schema".to_string(), Json::Str("michelangelo.recipe-lock/draft-0.1".to_string())),
-                ("lock_id".to_string(), Json::Str(lock.lock_id.clone())),
-                (
-                    "recipe_ref".to_string(),
-                    Json::Object(BTreeMap::from([
-                        ("recipe_id".to_string(), Json::Str(lock.recipe_id.clone())),
-                        ("recipe_revision".to_string(), Json::Int(lock.recipe_revision as i64)),
-                        ("recipe_sha256".to_string(), Json::Str(lock.recipe_sha256.clone())),
-                    ])),
-                ),
-                ("source_set_sha256".to_string(), Json::Str(lock.source_set_sha256.clone())),
-                (
-                    "dependencies".to_string(),
-                    Json::Array(
-                        lock.dependencies
-                            .iter()
-                            .map(|d| {
-                                Json::Object(BTreeMap::from([
-                                    ("id".to_string(), Json::Str(d.id.clone())),
-                                    ("revision".to_string(), Json::Int(d.revision as i64)),
-                                    ("sha256".to_string(), Json::Str(d.sha256.clone())),
-                                ]))
-                            })
-                            .collect(),
-                    ),
-                ),
-                (
-                    "tool_versions".to_string(),
-                    Json::Object(
-                        lock.tool_versions
-                            .iter()
-                            .map(|(k, v)| (k.clone(), Json::Str(v.clone())))
-                            .collect(),
-                    ),
-                ),
-                (
-                    "prng".to_string(),
-                    Json::Object(BTreeMap::from([
-                        ("algorithm".to_string(), Json::Str(lock.prng.algorithm.clone())),
-                        ("derivation_version".to_string(), Json::Str(lock.prng.derivation_version.clone())),
-                        ("default_seed".to_string(), Json::Int(lock.prng.default_seed as i64)),
-                    ])),
-                ),
-                (
-                    "pinned_profiles".to_string(),
-                    Json::Object(
-                        lock.pinned_profiles
-                            .iter()
-                            .map(|(k, v)| (k.clone(), Json::Str(v.clone())))
-                            .collect(),
-                    ),
-                ),
-                ("floating_latest_allowed".to_string(), Json::Bool(false)),
-            ])),
-        ),
+        ("recipe_lock.json", lock.to_json()),
     ]);
 
     for (name, doc) in &docs {
@@ -149,13 +92,16 @@ fn plan_from_fixtures(dir: &str) -> FamilyResult<()> {
 }
 
 fn read_json(path: &Path) -> FamilyResult<Json> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| michelangelo_family::FamilyError::new(
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        michelangelo_family::FamilyError::new(
             michelangelo_family::FamilyErrorCode::SchemaInvalid,
             format!("cannot read {}: {e}", path.display()),
-        ))?;
-    parse(&text).map_err(|e| michelangelo_family::FamilyError::new(
-        michelangelo_family::FamilyErrorCode::SchemaInvalid,
-        format!("{}: {e}", path.display()),
-    ))
+        )
+    })?;
+    parse(&text).map_err(|e| {
+        michelangelo_family::FamilyError::new(
+            michelangelo_family::FamilyErrorCode::SchemaInvalid,
+            format!("{}: {e}", path.display()),
+        )
+    })
 }
