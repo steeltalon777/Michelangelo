@@ -1,0 +1,29 @@
+[package]
+name = "michelangelo_batch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ADR 0005 stream C PoC: durable batch executor with fake worker (provisional, not production-ready)"
+publish = false
+
+# Standalone on purpose: the repository root Cargo.toml workspace must not be
+# modified by this stream, so this crate declares itself its own workspace root
+# and is NOT a member of the root workspace. See docs/adr5-streams/batch/SCOPE.md.
+[workspace]
+
+[lib]
+name = "michelangelo_batch"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mbatch"
+path = "src/bin/mbatch.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
