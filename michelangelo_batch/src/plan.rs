@@ -529,11 +529,13 @@ pub const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
-/// True when the item id is (or starts with) a reserved Windows device name.
+/// True when the item id matches a reserved Windows device name by stem
+/// (the part before the first dot).
 ///
 /// The check is applied to the stem, i.e. the part before the first dot,
 /// because Windows reserves `NUL.txt` exactly like `NUL`. The comparison is
-/// case-insensitive: `nul`, `Nul` and `NUL` are the same device.
+/// case-insensitive: `nul`, `Nul` and `NUL` are the same device. Only an
+/// exact stem match counts; `CONSOLE` or `NULLIFY` are valid ids.
 pub fn is_windows_reserved_name(id: &str) -> bool {
     let stem = id.split('.').next().unwrap_or(id);
     WINDOWS_RESERVED_NAMES
