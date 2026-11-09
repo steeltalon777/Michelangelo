@@ -583,16 +583,16 @@ GUI automation для CLI-first объёма не требуется. UE smoke �
 Существенные решения fix-раунда: F1 закрыт структурно — claim item + insert attempt одной транзакцией (`claim_item_with_attempt`), лимбо-состояние непредставимо, плюс свеп legacy-состояний; H2 закрыт guard'ом на регистрации, в verify и через pinned-копию профиля (обход поиска ревьюера не нашёл); E — `expected_current_revision` условно-обязателен при `base_ref.kind=asset_revision` (CAS на уровне `acceptance_record.target` остаётся безусловным).
 
 **P2-остатки (обязательны до интеграции, раунд 2):**
-- Batch: Windows-коллизия item_id (case-fold/трейлинг-точки NTFS) — orphan-ветка способна переименовать чужой каталог; нужна нормализация уникальности id и проверка attempt-строк по dir.
-- Validation: matrix-coverage — обязательная matrix-Required/сработавшая условная проверка может быть просто не включена в профиль; нужно обратное покрытие в `validate_applicability`.
+- Batch: Windows-коллизия item_id (case-fold/трейлинг-точки NTFS) — orphan-ветка способна переименовать чужой каталог; нужна нормализация уникальности id и проверка attempt-строк по dir. **Закрыто `56c4746`:** `windows_fold_id`/`dir_key`, `find_attempt_by_dir` с отказом `Inconsistent` до мутаций; бонусом blacklist Windows-устройств, инкрементальный orphan-суффикс, `insert_attempt → Result<(), StoreError>`; 50 тестов, delta-review и мини-ревью — PASS. Остаточные P3: fold включается по `cfg!(windows)` (на case-insensitive не-Windows ФС сценарий воспроизводим — задокументировано в TEST_EVIDENCE §7), cross-plan тестовый gap.
+- Validation: matrix-coverage — обязательная matrix-Required/сработавшая условная проверка может быть просто не включена в профиль; нужно обратное покрытие в `validate_applicability`. **Закрыто `30ca73a`:** обязательность `required_checks ⊇ {Required} ∪ {RequiredWithCondition(t) | has_condition(t)}`; бонусом pinned-basis обязателен для любого verify (`VALIDATION_PROFILE_BASIS_MISSING`), дубликаты check_id отклоняются при регистрации; 26 тестов, delta-review и мини-ревью — PASS.
 
-P3-мелочи (косметика/документация, перечень в отчётах delta-review): пин негативных фикстур по сообщению, breadth тестов тегов/маркера, четвёртая digest-конвенция `sha256-lf` (включить в таблицу §9.7 отчёта DSH), явная фиксация остаточных LOW-4..7 blender, судьба контрольного снимка smoke, doc-контракт `insert_attempt`, зарезервированные имена Windows, суффикс-коллизии orphan.
+P3-мелочи (косметика/документация, перечень в отчётах delta-review): пин негативных фикстур по сообщению, breadth тестов тегов/маркера, четвёртая digest-конвенция `sha256-lf` (включить в таблицу §9.7 отчёта DSH), явная фиксация остаточных LOW-4..7 blender, судьба контрольного снимка smoke, doc-контракт `insert_attempt`, зарезервированные имена Windows, суффикс-коллизии orphan. Закрыты в ходе мини-ревью: doc-формулировка `is_windows_reserved_name`, граница fold в TEST_EVIDENCE §7, assert validity reconstruction-профиля; `VALIDATION_PROFILE_BASIS_MISSING` внесён в реестр §5 CONTRACT_GATE. Известный остаток: intermittent-флак теста `two_concurrent_runners_execute_each_item_exactly_once` (гонка в дизайне теста, существует на базовом коммите; 1 из 3 прогонов на merged tip) — стабилизация в раунде 2.
 
-**Статус:** P0/P1 волны 1 закрыты; ветки PoC-готовы к интеграции. Далее по решению владельца: merge веток в `dev`, merged-tip регрессия, push. Contract freeze схем draft-0.1 — после закрытия P2-остатков; миграция provisional-тегов family и digest-таблица — раунд 2.
+**Статус:** P0/P1 волны 1 и P2-остатки закрыты; все шесть потоков интегрированы в `dev`. Contract freeze схем draft-0.1 — раунд 2 (после миграции provisional-тегов family, digest-таблицы и задач §9 отчёта DSH).
 
-### Интеграция в `dev` (2026-11-09, по мере готовности; решение владельца)
+### Интеграция в `dev` (2026-11-09; решение владельца)
 
-Смержены (порядок `07_INTEGRATION_AND_REVIEW.md`, `--no-ff`, после fix-раунда и delta-review PASS):
+Смержены все шесть потоков (`--no-ff`, после fix-раунда, delta-review PASS и закрытия P2):
 
 | Поток | Merge-коммит |
 |---|---|
@@ -600,5 +600,12 @@ P3-мелочи (косметика/документация, перечень �
 | Intake | `9c58d87` |
 | Family | `595f1eb` |
 | Blender | `3774cb6` |
+| Batch | `ccfa1c3` |
+| Validation | `cbb3c26` |
 
-Merged-tip регрессия (частичная, на момент четырёх веток): корневой workspace `cargo test --workspace` green (существующие крейты не затронуты); standalone `adr5-lanes/intake` и `crates/michelangelo_family` green на merged-tip. Batch и Validation интегрируются после закрытия их P2-остатков (fix в работе). Push — только с явного разрешения владельца.
+**Полная merged-tip регрессия (2026-11-09) — green:**
+- корневой workspace: **856 тестов**, `cargo fmt --all --check` и `cargo clippy --workspace --all-targets -D warnings` — exit 0;
+- standalone `adr5-lanes/intake` — 35; `crates/michelangelo_family` — 59; `michelangelo_batch` — 50; `michelangelo_asset_validation` — 26;
+- `adr5_blender_poc` — 50 тестов + smoke positives 6 / negatives 7/7; tracked evidence не перезаписан (дерево чистое после прогона).
+
+**Итого: 1076 тестов green.** Известный остаток: intermittent-флак конкурентного теста batch (см. выше, документирован). Push — только с явного разрешения владельца; чистка worktrees/веток — после push.

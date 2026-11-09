@@ -138,6 +138,7 @@ never self-declared) и расширяет его на multi-artifact ассет
 | `PARAMETER_INVALID` | family/batch | неизвестный параметр, выход за диапазон, неполный набор значений |
 | `VALIDATION_UNKNOWN_REQUIRED` | validation | обязательная проверка вне реестра check_id |
 | `VALIDATION_INPUT_CHANGED` | validation | входные bytes изменились после evaluation (аналог IT-8D `INPUT_CHANGED`) |
+| `VALIDATION_PROFILE_BASIS_MISSING` | validation | verify без доступной pinned-копии профиля: доказуемость отсутствует для любого отчёта (ранее — только для отчётов с `not_required`, код `INVALID_NOT_REQUIRED`) |
 | `ACCEPTANCE_REPLAY` | publication | повторное использование acceptance record для другого candidate digest |
 | `CAPABILITY_UNAVAILABLE` | batch | требуемая capability не объявлена (блокирует item, не весь batch) |
 
