@@ -568,8 +568,24 @@ GUI automation для CLI-first объёма не требуется. UE smoke �
 
 Полный отчёт: [`docs/adr5-dispatch/DSH_REVIEW_WAVE1.md`](<adr5-dispatch/DSH_REVIEW_WAVE1.md>). Итог: **1 PASS (intake) + 5 REWORK**, все замечания точечные, архитектурных переделок не требуется. Тесты зелёные у всех шести; `cargo fmt` красный у batch/family/validation; `clippy -D warnings` красный у batch/validation. P0-блокеры до contract freeze: held-out/allOf и `not_required` в схемах (contracts), crash-окно claim→insert и declared-hash (batch), `not_required` на required-проверке (validation), evidence-иммутабельность smoke (blender), коллизия draft-тегов (family). Draft-0.1-контракты **не заморожены** до закрытия P0.
 
-### Fix-раунд 1 (2026-11-09, в работе)
+### Fix-раунд 1 (2026-11-09) — завершён; delta-review 5/5 PASS
 
-Принятые владельцем решения по замечаниям: evidence blender — откат к HEAD с перегенерацией в `evidence/run-<ts>/` (no-clobber, tracked evidence — замороженный снимок); digest-пины — LF-нормализация; документы family — собственные provisional-теги до раунда 2. Статус fix-раунда обновляется здесь по мере завершения.
+Принятые владельцем решения по замечаниям: evidence blender — откат к HEAD с перегенерацией в `evidence/run-<ts>/` (no-clobber, tracked evidence — замороженный снимок); digest-пины — LF-нормализация; документы family — собственные provisional-теги до раунда 2.
 
-Дальнейшие шаги: delta-review после фиксов → merged-tip регрессия на актуальном `dev` → решение владельца о contract freeze и интеграции (merge/push — только с явного разрешения).
+| Поток | Fix-коммит | Закрыто | Полный gate (повторный прогон TechLead) | Delta-review |
+|---|---|---|---|---|
+| Contracts | `594e2a1` | A/B/C/D/E | check_schemas exit 0: 13 схем, 13 positive, 15 negative по закреплённым путям | **PASS** |
+| Batch | `fa216ea` | F1–F5 | 38 тестов; fmt/clippy exit 0 | **PASS** (1×P2) |
+| Family | `fb1722d` | L, K | 59 тестов; fmt/clippy exit 0; dry plan детерминирован | **PASS** |
+| Blender | `b8e90b8` | HIGH-1, MEDIUM-2/3 | 50 тестов + smoke 6 positives/7 negatives; tracked evidence не перезаписывается | **PASS** |
+| Validation | `bda61b8` | H1/H2, M1–M4 | 23 теста; fmt/clippy exit 0 | **PASS** (1×P2) |
+
+Существенные решения fix-раунда: F1 закрыт структурно — claim item + insert attempt одной транзакцией (`claim_item_with_attempt`), лимбо-состояние непредставимо, плюс свеп legacy-состояний; H2 закрыт guard'ом на регистрации, в verify и через pinned-копию профиля (обход поиска ревьюера не нашёл); E — `expected_current_revision` условно-обязателен при `base_ref.kind=asset_revision` (CAS на уровне `acceptance_record.target` остаётся безусловным).
+
+**P2-остатки (обязательны до интеграции, раунд 2):**
+- Batch: Windows-коллизия item_id (case-fold/трейлинг-точки NTFS) — orphan-ветка способна переименовать чужой каталог; нужна нормализация уникальности id и проверка attempt-строк по dir.
+- Validation: matrix-coverage — обязательная matrix-Required/сработавшая условная проверка может быть просто не включена в профиль; нужно обратное покрытие в `validate_applicability`.
+
+P3-мелочи (косметика/документация, перечень в отчётах delta-review): пин негативных фикстур по сообщению, breadth тестов тегов/маркера, четвёртая digest-конвенция `sha256-lf` (включить в таблицу §9.7 отчёта DSH), явная фиксация остаточных LOW-4..7 blender, судьба контрольного снимка smoke, doc-контракт `insert_attempt`, зарезервированные имена Windows, суффикс-коллизии orphan.
+
+**Статус:** P0/P1 волны 1 закрыты; ветки PoC-готовы к интеграции. Далее по решению владельца: merge веток в `dev`, merged-tip регрессия, push. Contract freeze схем draft-0.1 — после закрытия P2-остатков; миграция provisional-тегов family и digest-таблица — раунд 2.
