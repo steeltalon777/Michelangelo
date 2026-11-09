@@ -102,13 +102,33 @@ def ensure_contained(path: Path, root: Path) -> Path:
 
 
 def sha256_file(path: Path) -> str:
-    """SHA-256 по фактическим байтам файла."""
+    """SHA-256 по фактическим (сырым) байтам файла.
+
+    Правило для бинарных входов (.glb/.blend/артефакты): байты как есть;
+    для текстовых digest-пинов используется sha256_lf_normalized_file.
+    """
     import hashlib
 
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha256_lf_normalized_file(path: Path) -> str:
+    """SHA-256 по LF-нормализованным байтам (CRLF -> LF).
+
+    Контрактное правило digest для ТЕКСТОВЫХ входов PoC (шаблоны,
+    blender/worker.py): считаем байты, идентичные git-blob'у текстового файла,
+    поэтому пин не зависит от core.autocrlf/checkout (CRLF worktree vs LF
+    checkout дают один и тот же digest). Для бинарных входов это правило НЕ
+    применяется — там sha256_file (сырые байты = git blob).
+    """
+    import hashlib
+
+    data = path.read_bytes()
+    digest = hashlib.sha256(data.replace(b"\r\n", b"\n"))
     return digest.hexdigest()
 
 

@@ -28,7 +28,8 @@
           ]
         }
       },
-      "blender_version": "Blender 5.2.3 LTS"
+      "blender_version": "Blender 5.2.3 LTS",
+      "digest_rule": "sha256-bytes"
     },
     "walls_module": {
       "file_glb": "walls_module.glb",
@@ -58,8 +59,9 @@
           ]
         }
       },
-      "blender_version": "Blender 5.2.3 LTS"
+      "blender_version": "Blender 5.2.3 LTS",
+      "digest_rule": "sha256-bytes"
     }
   },
-  "manifest_note": "Pinned source fixtures for the GLM-5 PoC; hashes are over the actual file bytes. .blend byte-reproducibility is not claimed."
+  "manifest_note": "Pinned source fixtures for the GLM-5 PoC. Binary inputs (.glb/.blend) are pinned by digest_rule 'sha256-bytes' (SHA-256 over the file bytes as stored, which equals the git blob); LF normalization is NOT applied to binary inputs. Text inputs (templates, blender/worker.py) use 'sha256-lf' pins in their own registries. .blend byte-reproducibility is not claimed."
 }

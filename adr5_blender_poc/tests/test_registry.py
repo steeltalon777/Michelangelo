@@ -8,7 +8,7 @@ from pathlib import Path
 
 from helpers import TEMPLATES_DIR
 
-from runner import errors
+from runner import errors, paths
 from runner.template_registry import TemplateRegistry, validate_template_manifest
 
 
@@ -63,6 +63,7 @@ class TestRegistryPinning(unittest.TestCase):
                         "template_id": "v0_palette_master",
                         "file": "ghost.json",
                         "sha256": "0" * 64,
+                        "digest_rule": "sha256-lf",
                     }
                 ]
 
@@ -83,6 +84,45 @@ class TestRegistryPinning(unittest.TestCase):
             with self.assertRaises(errors.PoCError) as ctx:
                 TemplateRegistry.load(tmp / "templates")
             self.assertEqual(errors.TEMPLATE_INVALID, ctx.exception.code)
+
+
+class TestLfNormalizedPins(unittest.TestCase):
+    """MEDIUM-2: пины шаблонов — по LF-нормализованным байтам (git blob)."""
+
+    def test_crlf_worktree_bytes_match_lf_pin(self):
+        """CRLF-байты worktree не дают ложный TEMPLATE_HASH_MISMATCH."""
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            shutil.copytree(TEMPLATES_DIR, tmp / "templates")
+            target = tmp / "templates" / "v0_palette_master.json"
+            lf_bytes = target.read_bytes().replace(b"\r\n", b"\n")
+            target.write_bytes(lf_bytes.replace(b"\n", b"\r\n"))
+            registry = TemplateRegistry.load(tmp / "templates")
+            self.assertIn("v0_palette_master", registry.template_ids)
+            # Digest шаблона = sha256 LF-байтов, независимо от checkout.
+            self.assertEqual(
+                paths.sha256_lf_normalized_file(target),
+                registry.get("v0_palette_master").sha256,
+            )
+
+    def test_registry_entry_requires_lf_digest_rule(self):
+        """Реестр без явного digest_rule='sha256-lf' не принимается."""
+        for broken in (None, "sha256-bytes", "sha256"):
+            with self.subTest(digest_rule=broken):
+                with tempfile.TemporaryDirectory() as tmp_name:
+                    tmp = Path(tmp_name)
+
+                    def mutate(registry):
+                        entry = registry["templates"][0]
+                        if broken is None:
+                            entry.pop("digest_rule", None)
+                        else:
+                            entry["digest_rule"] = broken
+
+                    make_registry(tmp, mutate_registry=mutate)
+                    with self.assertRaises(errors.PoCError) as ctx:
+                        TemplateRegistry.load(tmp / "templates")
+                    self.assertEqual(errors.TEMPLATE_INVALID, ctx.exception.code)
 
 
 class TestTemplateStructure(unittest.TestCase):

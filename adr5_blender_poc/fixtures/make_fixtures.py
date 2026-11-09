@@ -105,7 +105,11 @@ def make_fixture(name: str, spec: dict, blender_bin: str, worker_py: Path) -> di
 
 
 def patch_template_source_hashes(glb_hashes: dict[str, str]) -> None:
-    """Прописывает фактические sha256 фикстур в 'sources' шаблонов."""
+    """Прописывает фактические sha256 фикстур в 'sources' шаблонов.
+
+    Файлы шаблонов пишутся с LF-переводами строк (независимо от платформы),
+    а их digest-пины считаются по LF-байтам (см. runner/paths).
+    """
     for template_path in sorted(TEMPLATES_DIR.glob("*.json")):
         if template_path.name == "registry.json":
             continue
@@ -122,12 +126,17 @@ def patch_template_source_hashes(glb_hashes: dict[str, str]) -> None:
             template_path.write_text(
                 json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
+                newline="\n",
             )
             print(f"[make_fixtures] pinned source hashes in {template_path.name}")
 
 
 def write_registry() -> None:
-    """registry.json: пересчитанные SHA-256 всех файлов шаблонов."""
+    """registry.json: пересчитанные SHA-256 всех файлов шаблонов.
+
+    Пин — digest_rule 'sha256-lf': SHA-256 по LF-нормализованным байтам,
+    т.е. равен git-blob'у текстового шаблона на любом checkout.
+    """
     entries = []
     for template_path in sorted(TEMPLATES_DIR.glob("v*.json")):
         entries.append(
@@ -136,16 +145,20 @@ def write_registry() -> None:
                     template_path.read_text(encoding="utf-8")
                 )["template_id"],
                 "file": template_path.name,
-                "sha256": paths.sha256_file(template_path),
+                "sha256": paths.sha256_lf_normalized_file(template_path),
+                "digest_rule": "sha256-lf",
             }
         )
     registry = {
         "registry_schema": "michelangelo.adr5-poc.template-registry/draft-0",
         "note": (
-            "Registered templates for the GLM-5 PoC. sha256 pins the actual "
-            "template file bytes; the executor refuses a template whose bytes "
-            "do not match (TEMPLATE_HASH_MISMATCH). Data-only manifests: the "
-            "registry loader rejects code vectors (F10)."
+            "Registered templates for the GLM-5 PoC. sha256 pins the template "
+            "file bytes under digest_rule 'sha256-lf' (SHA-256 over CRLF->LF "
+            "normalized bytes), so the pin equals the git blob of the text "
+            "file and survives CRLF/LF checkouts; the executor refuses a "
+            "template whose bytes do not match (TEMPLATE_HASH_MISMATCH). "
+            "Binary fixtures are pinned by raw bytes. Data-only manifests: "
+            "the registry loader rejects code vectors (F10)."
         ),
         "templates": entries,
     }
@@ -153,9 +166,13 @@ def write_registry() -> None:
     registry_path.write_text(
         json.dumps(registry, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     for entry in entries:
-        print(f"[make_fixtures] registered {entry['template_id']} ({entry['sha256'][:12]}...)")
+        print(
+            f"[make_fixtures] registered {entry['template_id']} "
+            f"({entry['sha256'][:12]}...) [{entry['digest_rule']}]"
+        )
 
 
 def main() -> int:
@@ -188,17 +205,24 @@ def main() -> int:
             "blend_size_bytes": info["blend_size"],
             "scene_summary": info["scene_summary"],
             "blender_version": _blender_version(blender_bin),
+            # .glb/.blend — бинарные файлы: пин по сырым байтам (= git blob).
+            "digest_rule": "sha256-bytes",
         }
         print(f"[make_fixtures] {name}: glb {info['glb_sha256']}")
 
     manifest_path = FIXTURES_DIR / "FIXTURES_MANIFEST.json"
     manifest["manifest_note"] = (
-        "Pinned source fixtures for the GLM-5 PoC; hashes are over the actual "
-        "file bytes. .blend byte-reproducibility is not claimed."
+        "Pinned source fixtures for the GLM-5 PoC. Binary inputs (.glb/.blend) "
+        "are pinned by digest_rule 'sha256-bytes' (SHA-256 over the file bytes "
+        "as stored, which equals the git blob); LF normalization is NOT "
+        "applied to binary inputs. Text inputs (templates, blender/worker.py) "
+        "use 'sha256-lf' pins in their own registries. .blend "
+        "byte-reproducibility is not claimed."
     )
     manifest_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
     patch_template_source_hashes(glb_hashes)

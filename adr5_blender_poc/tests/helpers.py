@@ -11,6 +11,8 @@ REPO_ROOT = POC_ROOT.parent
 TEMPLATES_DIR = POC_ROOT / "templates"
 FIXTURES_DIR = POC_ROOT / "fixtures"
 WORKER_PY = REPO_ROOT / "blender" / "worker.py"
+# Contracts-worktree GLM-1 параметризован окружением: GLM1_CONTRACTS_DIR
+# (по умолчанию — текущий путь стенда; на другой машине задаётся env-переменной).
 GLM1_CONTRACTS_DIR = Path(
     os.environ.get("GLM1_CONTRACTS_DIR", "I:/prog/michelangelo-adr5-contracts")
 )

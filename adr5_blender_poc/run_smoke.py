@@ -2,9 +2,16 @@
 """Headless smoke GLM-5 PoC: V0 (палитры) + V1 (сборки) + негативы.
 
 Реальный Blender (если доступен); каждый прогон — один тяжёлый
-Blender-процесс с tasklist-guard. Пишет evidence:
-adr5_blender_poc/evidence/<variant>/{variant.glb,variant.blend,bundle.json,report.json}
-+ adr5_blender_poc/evidence/evidence_summary.json.
+Blender-процесс с tasklist-guard. Каждый запуск пишет evidence в НОВЫЙ
+no-clobber каталог:
+
+    adr5_blender_poc/evidence/run-<UTC timestamp>/
+        <item_id>/{variant.glb,variant.blend,bundle.json}
+        evidence_summary.json
+
+Tracked `adr5_blender_poc/evidence/` — замороженный снимок прошлой
+генерации; smoke его не очищает и не перезаписывает (HIGH-1). Каталоги
+run-<ts>/ — disposable и игнорируются git (см. .gitignore).
 
 Результат — exit code 0 и summary с флагами, либо адресная ошибка.
 Отсутствие Blender — честный SKIPPED (exit 3), не фикция executed.
@@ -30,7 +37,11 @@ from runner.template_registry import Template, TemplateRegistry  # noqa: E402
 
 from helpers import CANDIDATE_BUNDLE_SCHEMA, FIXTURES_DIR, WORKER_PY  # noqa: E402
 
-EVIDENCE_DIR = POC_ROOT / "evidence"
+# Корень evidence: tracked-снимок (не трогается smoke'ом) + disposable run-<ts>/.
+EVIDENCE_ROOT = POC_ROOT / "evidence"
+
+# Каталог текущего прогона; выставляется main() до записи первого артефакта.
+LAST_RUN_DIR: Path | None = None
 
 V0_PALETTES = ["brick-dark", "plaster-warm", "paint-teal"]
 V1_ROOFS = ["flat", "gable", "none"]
@@ -49,9 +60,33 @@ V1_ISSUES = [
 ]
 
 
+def create_run_dir(evidence_root: Path) -> Path:
+    """Создаёт НОВЫЙ каталог прогона `run-<UTC ts>` под evidence_root.
+
+    No-clobber: существующие файлы/каталоги (включая tracked снимок) не
+    удаляются и не перезаписываются; при коллизии имени добавляется суффикс.
+    """
+    evidence_root = Path(evidence_root)
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    for attempt in range(1, 1000):
+        suffix = "" if attempt == 1 else f"-{attempt}"
+        candidate = evidence_root / f"run-{stamp}{suffix}"
+        try:
+            candidate.mkdir(exist_ok=False)
+        except FileExistsError:
+            continue
+        return candidate
+    raise errors.PoCError(
+        errors.EVIDENCE_DIR_UNAVAILABLE,
+        f"cannot allocate a no-clobber run directory under {evidence_root}",
+    )
+
+
 def _dependency_digests(template: Template, worker_py: Path) -> dict:
     return {
-        "worker_blender_py": paths.sha256_file(worker_py),
+        # worker.py — текстовый вход: digest по LF-байтам (= git blob).
+        "worker_blender_py": paths.sha256_lf_normalized_file(worker_py),
         "template_file": template.sha256,
         **{
             source["source_id"]: source["sha256"]
@@ -116,7 +151,9 @@ def build_bundle_for(template: Template, result, fixture_sha: str) -> dict:
     )
 
 
-def run_positive(registry: TemplateRegistry, workspace: Path) -> list[dict]:
+def run_positive(
+    registry: TemplateRegistry, workspace: Path, run_dir: Path
+) -> list[dict]:
     records = []
     plans = [
         ("v0_palette_master", V0_PALETTES, "palette_id"),
@@ -162,8 +199,10 @@ def run_positive(registry: TemplateRegistry, workspace: Path) -> list[dict]:
                 distinct, reason = glb_materials_distinct_safe(previous["glb"], result.glb_reports)
                 checks["materials_distinct_vs_prev"] = {"distinct": distinct, "reason": reason}
             bundle = build_bundle_for(template, result, fixture_sha)
-            evidence_dir = EVIDENCE_DIR / result.item_id
-            evidence_dir.mkdir(parents=True, exist_ok=True)
+            # Каталог варианта внутри свежего run-<ts>/; tracked evidence
+            # (снимок в корне) не адресуется и не перезаписывается.
+            evidence_dir = run_dir / result.item_id
+            evidence_dir.mkdir(parents=True, exist_ok=False)
             for artifact in result.artifacts:
                 staged = _locate_staging_artifact(workspace, artifact["path"])
                 shutil.copyfile(staged, evidence_dir / Path(artifact["path"]).name)
@@ -448,7 +487,10 @@ def run_negatives(registry: TemplateRegistry, workspace: Path) -> list[dict]:
     return [r for r in results]
 
 
-def main() -> int:
+def main(evidence_root: Path | None = None) -> int:
+    """Полный smoke; evidence — всегда в новый run-<ts>/ (no-clobber)."""
+    global LAST_RUN_DIR
+
     blender_bin = resource_monitor.resolve_blender_bin()
     if not blender_bin:
         print("SKIPPED: Blender binary not found (set BLENDER_BIN); "
@@ -457,20 +499,29 @@ def main() -> int:
     resource_monitor.assert_no_blender_running()
 
     registry = TemplateRegistry.load(POC_ROOT / "templates")
-    if EVIDENCE_DIR.exists():
-        shutil.rmtree(EVIDENCE_DIR)
-    EVIDENCE_DIR.mkdir(parents=True)
+    # Никакого rmtree: tracked evidence/ — замороженный снимок, новые
+    # артефакты идут только в свежий evidence/run-<ts>/.
+    run_dir = create_run_dir(
+        Path(evidence_root) if evidence_root is not None else EVIDENCE_ROOT
+    )
+    LAST_RUN_DIR = run_dir
+    print(f"[smoke] evidence run dir: {run_dir}")
 
     with tempfile.TemporaryDirectory(prefix="adr5poc_smoke_") as tmp_name:
         workspace = Path(tmp_name)
-        records = run_positive(registry, workspace)
+        records = run_positive(registry, workspace, run_dir)
         negatives = run_negatives(registry, workspace)
 
     summary = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "evidence_run_dir": str(run_dir),
         "blender_bin": str(blender_bin),
         "blender_version": _blender_version(blender_bin),
-        "worker_py_sha256": paths.sha256_file(WORKER_PY),
+        # worker.py — текстовый вход: digest по LF-байтам (= git blob),
+        # не зависит от CRLF/LF checkout.
+        "worker_py_sha256": paths.sha256_lf_normalized_file(WORKER_PY),
+        "worker_py_sha256_rule": "sha256-lf",
+        "registry_digest_rule": "sha256-lf",
         "registry": {
             entry["template_id"]: entry["sha256"]
             for entry in json.loads(
@@ -481,7 +532,7 @@ def main() -> int:
         "negatives": negatives,
         "all_negatives_ok": all(n["ok"] for n in negatives),
     }
-    summary_path = EVIDENCE_DIR / "evidence_summary.json"
+    summary_path = run_dir / "evidence_summary.json"
     summary_path.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )

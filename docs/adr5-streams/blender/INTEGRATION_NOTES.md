@@ -85,10 +85,13 @@ PoC-раннер — чистый Python (std lib), вне Rust-core. Для п�
   `michelangelo.variant-request/draft-0.1`; перед интеграцией — маппинг на схему GLM-4.
 - Локальный `template registry` — НЕ схема GLM-1; предложение: registry принадлежит владельцу
   семейства (GLM-4/owner), а не blender-потоку; Blender-поток получает pinned template_ref+sha.
+  Digest-правило для текстовых входов — `sha256-lf` (SHA-256 по LF-нормализованным байтам =
+  git blob; checkout-независимо), для бинарных — `sha256-bytes` (сырые байты); при переносе
+  в recipe_lock правило нужно зафиксировать явно.
 - Коды ошибок PoC (`runner/errors.py`) — кандидаты в общий реестр кодов CONTRACT_GATE §5;
   имена совпадать не обязаны.
 
 ## 6. Проверено негативами на этой итерации (сводка)
 
-7/7 behavioral негативов + 44 pure-теста; details в TEST_EVIDENCE.md §4. Ничего из этого
+7/7 behavioral негативов + 49 pure-тестов; details в TEST_EVIDENCE.md §4. Ничего из этого
 не «чинится» молча: каждый отказ — адресный код + отказ исполнения.

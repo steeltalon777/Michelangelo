@@ -7,6 +7,12 @@
 проверяет фактические байты шаблона перед использованием
 (TEMPLATE_HASH_MISMATCH при расхождении).
 
+Digest-правило шаблонов — `sha256-lf`: SHA-256 по LF-нормализованным байтам
+(CRLF -> LF), чтобы пин совпадал с git-blob'ом на любом checkout
+(core.autocrlf=true / LF-checkout) и не давал ложный TEMPLATE_HASH_MISMATCH.
+Каждая запись реестра обязана явно объявить `digest_rule: "sha256-lf"`;
+бинарные входы (.glb/.blend) пиннятся сырыми байтами (sha256_file), не LF.
+
 Структурная валидация шаблона включает:
 - F10: запрет полей-векторов произвольного кода (python/eval/shell/script...);
 - F9: слоты не могут адресовать защищённые объекты/роли;
@@ -76,6 +82,10 @@ FORBIDDEN_MANIFEST_KEYS = frozenset(
 
 ALLOWED_PARAMETER_TYPES = frozenset({"enum", "number", "boolean"})
 ALLOWED_SLOT_SOURCES = frozenset({"const", "param", "palette", "component_choice"})
+
+# Единственное разрешённое digest-правило для текстовых шаблонов: LF-байты.
+DIGEST_RULE_LF = "sha256-lf"
+ALLOWED_TEMPLATE_DIGEST_RULES = frozenset({DIGEST_RULE_LF})
 
 PARAMETER_SCHEMA_FIELDS = frozenset({"type", "values", "minimum", "maximum", "description"})
 
@@ -157,6 +167,7 @@ class TemplateRegistry:
             template_id = entry.get("template_id")
             file_name = entry.get("file")
             expected_sha = entry.get("sha256")
+            digest_rule = entry.get("digest_rule")
             if not isinstance(template_id, str) or not template_id:
                 raise errors.PoCError(
                     errors.TEMPLATE_INVALID,
@@ -166,6 +177,15 @@ class TemplateRegistry:
                 raise errors.PoCError(
                     errors.TEMPLATE_INVALID,
                     f"registry entry '{template_id}': sha256 must be 64 hex chars",
+                )
+            # Пины обязаны быть по LF-нормализованным байтам: реестр с иным
+            # правилом не принимается (иначе CRLF/LF checkout даёт ложный
+            # TEMPLATE_HASH_MISMATCH).
+            if digest_rule not in ALLOWED_TEMPLATE_DIGEST_RULES:
+                raise errors.PoCError(
+                    errors.TEMPLATE_INVALID,
+                    f"registry entry '{template_id}': digest_rule must be "
+                    f"'{DIGEST_RULE_LF}', got {digest_rule!r}",
                 )
             # Имя файла реестра ограничено простым базовым именем — путь из
             # реестра не может указать за пределы каталога шаблонов.
@@ -186,12 +206,13 @@ class TemplateRegistry:
                     f"registered template file is missing: {file_path}",
                     {"template_id": template_id},
                 )
-            actual_sha = paths.sha256_file(file_path)
+            actual_sha = paths.sha256_lf_normalized_file(file_path)
             if actual_sha != expected_sha:
                 raise errors.PoCError(
                     errors.TEMPLATE_HASH_MISMATCH,
                     f"template '{template_id}' bytes do not match the registry "
-                    f"(expected {expected_sha}, actual {actual_sha})",
+                    f"(digest_rule={DIGEST_RULE_LF}, expected {expected_sha}, "
+                    f"actual {actual_sha})",
                     {"template_id": template_id, "file": str(file_path)},
                 )
             manifest = json.loads(file_path.read_text(encoding="utf-8"))

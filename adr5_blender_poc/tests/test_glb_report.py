@@ -1,5 +1,6 @@
 """GLB-отчёт: синтетический GLB, geometry_equal, materials_distinct, F13."""
 
+import hashlib
 import json
 import struct
 import tempfile
@@ -141,6 +142,21 @@ class TestPaths(unittest.TestCase):
         self.assertTrue(paths.is_sha256_hex("a" * 64))
         self.assertFalse(paths.is_sha256_hex("A" * 64))
         self.assertFalse(paths.is_sha256_hex("a" * 63))
+
+    def test_sha256_lf_normalization(self):
+        """MEDIUM-2: текстовый digest одинаков для CRLF- и LF-байтов."""
+        lf_bytes = b'{\n  "a": 1\n}\n'
+        with tempfile.TemporaryDirectory() as tmp_name:
+            path = Path(tmp_name) / "file.json"
+            path.write_bytes(lf_bytes)
+            lf_sha = paths.sha256_lf_normalized_file(path)
+            # LF-нормализованный digest = sha256 LF-байтов (git blob).
+            self.assertEqual(hashlib.sha256(lf_bytes).hexdigest(), lf_sha)
+
+            path.write_bytes(lf_bytes.replace(b"\n", b"\r\n"))
+            self.assertEqual(lf_sha, paths.sha256_lf_normalized_file(path))
+            # Сырой digest CRLF-файла отличается — поэтому пины только LF.
+            self.assertNotEqual(lf_sha, paths.sha256_file(path))
 
 
 if __name__ == "__main__":

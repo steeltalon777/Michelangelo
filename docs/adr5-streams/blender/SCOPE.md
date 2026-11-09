@@ -1,6 +1,7 @@
 # SCOPE — поток GLM-5 (Blender) ADR 0005, PoC V0–V1
 
-- **Дата:** 2026-11-08. **База:** `dev@b8615477b735c1f60c93518b59f8fe32613a7556` (IT-8D).
+- **Дата:** 2026-11-08 (PoC), fix-раунд 2026-11-09 (независимое ревью: HIGH-1,
+  MEDIUM-2, MEDIUM-3). **База:** `dev@b8615477b735c1f60c93518b59f8fe32613a7556` (IT-8D).
 - **Ветка:** `feat/adr5-blender`, worktree `I:/prog/michelangelo-adr5-blender`.
 - **Статус:** PoC выполнен на реальном Blender 5.2.3 LTS (headless); ничего не заявляется
   production-ready / UE-ready. Контракты GLM-1 (`draft-0.1`) использованы как ориентир, не как
@@ -16,14 +17,16 @@ GLM-5 в этом worktree) и в `docs/adr5-streams/blender/`.
 | `adr5_blender_poc/runner/` | PoC-оркестратор зарегистрированных шаблонов поверх существующего Worker'а: `errors.py` (адресные коды), `paths.py` (F13-инварианты, sha256), `template_registry.py` (пиннинг байтов, F10/F9-валидация), `parameter_gate.py` (типизированные параметры, палитры), `socket_check.py` (сокеты V1 + плановые bounds/counts), `plan_builder.py` (сборка job-spec из шаблона), `glb_report.py` (парсер GLB: фактические имена/геометрия/UV/материалы), `resource_monitor.py` (tasklist-guard, RAM/VRAM телеметрия), `worker_client.py` (headless запуск СУЩЕСТВУЮЩЕГО worker'а), `template_executor.py` (порт `template.execute` PoC), `bundle_writer.py` (CandidateAssetBundle draft-0.1) |
 | `adr5_blender_poc/templates/` | Зарегистрированные шаблоны (data-only JSON) + `registry.json` с SHA-256 каждого файла |
 | `adr5_blender_poc/fixtures/` | Source-фикстуры `.glb`/`.blend` + `FIXTURES_MANIFEST.json` (пиннинг) + `make_fixtures.py` (генерация через существующий worker.py) |
-| `adr5_blender_poc/tests/` | 45 тестов: pure unit/negative + Blender smoke (честный SKIPPED без Blender) |
-| `adr5_blender_poc/run_smoke.py` | Драйвер полного smoke: 6 позитивов + 7 негативов, пишет evidence |
-| `adr5_blender_poc/evidence/` | Фактические результаты: bundle.json + variant.glb/blend + evidence_summary.json |
+| `adr5_blender_poc/tests/` | 50 тестов: 49 pure unit/negative + Blender smoke (честный SKIPPED без Blender) |
+| `adr5_blender_poc/run_smoke.py` | Драйвер полного smoke: 6 позитивов + 7 негативов; каждый запуск пишет в новый no-clobber `evidence/run-<ts>/` |
+| `adr5_blender_poc/evidence/` | Tracked `evidence/*` — замороженный снимок предыдущей генерации; `evidence/run-<ts>/` — disposable evidence прогона (bundle.json + variant.glb/blend + evidence_summary.json), игнорируется git |
 | `docs/adr5-streams/blender/` | SCOPE.md, TEST_EVIDENCE.md, CAPABILITY_MATRIX.md, INTEGRATION_NOTES.md |
 
 ## 2. Что НЕ изменено (границы соблюдены)
 
-- `blender/worker.py` — **не изменён** (SHA-256 `9c7c24f3…96ee3`); PoC запускает его как есть,
+- `blender/worker.py` — **не изменён** (SHA-256 `28dfc5c9…d7035` по правилу
+  `digest_rule: sha256-lf` = git-blob; CRLF-байты worktree дают `9c7c24f3…96ee3` —
+  тот же файл); PoC запускает его как есть,
   все варианты исполнены на существующих 18 операциях (`SAFE_WORKER_OPS`).
 - `docs/specs/BLENDER_WORKER.md`, корневые `Cargo.toml`/`Cargo.lock`, crates/, CLI dispatcher,
   SQLite-схема — не тронуты. `git status` в коммите показывает только новые файлы своей зоны.
@@ -51,6 +54,11 @@ GLM-5 в этом worktree) и в `docs/adr5-streams/blender/`.
 - Байтовая воспроизводимость `.blend` не заявляется; `.glb` на зафиксированной версии Blender
   детерминирован на практике (подтверждено: повторные прогоны дают те же SHA-256; вариант V1-none
   побайтово совпал с исходным walls_module.glb).
+- **Digest-правило (checkout-независимость):** текстовые входы (шаблоны, `blender/worker.py`)
+  пиннятся с `digest_rule: sha256-lf` — SHA-256 по LF-нормализованным байтам (CRLF → LF), что
+  равно содержимому git-blob; бинарные входы (`.glb`/`.blend`) — `sha256-bytes` (сырые байты).
+  Поэтому CRLF-worktree и LF-checkout дают одинаковые пины и не порождают ложный
+  `TEMPLATE_HASH_MISMATCH`.
 
 ## 5. Блокеры/ограничения
 

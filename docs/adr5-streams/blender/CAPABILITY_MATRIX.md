@@ -1,8 +1,11 @@
 # CAPABILITY_MATRIX — GLM-5 PoC (Blender V0–V1), фактическое состояние
 
-- **Дата:** 2026-11-08. **База:** `b861547` (IT-8D). **Blender:** 5.2.3 LTS, headless,
-  `--background --factory-startup`, Workbench-only Worker.
-- Всё ниже — факты прогонов 2026-11-08 (см. TEST_EVIDENCE.md), не обещания.
+- **Дата:** 2026-11-09 (fix-раунд; PoC — 2026-11-08). **База:** `b861547` (IT-8D).
+  **Blender:** 5.2.3 LTS, headless, `--background --factory-startup`, Workbench-only Worker.
+- Всё ниже — факты единственного контрольного прогона 2026-11-09
+  (`adr5_blender_poc/evidence/run-20261109T115246Z/`, `generated_at=2026-11-09T11:53:00Z`;
+  см. TEST_EVIDENCE.md), не обещания. Tracked `evidence/` — замороженный снимок
+  предыдущей генерации и для чисел здесь не используется.
 
 ## 1. Уровни вариативности (нумерация ADR 0005 §4)
 
@@ -22,8 +25,8 @@
 
 | Позиция | Статус | Метод |
 |---|---|---|
-| RAM одного прогона | **MEASURED**: peak 174.5–206.9 MiB (6 прогонов) | ctypes psapi `GetProcessMemoryInfo` PeakWorkingSetSize, polling 0.5 s |
-| VRAM | **MEASURED (GPU total)**: 1397–1470 MiB суммарно по GPU во время прогонов | `nvidia-smi --query-gpu=memory.used`; НЕ только Blender — помечено в отчётах |
+| RAM одного прогона | **MEASURED**: peak 204.6–209.8 MiB (6 прогонов) | ctypes psapi `GetProcessMemoryInfo` PeakWorkingSetSize, polling 0.5 s |
+| VRAM | **MEASURED (GPU total)**: 1573–1704 MiB суммарно по GPU во время прогонов | `nvidia-smi --query-gpu=memory.used`; НЕ только Blender — помечено в отчётах |
 | Один тяжёлый Blender-процесс | **VERIFIED** | `tasklist /FI "IMAGENAME eq blender.exe"` перед каждым запуском (`RESOURCE_BUSY` иначе); паузы между прогонами |
 | Headless/factory-startup | **VERIFIED** | все прогоны `--background --factory-startup` |
 | Побитовая детерминированность GLB | **VERIFIED (на pinned 5.2.3)** | повторные прогоны дают одинаковые SHA-256; V1-none GLB == исходный walls_module.glb (`a2111677…`) |
@@ -33,7 +36,7 @@
 
 | Механизм | Статус | Проверка |
 |---|---|---|
-| Только зарегистрированные шаблоны (data-only) | **VERIFIED** | `TEMPLATE_HASH_MISMATCH` на подменённом байте шаблона; реестр пиннит SHA-256 |
+| Только зарегистрированные шаблоны (data-only) | **VERIFIED** | `TEMPLATE_HASH_MISMATCH` на подменённом байте шаблона; реестр пиннит SHA-256 с `digest_rule: sha256-lf` (LF-байты = git blob, checkout-независимо) |
 | Запрет кода в шаблоне (F10) | **VERIFIED** | `TEMPLATE_FORBIDDEN_KEY` на python/exec/shell/script/… ключи на любом уровне; параметры вне реестра слотов — `UNKNOWN_PARAMETER` |
 | Свободный RGB не проходит | **VERIFIED** | цвета только из `palette_table` шаблона; параметр-цвет не существует в системе типов |
 | Защищённые роли (F9, статический guard) | **VERIFIED** | слот, таргетящий protected object, отклоняется при загрузке (`SLOT_TARGETS_PROTECTED_ROLE`); в V1 защищены стены |

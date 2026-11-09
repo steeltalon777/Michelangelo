@@ -66,6 +66,9 @@ WORKER_TIMEOUT = "WORKER_TIMEOUT"
 ARTIFACT_PATH_ESCAPE = "ARTIFACT_PATH_ESCAPE"  # F13 (артефакт вне staging)
 ARTIFACT_MISSING = "ARTIFACT_MISSING"
 
+# --- evidence (диспозитивный каталог прогона) -----------------------------
+EVIDENCE_DIR_UNAVAILABLE = "EVIDENCE_DIR_UNAVAILABLE"  # не удалось создать run-<ts>
+
 
 ALL_CODES = (
     TEMPLATE_HASH_MISMATCH,
@@ -90,4 +93,5 @@ ALL_CODES = (
     WORKER_TIMEOUT,
     ARTIFACT_PATH_ESCAPE,
     ARTIFACT_MISSING,
+    EVIDENCE_DIR_UNAVAILABLE,
 )
