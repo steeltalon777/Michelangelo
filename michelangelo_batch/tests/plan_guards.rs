@@ -274,3 +274,124 @@ fn fresh_run_verifies_input_drift_before_claiming_an_item() {
         item_blocked_reason(&report, "b-drifty")
     );
 }
+
+/// A Windows device name must never become a directory name: `CON` is the
+/// console device on Windows, not a folder. The rejection happens on every
+/// platform, so a plan accepted on Linux cannot break on Windows.
+#[test]
+fn windows_device_name_item_id_is_rejected_before_anything_is_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let db = root.join("state.db");
+    let runs = root.join("runs");
+
+    let plan = serde_json::json!({
+        "schema": PLAN_SCHEMA,
+        "plan_id": "bp-device-name",
+        "items": [{
+            "item_id": "CON",
+            "inputs": [],
+            "depends_on": [],
+            "worker": {
+                "failure_mode": "none",
+                "delay_ms": 20,
+                "artifact_name": "x.out",
+                "artifact_bytes": 32,
+                "simulate_validation": true
+            }
+        }],
+        "limits": limits(3)
+    });
+    let plan_file = root.join("plan.json");
+    std::fs::write(&plan_file, plan.to_string()).unwrap();
+    let db_s = db.to_string_lossy().to_string();
+    let runs_s = runs.to_string_lossy().to_string();
+    let plan_s = plan_file.to_string_lossy().to_string();
+
+    let out = run_cli(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "a reserved device name must be a usage error, stdout={:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("invalid"),
+        "expected an honest invalid-item-id error, got: {stderr}"
+    );
+    assert!(
+        !runs.exists() || std::fs::read_dir(&runs).unwrap().next().is_none(),
+        "the runs root must stay empty"
+    );
+    let (_so, _se, code) = run_cli_ok(&["status", "--plan-id", "bp-device-name", "--db", &db_s]);
+    assert_ne!(code, 0, "the rejected plan must not be registered");
+}
+
+/// On Windows the filesystem folds case: "Build" and "build" are one and the
+/// same directory, so two items with such ids must be rejected before
+/// anything is written (they would fight over one attempt directory).
+#[cfg(windows)]
+#[test]
+fn case_colliding_item_ids_are_rejected_on_windows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let db = root.join("state.db");
+    let runs = root.join("runs");
+
+    let plan = serde_json::json!({
+        "schema": PLAN_SCHEMA,
+        "plan_id": "bp-case-collision",
+        "items": [
+            {
+                "item_id": "Build",
+                "inputs": [],
+                "depends_on": [],
+                "worker": {
+                    "failure_mode": "none",
+                    "delay_ms": 20,
+                    "artifact_name": "b.out",
+                    "artifact_bytes": 32,
+                    "simulate_validation": true
+                }
+            },
+            {
+                "item_id": "build",
+                "inputs": [],
+                "depends_on": [],
+                "worker": {
+                    "failure_mode": "none",
+                    "delay_ms": 20,
+                    "artifact_name": "b2.out",
+                    "artifact_bytes": 32,
+                    "simulate_validation": true
+                }
+            }
+        ],
+        "limits": limits(3)
+    });
+    let plan_file = root.join("plan.json");
+    std::fs::write(&plan_file, plan.to_string()).unwrap();
+    let db_s = db.to_string_lossy().to_string();
+    let runs_s = runs.to_string_lossy().to_string();
+    let plan_s = plan_file.to_string_lossy().to_string();
+
+    let out = run_cli(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "case-colliding item ids must be a usage error, stdout={:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("duplicate"),
+        "expected an honest duplicate-item-id error, got: {stderr}"
+    );
+    assert!(
+        !runs.exists() || std::fs::read_dir(&runs).unwrap().next().is_none(),
+        "the runs root must stay empty"
+    );
+    let (_so, _se, code) = run_cli_ok(&["status", "--plan-id", "bp-case-collision", "--db", &db_s]);
+    assert_ne!(code, 0, "the rejected plan must not be registered");
+}

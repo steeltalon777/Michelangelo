@@ -149,6 +149,9 @@ pub enum PlanError {
         found: String,
     },
     NoItems,
+    /// The item id is not unique. On Windows this also covers ids that are
+    /// distinct as strings but collide on the filesystem ("Build" and
+    /// "build" address one and the same directory).
     DuplicateItem {
         item_id: String,
     },
@@ -199,7 +202,14 @@ impl fmt::Display for PlanError {
             PlanError::BadItemId { item_id } => write!(
                 f,
                 "item id {item_id:?} is invalid: allowed [a-zA-Z0-9._-], \
-                 first character must be [a-zA-Z0-9], 1..=64 chars"
+                 first character must be [a-zA-Z0-9], 1..=64 chars, \
+                 and Windows device names ({} etc.) are reserved",
+                WINDOWS_RESERVED_NAMES
+                    .iter()
+                    .take(4)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             PlanError::UnknownDependency { item_id, dep } => {
                 write!(f, "item {item_id:?} depends on unknown item {dep:?}")
@@ -303,6 +313,10 @@ impl BatchPlan {
             return Err(PlanError::NoItems);
         }
         let mut seen = std::collections::BTreeSet::new();
+        // Uniqueness is checked on the EFFECTIVE id: on Windows the
+        // filesystem folds case and trailing dots/spaces, so "Build" and
+        // "build" would address one and the same attempt directory.
+        let mut seen_effective = std::collections::BTreeSet::new();
         for item in &self.items {
             if !valid_item_id(&item.item_id) {
                 return Err(PlanError::BadItemId {
@@ -310,6 +324,11 @@ impl BatchPlan {
                 });
             }
             if !seen.insert(item.item_id.clone()) {
+                return Err(PlanError::DuplicateItem {
+                    item_id: item.item_id.clone(),
+                });
+            }
+            if !seen_effective.insert(id_uniqueness_key(&item.item_id)) {
                 return Err(PlanError::DuplicateItem {
                     item_id: item.item_id.clone(),
                 });
@@ -497,10 +516,39 @@ impl BatchPlan {
     }
 }
 
+/// Windows device names that must never be used as a directory name.
+///
+/// On Windows these names are reserved by the OS: `CON`, `NUL` and friends
+/// address a device, not a file, and the reservation survives an extension
+/// (`CON.txt` is the console device as well). An item id becomes a directory
+/// name under the runs root, so a reserved name is rejected on EVERY
+/// platform: a plan accepted on Linux must not break when the same batch is
+/// executed on Windows.
+pub const WINDOWS_RESERVED_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// True when the item id is (or starts with) a reserved Windows device name.
+///
+/// The check is applied to the stem, i.e. the part before the first dot,
+/// because Windows reserves `NUL.txt` exactly like `NUL`. The comparison is
+/// case-insensitive: `nul`, `Nul` and `NUL` are the same device.
+pub fn is_windows_reserved_name(id: &str) -> bool {
+    let stem = id.split('.').next().unwrap_or(id);
+    WINDOWS_RESERVED_NAMES
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(stem))
+}
+
 /// Item ids are used as directory names under the runs root, so the grammar
 /// is deliberately narrow: the first character must be alphanumeric (which
 /// excludes "." and ".." and any path separator), the rest may additionally
 /// contain ".", "_" and "-".
+///
+/// Windows device names are rejected as well (see
+/// [`WINDOWS_RESERVED_NAMES`]): they are reserved on every platform so that
+/// a plan is portable.
 pub fn valid_item_id(id: &str) -> bool {
     if id.is_empty() || id.len() > 64 {
         return false;
@@ -509,12 +557,68 @@ pub fn valid_item_id(id: &str) -> bool {
     if id == "." || id == ".." {
         return false;
     }
+    // Reserved Windows device names would not be usable as a directory name.
+    if is_windows_reserved_name(id) {
+        return false;
+    }
     let mut chars = id.chars();
     let first = chars.next().unwrap_or_default();
     if !first.is_ascii_alphanumeric() {
         return false;
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
+/// The Windows-normalized form of an item id.
+///
+/// NTFS compares names case-insensitively and ignores trailing dots and
+/// spaces, so "Build", "build" and "build." all denote one and the same
+/// directory. This helper produces the key under which such ids collide.
+///
+/// The ids themselves are never rewritten: only comparisons (the uniqueness
+/// check, the attempt-directory ownership check) use this form.
+pub fn windows_fold_id(id: &str) -> String {
+    let trimmed = id.trim_end_matches(['.', ' ']);
+    trimmed.to_lowercase()
+}
+
+/// The Windows-normalized comparison key of a path.
+///
+/// Every component is case-folded and stripped of trailing dots and spaces,
+/// mirroring the NTFS name comparison rules. Two paths with the same key
+/// address the same directory on Windows.
+pub fn windows_fold_path(path: &Path) -> String {
+    let raw = path.to_string_lossy().to_lowercase();
+    raw.split(['/', '\\'])
+        .map(|component| component.trim_end_matches(['.', ' ']))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The key under which two attempt directories are the same directory.
+///
+/// On Windows the filesystem folds case and trailing dots/spaces, so two
+/// different spellings can be one physical directory: the key folds them
+/// together. On case-sensitive filesystems the exact path is the key and
+/// distinct directories stay distinct.
+pub fn dir_key(path: &Path) -> String {
+    if cfg!(windows) {
+        windows_fold_path(path)
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
+
+/// The key under which two item ids are the same id.
+///
+/// Same rule as [`dir_key`]: on Windows "Build" and "build" are one id
+/// (one directory), elsewhere they are two different ids.
+fn id_uniqueness_key(id: &str) -> String {
+    if cfg!(windows) {
+        windows_fold_id(id)
+    } else {
+        id.to_owned()
+    }
 }
 
 /// Attempt directory layout under the runs root: `<runs>/<item_id>/attempt_<no:03>`.
@@ -635,6 +739,82 @@ mod tests {
             plan.validate(),
             Err(PlanError::BadWorkerSpec { .. })
         ));
+    }
+
+    #[test]
+    fn windows_fold_id_folds_case_and_trailing_dots_and_spaces() {
+        assert_eq!(windows_fold_id("Build"), "build");
+        assert_eq!(windows_fold_id("BUILD"), "build");
+        assert_eq!(windows_fold_id("build."), "build");
+        assert_eq!(windows_fold_id("build..."), "build");
+        assert_eq!(windows_fold_id("build "), "build");
+        assert_eq!(windows_fold_id("build. "), "build");
+        // The id itself is never rewritten: only the comparison key is folded.
+        assert_eq!(windows_fold_id("item-1"), "item-1");
+        assert_ne!(windows_fold_id("item-1"), windows_fold_id("item_1"));
+    }
+
+    #[test]
+    fn windows_fold_path_folds_every_component() {
+        let a = Path::new("/runs/Build/attempt_001");
+        let b = Path::new("/runs/build/attempt_001");
+        assert_eq!(windows_fold_path(a), windows_fold_path(b));
+        let c = Path::new("/runs/build/attempt_002");
+        assert_ne!(windows_fold_path(a), windows_fold_path(c));
+    }
+
+    #[test]
+    fn item_id_grammar_rejects_windows_device_names() {
+        for reserved in [
+            "CON", "con", "Con", "PRN", "prn", "AUX", "aux", "NUL", "nul", "COM1", "com9", "LPT1",
+            "lpt9",
+        ] {
+            assert!(
+                !valid_item_id(reserved),
+                "reserved Windows device name {reserved:?} must be rejected"
+            );
+        }
+        // The reservation survives an extension, exactly like on Windows.
+        assert!(!valid_item_id("NUL.txt"));
+        assert!(!valid_item_id("com1.out"));
+        // Names that merely start with a device name are fine.
+        for good in ["CONSOLE", "COM0", "LPT0", "NULLIFY", "auxiliary", "n"] {
+            assert!(
+                valid_item_id(good),
+                "item id {good:?} must not be treated as a device name"
+            );
+        }
+    }
+
+    /// On Windows the filesystem folds case, so "a" and "A" would address one
+    /// and the same attempt directory: the plan must be rejected instead of
+    /// letting two items fight over one directory.
+    #[cfg(windows)]
+    #[test]
+    fn validation_rejects_ids_that_collide_on_windows() {
+        let plan = plan_with(vec![item("a", &[]), item("A", &[])]);
+        assert!(
+            matches!(plan.validate(), Err(PlanError::DuplicateItem { .. })),
+            "case-colliding item ids must be rejected on Windows"
+        );
+
+        let plan = plan_with(vec![item("build", &[]), item("Build.", &[])]);
+        assert!(
+            matches!(plan.validate(), Err(PlanError::DuplicateItem { .. })),
+            "trailing-dot-colliding item ids must be rejected on Windows"
+        );
+    }
+
+    /// The same plan is legal on a case-sensitive filesystem: the ids are
+    /// distinct there and address distinct directories.
+    #[cfg(not(windows))]
+    #[test]
+    fn validation_allows_case_distinct_ids_on_case_sensitive_filesystems() {
+        let plan = plan_with(vec![item("a", &[]), item("A", &[])]);
+        assert!(
+            plan.validate().is_ok(),
+            "case-distinct ids are distinct directories here"
+        );
     }
 
     #[test]

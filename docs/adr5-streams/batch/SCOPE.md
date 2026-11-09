@@ -13,6 +13,10 @@ production-ready, UE-ready или безопасным запуском недо
 Fix-раунд (по DSH_REVIEW_WAVE1.md §5, findings F1/F2/F3/F4/F5) меняет
 поведение в четырёх местах — см. §«Изменения fix-раунда» ниже.
 
+P2/P3-раунд (delta-review к fix-раунду: Windows-коллизия `item_id` →
+чужой orphan-rename + три бонуса) меняет грамматику `item_id` и ветку
+orphan-rename — см. §«Изменения P2/P3-раунда» ниже.
+
 ## Фактические пути владения (единоличные)
 
 | Путь | Назначение |
@@ -49,7 +53,14 @@ Disposable state в рантайме: тесты используют `tempfile:
    новая. Каждый retry — новый attempt_no и новая директория. Идентификатор
    item'а — строгий: первый символ `[A-Za-z0-9]`, символы `[A-Za-z0-9._-]`,
    `.`/`..` запрещены, поэтому `attempt_dir` физически не может выйти за
-   пределы runs root.
+   пределы runs root. Дополнительно (P2/P3-раунд): зарезервированные имена
+   Windows-устройств (`CON`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9` и т.п.)
+   отклоняются валидацией на **любой** платформе, а на Windows уникальность
+   `item_id` проверяется по нормализованной форме (case-fold + трейлинг-точки
+   и пробелы): «Build» и «build» — один id, план с обоими отклоняется.
+   Ветка orphan-rename **не переименовывает каталог, на который ссылается
+   любая attempt-строка** (в т.ч. чужого item'а): такой резерв завершается
+   детерминированной ошибкой, а не молчаливым rename'ом живой директории.
 4. **Cross-process admission тяжёлого worker (лимит 1).** Файловая блокировка
    `heavy_worker.slot.lock` через `std::fs::File::try_lock` (LockFileEx на
    Windows), освобождается ядром при смерти владельца — crash-safe, без
@@ -118,6 +129,17 @@ Disposable state в рантайме: тесты используют `tempfile:
 
 Новый файл: `michelangelo_batch/tests/plan_guards.rs`. Прочие каталоги репозитория
 не тронуты.
+
+## Изменения P2/P3-раунда (2026-11-09, delta-review к fix-раунду)
+
+| Finding | Что изменено | Где |
+|---|---|---|
+| **P2 (главный)** Windows-коллизия `item_id` → чужой orphan-rename. На NTFS «runs/Build» == «runs/build», «a.» == «a»: план с id `Build` и `build` при резерве `attempt_001` второго item'а упирался в `AlreadyExists`, а orphan-ветка проверяла только attempt-строку **своего** item'а (`None`) → переименовывала **чужой живой** каталог; конкурентный worker писал по исчезнувшему пути → ложный Crash/retry | (1) `validate()` проверяет уникальность id по Windows-нормализованной форме (case-fold + трейлинг-точки/пробелы) — сами id не переписываются; (2) orphan-ветка перед rename ищет **любую** attempt-строку (любой item, любой план), ссылающуюся на этот каталог (сравнение — по нормализованному пути), и **отказывается** от rename детерминированной ошибкой `StoreError::Inconsistent` | `src/plan.rs` (`windows_fold_id`, `windows_fold_path`, `dir_key`, `validate`), `src/executor.rs` (`reserve_attempt_dir`), `src/store.rs` (`find_attempt_by_dir`) |
+| **P3-1** `valid_item_id` пропускал зарезервированные имена Windows-устройств | Чёрный список `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9` (регистронезависимо, по «stem» до первой точки — `NUL.txt` тоже отклоняется). Отклонение на **любой** платформе: план, принятый на Linux, не должен ломаться на Windows | `src/plan.rs` (`WINDOWS_RESERVED_NAMES`, `is_windows_reserved_name`, `valid_item_id`) |
+| **P3-2** Orphan-суффикс: на Unix `std::fs::rename` **молча заменяет** существующий target (коллизия базового имени с вероятностью 2^-48 не безобидна) | Имя orphan'а теперь с инкрементальным суффиксом (`…orphan-<token>`, `…-2`, `…-3`, …), пока не найдено свободное имя; переименование никогда не перезаписывает чужой каталог ни на одной платформе | `src/executor.rs` (`free_orphan_path`, `orphan_dir_name`, `path_exists`) |
+| **P3-3** `insert_attempt`: doc обещал `Ok(false)` при существующем triple, код возвращал всегда `Ok(true)` и маппил `ConstraintViolation` в `Err` | Сигнатура приведена к `Result<(), StoreError>`: двойная резервация (triple = PK) — честная ошибка «attempt already reserved», поведение и doc совпадают | `src/store.rs` (`insert_attempt`) |
+
+Новых тестов: 12 (10 unit + 2 integration). Итого 50 тестов (27 unit + 23 integration).
 
 ## Не изменённые (запрещённые) файлы
 

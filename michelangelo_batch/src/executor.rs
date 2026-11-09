@@ -16,7 +16,7 @@
 //!   cancelled/blocked; successful items are never rolled back.
 
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -1049,6 +1049,52 @@ fn dep_gate(
 // Attempt directory reservation (atomic, no overwrite)
 // ---------------------------------------------------------------------------
 
+/// Maximum number of incrementing orphan-name suffixes tried before the
+/// reservation is refused.
+const ORPHAN_SUFFIX_LIMIT: u32 = 1000;
+
+/// Name of the directory that preserves a leftover attempt directory.
+fn orphan_dir_name(attempt_no: u32, token: &str) -> String {
+    format!("attempt_{attempt_no:03}.orphan-{token}")
+}
+
+/// True when the path exists (a broken symlink counts as existing).
+fn path_exists(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// A free orphan path next to `dir`.
+///
+/// `std::fs::rename` silently REPLACES an existing target on Unix (Windows
+/// refuses the rename instead), so the orphan name must be free BEFORE the
+/// rename happens. The base name carries a random token; when that name is
+/// taken anyway, an incrementing suffix is appended until a free name is
+/// found. A leftover attempt directory is therefore never overwritten, on
+/// any platform.
+fn free_orphan_path(dir: &Path, attempt_no: u32, token: &str) -> std::io::Result<PathBuf> {
+    let base = dir.with_file_name(orphan_dir_name(attempt_no, token));
+    if !path_exists(&base) {
+        return Ok(base);
+    }
+    let stem = base
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    for n in 2..=ORPHAN_SUFFIX_LIMIT {
+        let candidate = base.with_file_name(format!("{stem}-{n}"));
+        if !path_exists(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(std::io::Error::new(
+        ErrorKind::AlreadyExists,
+        format!(
+            "no free orphan name next to {} after {ORPHAN_SUFFIX_LIMIT} suffixes",
+            dir.display()
+        ),
+    ))
+}
+
 fn reserve_attempt_dir(
     dir: &Path,
     store: &Store,
@@ -1064,44 +1110,64 @@ fn reserve_attempt_dir(
     match std::fs::create_dir(dir) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-            // A previous runner may have crashed between mkdir and the DB
-            // insert. Never overwrite: preserve the old directory under an
-            // orphan name, then reserve a fresh one.
-            if store.get_attempt(plan_id, item_id, attempt_no)?.is_none() {
-                let orphan = dir.with_file_name(format!(
-                    "attempt_{:03}.orphan-{}",
-                    attempt_no,
-                    &timeutil::new_owner_token()[..12]
-                ));
-                std::fs::rename(dir, &orphan).map_err(StoreError::Io)?;
-                store.append_event(
-                    plan_id,
-                    Some(item_id),
-                    Some(attempt_no),
-                    "orphan_attempt_dir_renamed",
-                    Some(
-                        &serde_json::json!({
-                            "from": dir.to_string_lossy(),
-                            "to": orphan.to_string_lossy(),
-                        })
-                        .to_string(),
-                    ),
-                )?;
-                std::fs::create_dir(dir).map_err(|e| StoreError::Inconsistent {
-                    context: format!(
-                        "cannot reserve attempt dir {} after orphan rename: {e}",
-                        dir.display()
-                    ),
-                })?;
-                Ok(())
-            } else {
-                Err(StoreError::Inconsistent {
+            // The directory exists. Before touching it, establish WHO owns
+            // it: only a directory that no attempt row refers to may be
+            // treated as a leftover of a crashed runner.
+            if store.get_attempt(plan_id, item_id, attempt_no)?.is_some() {
+                return Err(StoreError::Inconsistent {
                     context: format!(
                         "attempt dir {} already exists with a DB row; refusing to overwrite",
                         dir.display()
                     ),
-                })
+                });
             }
+            // The directory may belong to ANOTHER item: on Windows
+            // "runs/Build" and "runs/build" are one and the same directory,
+            // so two items can end up sharing one physical attempt
+            // directory. Renaming it would move a LIVE directory under the
+            // other worker's feet (its writes would land in a vanished
+            // path -> a false crash and a pointless retry). The reservation
+            // is refused instead: a deterministic error, never a silent
+            // rename of somebody else's directory.
+            if let Some(row) = store.find_attempt_by_dir(dir)? {
+                return Err(StoreError::Inconsistent {
+                    context: format!(
+                        "attempt dir {} is already used by attempt {}#{} (plan {}); \
+                         refusing to rename a live attempt directory",
+                        dir.display(),
+                        row.item_id,
+                        row.attempt_no,
+                        row.plan_id
+                    ),
+                });
+            }
+            // A genuine leftover of a crashed runner (it died between mkdir
+            // and the DB insert). Never overwrite: preserve the old
+            // directory under an orphan name, then reserve a fresh one.
+            let owner_token = timeutil::new_owner_token();
+            let orphan =
+                free_orphan_path(dir, attempt_no, &owner_token[..12]).map_err(StoreError::Io)?;
+            std::fs::rename(dir, &orphan).map_err(StoreError::Io)?;
+            store.append_event(
+                plan_id,
+                Some(item_id),
+                Some(attempt_no),
+                "orphan_attempt_dir_renamed",
+                Some(
+                    &serde_json::json!({
+                        "from": dir.to_string_lossy(),
+                        "to": orphan.to_string_lossy(),
+                    })
+                    .to_string(),
+                ),
+            )?;
+            std::fs::create_dir(dir).map_err(|e| StoreError::Inconsistent {
+                context: format!(
+                    "cannot reserve attempt dir {} after orphan rename: {e}",
+                    dir.display()
+                ),
+            })?;
+            Ok(())
         }
         Err(e) => Err(StoreError::Io(e)),
     }
@@ -1362,4 +1428,152 @@ pub fn read_status(plan_id: &str, db_path: &Path) -> Result<BatchReport, ExecErr
         source,
     })?;
     BatchReport::build(&store, &plan, plan_id, &fingerprint).map_err(ExecError::from)
+}
+
+// ---------------------------------------------------------------------------
+// Tests: attempt directory reservation
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PLAN_ID: &str = "bp-1";
+
+    fn store_with_items(tmp: &tempfile::TempDir, items: &[&str]) -> Store {
+        let store = Store::open(&tmp.path().join("state.db")).unwrap();
+        let ids: Vec<String> = items.iter().map(|s| s.to_string()).collect();
+        store.register_plan(PLAN_ID, "fp", "{}", &ids).unwrap();
+        store
+    }
+
+    /// A directory that another attempt row already owns must never be
+    /// renamed: the owner is alive and writes into that path. The refusal is
+    /// a deterministic error, not a silent rename of a foreign directory.
+    #[test]
+    fn orphan_rename_is_refused_when_another_attempt_owns_the_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_with_items(&tmp, &["mine", "other"]);
+        let dir = tmp.path().join("runs").join("other").join("attempt_001");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The foreign attempt of item "other" owns the very same directory.
+        store
+            .insert_attempt(PLAN_ID, "other", 1, &dir, "tok")
+            .unwrap();
+
+        let err = reserve_attempt_dir(&dir, &store, PLAN_ID, "mine", 1).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("already used by attempt other#1"),
+            "expected an honest ownership error, got: {message}"
+        );
+
+        // The foreign directory was NOT renamed and no orphan was created.
+        assert!(dir.exists(), "a live attempt dir must not be renamed");
+        let siblings: Vec<String> = std::fs::read_dir(dir.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            siblings,
+            vec!["attempt_001".to_string()],
+            "no orphan directory may be created for a live directory"
+        );
+    }
+
+    /// The same guard on Windows: the two ids differ only in case, so both
+    /// items address ONE physical directory.
+    #[cfg(windows)]
+    #[test]
+    fn orphan_rename_is_refused_when_another_attempt_owns_the_case_folded_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_with_items(&tmp, &["Build", "build"]);
+        // The directory of item "Build" (already reserved).
+        let foreign = tmp.path().join("runs").join("Build").join("attempt_001");
+        std::fs::create_dir_all(&foreign).unwrap();
+        store
+            .insert_attempt(PLAN_ID, "Build", 1, &foreign, "tok")
+            .unwrap();
+
+        // Item "build" computes the very same physical directory.
+        let dir = tmp.path().join("runs").join("build").join("attempt_001");
+        let err = reserve_attempt_dir(&dir, &store, PLAN_ID, "build", 1).unwrap_err();
+        assert!(
+            err.to_string().contains("already used by attempt Build#1"),
+            "expected an honest ownership error, got: {err}"
+        );
+        assert!(
+            foreign.exists(),
+            "the live directory of the other item must not be renamed"
+        );
+    }
+
+    /// A leftover directory that NO attempt row refers to is the genuine
+    /// orphan of a crashed runner: it is preserved under an orphan name and
+    /// a fresh directory is reserved.
+    #[test]
+    fn leftover_directory_without_any_attempt_row_is_preserved_as_an_orphan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_with_items(&tmp, &["solo"]);
+        let dir = tmp.path().join("runs").join("solo").join("attempt_001");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("worker_spec.json"), b"{}").unwrap();
+
+        reserve_attempt_dir(&dir, &store, PLAN_ID, "solo", 1).unwrap();
+
+        assert!(dir.is_dir(), "the fresh attempt dir must exist");
+        assert!(
+            !dir.join("worker_spec.json").exists(),
+            "the fresh attempt dir must be empty"
+        );
+        let siblings: Vec<String> = std::fs::read_dir(dir.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        let orphans: Vec<&String> = siblings
+            .iter()
+            .filter(|name| name.starts_with("attempt_001.orphan-"))
+            .collect();
+        assert_eq!(orphans.len(), 1, "exactly one orphan: {siblings:?}");
+        assert!(
+            dir.parent()
+                .unwrap()
+                .join(orphans[0])
+                .join("worker_spec.json")
+                .exists(),
+            "the leftover content must be preserved in the orphan"
+        );
+    }
+
+    /// The orphan name carries a random token; when that name is taken the
+    /// suffix is incremented instead of overwriting the existing orphan
+    /// (`std::fs::rename` replaces an existing target on Unix).
+    #[test]
+    fn orphan_name_gets_an_incrementing_suffix_when_the_base_name_is_taken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("runs").join("solo").join("attempt_001");
+        std::fs::create_dir_all(&dir).unwrap();
+        let token = "0123456789ab";
+
+        // Nothing taken yet: the base name is free.
+        assert_eq!(
+            free_orphan_path(&dir, 1, token).unwrap(),
+            dir.with_file_name("attempt_001.orphan-0123456789ab")
+        );
+
+        // The base name is taken: the suffix is incremented, the taken name
+        // is never reused.
+        std::fs::create_dir(dir.with_file_name("attempt_001.orphan-0123456789ab")).unwrap();
+        assert_eq!(
+            free_orphan_path(&dir, 1, token).unwrap(),
+            dir.with_file_name("attempt_001.orphan-0123456789ab-2")
+        );
+
+        // Two names taken: the increment continues.
+        std::fs::create_dir(dir.with_file_name("attempt_001.orphan-0123456789ab-2")).unwrap();
+        assert_eq!(
+            free_orphan_path(&dir, 1, token).unwrap(),
+            dir.with_file_name("attempt_001.orphan-0123456789ab-3")
+        );
+    }
 }

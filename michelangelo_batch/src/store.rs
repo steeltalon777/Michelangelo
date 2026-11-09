@@ -486,8 +486,12 @@ impl Store {
             .map_err(sql_err("next attempt no"))
     }
 
-    /// Reserve an attempt row. Returns false if the (plan, item, attempt_no)
-    /// triple already exists (double reservation across processes).
+    /// Reserve an attempt row.
+    ///
+    /// The (plan, item, attempt_no) triple is the primary key, so a double
+    /// reservation across processes is rejected by the database itself: the
+    /// call fails with [`StoreError::Sqlite`] ("attempt already reserved")
+    /// instead of silently overwriting the row of the first owner.
     pub fn insert_attempt(
         &self,
         plan_id: &str,
@@ -495,9 +499,8 @@ impl Store {
         attempt_no: u32,
         dir: &Path,
         owner_token: &str,
-    ) -> Result<bool, StoreError> {
-        self.insert_attempt_row(plan_id, item_id, attempt_no, dir, owner_token)?;
-        Ok(true)
+    ) -> Result<(), StoreError> {
+        self.insert_attempt_row(plan_id, item_id, attempt_no, dir, owner_token)
     }
 
     fn insert_attempt_row(
@@ -702,6 +705,40 @@ impl Store {
             )
             .optional()
             .map_err(sql_err("get attempt"))
+    }
+
+    /// The attempt row (of ANY item and ANY plan) that points at the given
+    /// directory, if there is one.
+    ///
+    /// The comparison uses the Windows-normalized form of the path: on NTFS
+    /// "runs/Build" and "runs/build" are one and the same directory, so a
+    /// plain string comparison would miss the attempt of a DIFFERENT item
+    /// that physically owns the directory. The lookup is deliberately not
+    /// restricted to one plan: an attempt directory is a shared filesystem
+    /// resource.
+    pub fn find_attempt_by_dir(&self, dir: &Path) -> Result<Option<AttemptRow>, StoreError> {
+        let key = crate::plan::dir_key(dir);
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT item_id, attempt_no, dir, state, failure_kind, owner_pid, owner_token, \
+                        worker_result_json, error, created_at, finished_at, plan_id
+                 FROM mb_attempts ORDER BY plan_id, item_id, attempt_no",
+            )
+            .map_err(sql_err("prepare attempts by dir"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                let plan_id: String = row.get(11)?;
+                Ok(attempt_from_row(&plan_id, row))
+            })
+            .map_err(sql_err("query attempts by dir"))?;
+        for row in rows {
+            let row = row.map_err(sql_err("collect attempts by dir"))?;
+            if crate::plan::dir_key(Path::new(&row.dir)) == key {
+                return Ok(Some(row));
+            }
+        }
+        Ok(None)
     }
 
     /// All attempts that are not in a terminal state (reserved or running).
@@ -921,9 +958,9 @@ mod tests {
             .register_plan("bp-1", "fp", "{}", &["a".to_string()])
             .unwrap();
         assert_eq!(store.next_attempt_no("bp-1", "a").unwrap(), 1);
-        assert!(store
+        store
             .insert_attempt("bp-1", "a", 1, std::path::Path::new("/tmp/d1"), "tok")
-            .unwrap());
+            .unwrap();
         // Double reservation is rejected.
         assert!(store
             .insert_attempt("bp-1", "a", 1, std::path::Path::new("/tmp/d1"), "tok")
@@ -975,6 +1012,50 @@ mod tests {
         let row = store.get_attempt("bp-1", "a", 1).unwrap().unwrap();
         assert_eq!(row.state, ATTEMPT_SUCCEEDED);
         assert_eq!(row.owner_pid, Some(4242));
+    }
+
+    #[test]
+    fn insert_attempt_rejects_a_double_reservation() {
+        let (_tmp, store) = open();
+        store
+            .register_plan("bp-1", "fp", "{}", &["a".to_string()])
+            .unwrap();
+        let dir = std::path::Path::new("/tmp/double");
+        store.insert_attempt("bp-1", "a", 1, dir, "tok-1").unwrap();
+
+        // The (plan, item, attempt_no) triple is the primary key: a second
+        // insertion must fail instead of reporting success.
+        let err = store
+            .insert_attempt("bp-1", "a", 1, dir, "tok-2")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("already reserved"),
+            "expected an honest double-reservation error, got: {err}"
+        );
+        // The first reservation is untouched.
+        let row = store.get_attempt("bp-1", "a", 1).unwrap().unwrap();
+        assert_eq!(row.owner_token.as_deref(), Some("tok-1"));
+        assert_eq!(store.list_attempts("bp-1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn find_attempt_by_dir_finds_the_owning_attempt_of_another_item() {
+        let (_tmp, store) = open();
+        store
+            .register_plan("bp-1", "fp", "{}", &["a".to_string(), "b".to_string()])
+            .unwrap();
+        let dir = std::path::Path::new("/tmp/runs/a/attempt_001");
+        store.insert_attempt("bp-1", "a", 1, dir, "tok").unwrap();
+
+        let found = store.find_attempt_by_dir(dir).unwrap().unwrap();
+        assert_eq!(found.item_id, "a");
+        assert_eq!(found.attempt_no, 1);
+
+        // A directory nobody owns is not found.
+        assert!(store
+            .find_attempt_by_dir(std::path::Path::new("/tmp/runs/a/attempt_002"))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
