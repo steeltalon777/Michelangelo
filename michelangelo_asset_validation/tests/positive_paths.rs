@@ -386,6 +386,11 @@ fn reconstruction_kind_is_refused_not_reimplemented() {
         Vec::new(),
         ProfileReferences::default(),
     );
+    // Reconstruction profiles keep their existing evaluator: the new
+    // applicability coverage must never reject them at `validate()`.
+    profile
+        .validate()
+        .expect("reconstruction profile stays valid");
     let error = evaluate_fixture(&ws, &profile, "vr-0005").expect_err("must refuse");
     assert_eq!(
         error.code(),
