@@ -7,7 +7,7 @@
     "original_format": "fbx"
   },
   "payload_files": [
-    { "path": "sources/fbx/model.fbx", "sha256": "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0", "size_bytes": 1024 }
+    { "path": "sources/fbx/model.fbx", "sha256": "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0", "size_bytes": 1024 }
   ],
   "dependencies": [],
   "provenance": { "origin": "unknown" },

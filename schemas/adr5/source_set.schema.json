@@ -48,7 +48,27 @@
             "items": { "$ref": "#/$defs/token32" },
             "description": "Explicit parts a donor may contribute; absence of a part grant is not a permission."
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "roles": { "contains": { "const": "independent_validation_reference" } } },
+              "required": ["roles"]
+            },
+            "then": { "properties": { "usage": { "const": "held_out" } } },
+            "description": "Per source (ADR 0005 section 4.4): every source carrying the independent_validation_reference role must have usage=held_out, so it can never simultaneously feed the generator."
+          },
+          {
+            "if": {
+              "properties": { "usage": { "const": "held_out" } },
+              "required": ["usage"]
+            },
+            "then": {
+              "properties": { "roles": { "items": { "const": "independent_validation_reference" } } }
+            },
+            "description": "Per source (ADR 0005 section 5.2): a held_out source may carry only independent_validation_reference; held-out resources are separated from every build/reference role (any other role would leak it into generator inputs)."
+          }
+        ]
       }
     },
     "alignment_profile_ref": { "$ref": "#/$defs/docRef" },
@@ -75,35 +95,6 @@
       }
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "sources": {
-            "contains": {
-              "properties": { "roles": { "contains": { "const": "independent_validation_reference" } } },
-              "required": ["roles"]
-            }
-          }
-        },
-        "required": ["sources"]
-      },
-      "then": {
-        "properties": {
-          "sources": {
-            "contains": {
-              "properties": {
-                "roles": { "contains": { "const": "independent_validation_reference" } },
-                "usage": { "const": "held_out" }
-              },
-              "required": ["roles", "usage"]
-            }
-          }
-        }
-      },
-      "description": "Every source carrying the independent_validation_reference role must be held_out, so it cannot simultaneously feed the generator."
-    }
-  ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },

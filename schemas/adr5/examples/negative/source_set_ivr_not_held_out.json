@@ -1,0 +1,23 @@
+{
+  "schema": "michelangelo.source-set/draft-0.1",
+  "source_set_id": "ivr-leak-sources",
+  "revision": 1,
+  "created_at": "2026-11-09T09:00:00Z",
+  "sources": [
+    {
+      "source_id": "gt-reference",
+      "asset_id": "urban-house-master",
+      "manifest_ref": { "kind": "source_snapshot", "id": "gt-reference-src", "sha256": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5" },
+      "roles": ["independent_validation_reference"],
+      "usage": "build_input"
+    },
+    {
+      "source_id": "gt-reference-held",
+      "asset_id": "urban-house-master-r1",
+      "manifest_ref": { "kind": "asset_revision", "id": "urban-house-master-r1", "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+      "roles": ["independent_validation_reference"],
+      "usage": "held_out"
+    }
+  ],
+  "conflict_policy": "reject_conflict"
+}

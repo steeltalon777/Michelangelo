@@ -14,7 +14,7 @@
 - `schemas/adr5/README.md` — правила кодировки/digest/sort, реестр схем.
 - `schemas/adr5/*.schema.json` — 13 draft-схем `draft-0.1`.
 - `schemas/adr5/examples/positive/*.json` — 13 минимальных валидных экземпляров.
-- `schemas/adr5/examples/negative/*.json` — 10 fixtures, обязанные отвергаться схемой.
+- `schemas/adr5/examples/negative/*.json` — 15 fixtures, обязанные отвергаться схемой (fix-раунд 2026-11-09: +5 — held-out per-item ×2, `not_required` без `applicability_ref`, `tool_versions="latest"`, bundle без CAS-объявления).
 - `docs/adr5-streams/contracts/SCOPE.md` (этот файл), `HANDOFF.md`, `INTEGRATION_NOTES.md`.
 - `docs/adr5-streams/contracts/tools/check_schemas.py` — исполняемая schema-проверка.
 
@@ -44,7 +44,7 @@ Contract gate: draft-схемы + матрицы + handoff для GLM-2..6 (HAND
 
 ## 6. Статус реализации (честно)
 
-- Schema/meta-schema check: **PASS** (13/13 meta, 13/13 positive, 10/10 negative — факт в §7).
+- Schema/meta-schema check: **PASS** (13/13 meta, 13/13 positive, 15/15 negative — факт в §7).
 - Behavioral negative tests (F1–F5, F9, F17–F20): **NOT IMPLEMENTED** — обязательны для GLM-2..6 (см. NEGATIVE_TEST_MATRIX.md §3); здесь не заявляются пройденными.
 - Rust код в этом потоке не создавался и не собирался (не требуется для docs+schemas зоны).
 
@@ -54,9 +54,15 @@ Contract gate: draft-схемы + матрицы + handoff для GLM-2..6 (HAND
 $ python docs/adr5-streams/contracts/tools/check_schemas.py
 OK meta   <13 schema files>          -> каждый валиден по draft 2020-12 meta-schema
 OK pos    <13 positive examples>     -> все валидны
-OK neg    <10 negative fixtures>     -> все отвергнуты схемой
-RESULT: all schema/example checks passed   (exit=0, 36 OK-строк)
+OK neg    <15 negative fixtures>     -> каждая отвергнута по своему правилу (NEGATIVE_EXPECTED_PATH)
+RESULT: all schema/example checks passed   (exit=0, 41 OK-строк)
 ```
+
+Fix-раунд 2026-11-09 (DSH review §3, findings A–E): per-item held-out/if-then в `source_set`,
+per-check `not_required`/`applicability_ref` в `validation_report`, запрет `latest` в
+`tool_versions` (`recipe_lock`), условно-обязательный CAS (`candidate_bundle` при
+`base_ref.kind=asset_revision`), 64-hex digest'ы во всех негативных фикстурах и таблица
+fixture → expected path в `check_schemas.py`.
 
 Повторяемо локально: `python docs/adr5-streams/contracts/tools/check_schemas.py`
 (требуется python + `jsonschema>=4.18`; фактически использован jsonschema 4.26.0, Python 3.13.15).

@@ -18,7 +18,7 @@
     "expected_current_revision": {
       "type": ["integer", "null"],
       "minimum": 1,
-      "description": "null = expect absent (no-clobber create); a value = compare-and-swap against the current revision of this asset identity. Checked under lock immediately before the pointer switch."
+      "description": "null = expect absent (no-clobber create); a value = compare-and-swap against the current revision of this asset identity. Checked under lock immediately before the pointer switch. Conditionally mandatory: REQUIRED whenever base_ref.kind = asset_revision (transactional base on a published identity, ADR 0005 section 5.3); may be omitted only for source-ancestry-only bundles, whose publication still declares CAS in AcceptanceRecord.target."
     },
     "base_ref": {
       "type": ["object", "null"],
@@ -119,6 +119,21 @@
       "items": { "type": "string", "minLength": 1, "maxLength": 500 }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["base_ref"],
+        "properties": {
+          "base_ref": {
+            "type": "object",
+            "properties": { "kind": { "const": "asset_revision" } }
+          }
+        }
+      },
+      "then": { "required": ["expected_current_revision"] },
+      "description": "Transactional base (ADR 0005 section 5.3): a bundle pinned to a published asset_revision must declare its CAS expectation explicitly (null = no-clobber create, integer = update under lock); silence is never a publication mode. Source-ancestry-only bundles (base_ref = source_snapshot or absent) leave the declaration to AcceptanceRecord.target at publication."
+    }
+  ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },

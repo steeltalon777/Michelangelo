@@ -88,7 +88,7 @@ Exchange `.glb` из `.blend`: теряет node groups/драйверы и ча
 | D1.3 Reservation + immutability evaluation | Реестр отчётов no-clobber: reservation id до вычислений, тяжёлая работа вне lock, отчёт не перезаписывается |
 | D1.4 Полная проверка bundle перед commit | AcceptanceRecord ссылается на bundle digest + digest зарегистрированного отчёта; публикация = CAS (`expected_current_revision`) под lock |
 | D1.5 Решения под lock | Accept/reject/publish сериализуются одним canonical механизмом; reject-vs-accept интерливинг и crash-after-pointer — обязательные негативные тесты |
-| D1.6 Held-out independence | Источники `independent_validation_reference` обязаны `usage: held_out` (schema-правило); не используются при построении |
+| D1.6 Held-out independence | Per-item schema-правило в `source_set`: каждый источник с `independent_validation_reference` обязан `usage: held_out` (F21); каждый `held_out`-источник может нести только эту роль — без build/reference (F22); не используются при построении |
 | D2.7 Перенос evidence references | `provenance_chain` + hash-pinned docRefs; resolution/confirmation переносится в новый bundle со всеми ссылками |
 | D2.8 Исторические bindings | Bundle выбирает версии документов своей ревизии (docRefs), не глобально последние |
 | D2.9 Сужение задачи не расширяет | `VariantRequest` структурно не содержит scope-полей; `SCOPE_WIDENING` на валидаторе |

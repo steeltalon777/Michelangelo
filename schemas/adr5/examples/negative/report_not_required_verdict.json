@@ -4,7 +4,7 @@
   "created_at": "2026-11-08T13:50:00Z",
   "bundle_ref": { "kind": "candidate_asset_bundle", "id": "some-cand", "sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4" },
   "profile_ref": { "profile_id": "urban-house-validation", "revision": 1, "profile_sha256": "7777777777777777777777777777777777777777777777777777777777777777" },
-  "input_digests": { "bundle.json": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" },
+  "input_digests": { "bundle.json": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" },
   "checks": [
     { "check_id": "payload_integrity", "result": "pass" }
   ],

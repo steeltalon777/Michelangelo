@@ -57,7 +57,20 @@
             "description": "Mandatory when result is 'not_required': points at the profile applicability condition that exempts this check."
           },
           "evidence": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/docRef" } }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "result": { "const": "not_required" } },
+              "required": ["result"]
+            },
+            "then": {
+              "required": ["applicability_ref"],
+              "properties": { "applicability_ref": { "type": "string", "minLength": 1 } }
+            },
+            "description": "Per check: every not_required check must carry a non-empty applicability_ref pointing at the profile applicability condition; not_required without an applicability justification masks unavailable."
+          }
+        ]
       }
     },
     "verdict": {
@@ -70,30 +83,6 @@
       "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 128 }
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "checks": { "contains": { "properties": { "result": { "const": "not_required" } }, "required": ["result"] } }
-        },
-        "required": ["checks"]
-      },
-      "then": {
-        "properties": {
-          "checks": {
-            "contains": {
-              "properties": {
-                "result": { "const": "not_required" },
-                "applicability_ref": { "type": "string", "minLength": 1 }
-              },
-              "required": ["result", "applicability_ref"]
-            }
-          }
-        }
-      },
-      "description": "Every not_required check must carry a non-empty applicability_ref."
-    }
-  ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "idToken": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", "maxLength": 64 },

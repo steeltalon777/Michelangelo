@@ -11,7 +11,7 @@
       "source_kind": "independent_asset",
       "asset_input": { "snapshot_id": "snap-a", "snapshot_sha256": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0" },
       "resolved_parameters": {},
-      "input_fingerprints": { "snap_a": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0" },
+      "input_fingerprints": { "snap_a": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0" },
       "depends_on_items": ["item-b"],
       "output_namespace": "batches/cyclic-batch/a",
       "max_attempts": 1

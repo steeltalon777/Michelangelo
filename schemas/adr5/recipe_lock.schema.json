@@ -39,8 +39,13 @@
     "tool_versions": {
       "type": "object",
       "minProperties": 1,
-      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 128 },
-      "description": "At least 'blender' and 'michelangelo'; exact versions, no ranges."
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^(?![Ll][Aa][Tt][Ee][Ss][Tt]$).+"
+      },
+      "description": "At least 'blender' and 'michelangelo'; exact versions, no ranges. The floating value 'latest' (any case) is rejected here, not only via the flag: floating_latest_allowed is the constant false, so floating versions can never enter an executable plan (ADR 0005 section 5.2)."
     },
     "prng": {
       "type": "object",
