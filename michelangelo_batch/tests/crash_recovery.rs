@@ -60,9 +60,21 @@ fn runner_crash_after_reserve_recovers_with_new_attempt() {
     let plan_s = plan_file.to_string_lossy().to_string();
 
     // Runner exits abruptly via injected crash after reservation.
-    let out = run_cli(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s,
-                        "--inject-crash-after-reserve"]);
-    assert_eq!(out.status.code(), Some(70), "injected crash exit code expected");
+    let out = run_cli(&[
+        "run",
+        "--plan",
+        &plan_s,
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+        "--inject-crash-after-reserve",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(70),
+        "injected crash exit code expected"
+    );
 
     // State right after the crash: item claimed (running), attempt reserved.
     let store = michelangelo_batch::Store::open(&db).unwrap();
@@ -75,8 +87,15 @@ fn runner_crash_after_reserve_recovers_with_new_attempt() {
     assert_eq!(count_attempt_dirs(&runs, "solo"), 1);
 
     // Recovery run in a new process.
-    let (stdout, stderr, code) =
-        run_cli_ok(&["resume", "--plan-id", "bp-crash-reserve", "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, stderr, code) = run_cli_ok(&[
+        "resume",
+        "--plan-id",
+        "bp-crash-reserve",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+    ]);
     assert_eq!(code, 0, "resume failed: {stderr}\n{stdout}");
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "solo"), "awaiting_review");
@@ -112,7 +131,12 @@ fn worker_crash_before_finalize_retries_and_never_promotes_old_artifact() {
     let db = root.join("state.db");
     let runs = root.join("runs");
 
-    let plan = plan_with("bp-crash-finalize", "solo", "crash_before_finalize", serde_json::json!({}));
+    let plan = plan_with(
+        "bp-crash-finalize",
+        "solo",
+        "crash_before_finalize",
+        serde_json::json!({}),
+    );
     let plan_file = root.join("plan.json");
     std::fs::write(&plan_file, plan.to_string()).unwrap();
     let db_s = db.to_string_lossy().to_string();
@@ -121,11 +145,15 @@ fn worker_crash_before_finalize_retries_and_never_promotes_old_artifact() {
 
     let (stdout, stderr, code) =
         run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
-    assert_eq!(code, 2, "crash-loop must end with partial failure: {stderr}\n{stdout}");
+    assert_eq!(
+        code, 2,
+        "crash-loop must end with partial failure: {stderr}\n{stdout}"
+    );
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "solo"), "execution_failed");
     assert_eq!(
-        item_attempts(&report, "solo"), 3,
+        item_attempts(&report, "solo"),
+        3,
         "bounded attempts (max_attempts=3), not infinite retry"
     );
 
@@ -159,7 +187,12 @@ fn orphan_worker_blocks_second_worker_until_cancel() {
     let db = root.join("state.db");
     let runs = root.join("runs");
 
-    let plan = plan_with("bp-orphan", "solo", "none", serde_json::json!({"delay_ms": 9000}));
+    let plan = plan_with(
+        "bp-orphan",
+        "solo",
+        "none",
+        serde_json::json!({"delay_ms": 9000}),
+    );
     let plan_file = root.join("plan.json");
     std::fs::write(&plan_file, plan.to_string()).unwrap();
     let db_s = db.to_string_lossy().to_string();
@@ -171,7 +204,10 @@ fn orphan_worker_blocks_second_worker_until_cancel() {
 
     let mid = poll_status(&db, "bp-orphan", Duration::from_secs(20), |v| {
         item_status(v, "solo") == "running"
-            && v["items"][0]["live_attempt"]["owner_pid"].as_i64().unwrap_or(0) > 0
+            && v["items"][0]["live_attempt"]["owner_pid"]
+                .as_i64()
+                .unwrap_or(0)
+                > 0
     });
     let worker_pid = mid["items"][0]["live_attempt"]["owner_pid"]
         .as_i64()
@@ -182,12 +218,22 @@ fn orphan_worker_blocks_second_worker_until_cancel() {
     runner.kill().unwrap();
     let _ = runner.wait();
     std::thread::sleep(Duration::from_millis(300));
-    assert!(crate_pid_alive(worker_pid), "orphan worker must still be alive");
+    assert!(
+        crate_pid_alive(worker_pid),
+        "orphan worker must still be alive"
+    );
 
     // A restart (resume) in a new process must refuse to start a second
     // worker while the orphan holds the attempt lock.
-    let (so, _se, code) =
-        run_cli_ok(&["resume", "--plan-id", "bp-orphan", "--db", &db_s, "--runs", &runs_s]);
+    let (so, _se, code) = run_cli_ok(&[
+        "resume",
+        "--plan-id",
+        "bp-orphan",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+    ]);
     assert_ne!(code, 0, "resume must not claim success while orphan lives");
     let resume_report: serde_json::Value = serde_json::from_str(so.trim())
         .unwrap_or_else(|e| panic!("resume output not json: {e}; stdout={so}"));
@@ -202,7 +248,11 @@ fn orphan_worker_blocks_second_worker_until_cancel() {
         "expected a live-attempt warning, got {warnings:?}"
     );
     assert_eq!(resume_report["items"][0]["status"], "running");
-    assert_eq!(count_attempt_dirs(&runs, "solo"), 1, "no second attempt dir");
+    assert_eq!(
+        count_attempt_dirs(&runs, "solo"),
+        1,
+        "no second attempt dir"
+    );
 
     let store = michelangelo_batch::Store::open(&db).unwrap();
     assert_eq!(store.list_attempts("bp-orphan").unwrap().len(), 1);
@@ -222,13 +272,178 @@ fn orphan_worker_blocks_second_worker_until_cancel() {
     assert!(orphan_gone, "orphan worker survived cancel");
 
     // After the orphan is gone, resume creates a fresh attempt and succeeds.
-    let (stdout, se, code) =
-        run_cli_ok(&["resume", "--plan-id", "bp-orphan", "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, se, code) = run_cli_ok(&[
+        "resume",
+        "--plan-id",
+        "bp-orphan",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+    ]);
     assert_eq!(code, 0, "resume after cancel failed: {se}\n{stdout}");
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "solo"), "awaiting_review");
     assert_eq!(item_attempts(&report, "solo"), 2);
     assert_eq!(count_attempt_dirs(&runs, "solo"), 2);
+}
+
+/// Crash inside the window between the item claim (`running`) and the attempt
+/// row insert. The claim is written in the same transaction as the attempt
+/// row, so the crash rolls the claim back: the item must NOT be left `running`
+/// without an attempt (a state nothing is allowed to claim again, which would
+/// hang the batch forever). The resume completes the batch, and the attempt
+/// directory left behind by the crashed runner is preserved, never
+/// overwritten.
+#[test]
+fn crash_between_claim_and_attempt_insert_does_not_strand_the_item() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let db = root.join("state.db");
+    let runs = root.join("runs");
+
+    let plan = plan_with("bp-crash-claim", "solo", "none", serde_json::json!({}));
+    let plan_file = root.join("plan.json");
+    std::fs::write(&plan_file, plan.to_string()).unwrap();
+    let db_s = db.to_string_lossy().to_string();
+    let runs_s = runs.to_string_lossy().to_string();
+    let plan_s = plan_file.to_string_lossy().to_string();
+
+    // Runner dies inside the claim -> insert window.
+    let out = run_cli(&[
+        "run",
+        "--plan",
+        &plan_s,
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+        "--inject-crash-before-insert",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(70),
+        "injected crash exit code expected"
+    );
+
+    // The claim was rolled back: the item is claimable again and no attempt
+    // row was written.
+    let store = michelangelo_batch::Store::open(&db).unwrap();
+    let items = store.list_items("bp-crash-claim").unwrap();
+    assert_ne!(
+        items[0].status, "running",
+        "a crashed runner must not strand the item in `running`"
+    );
+    assert_eq!(items[0].status, "pending");
+    assert!(
+        store.list_attempts("bp-crash-claim").unwrap().is_empty(),
+        "no attempt row may exist without a claim"
+    );
+    drop(store);
+
+    // Recovery run in a new process completes the batch.
+    let (stdout, stderr, code) = run_cli_ok(&[
+        "resume",
+        "--plan-id",
+        "bp-crash-claim",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+    ]);
+    assert_eq!(code, 0, "resume failed: {stderr}\n{stdout}");
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(item_status(&report, "solo"), "awaiting_review");
+    assert_eq!(item_attempts(&report, "solo"), 1);
+
+    // The directory of the crashed attempt is preserved as an orphan, the
+    // fresh attempt gets its own directory.
+    let dirs = attempt_dir_names(&runs, "solo");
+    assert!(
+        dirs.iter().any(|d| d.starts_with("attempt_001.orphan-")),
+        "crashed attempt dir must be preserved as an orphan: {dirs:?}"
+    );
+    assert!(
+        dirs.iter().any(|d| d == "attempt_001"),
+        "fresh dir: {dirs:?}"
+    );
+}
+
+/// A limbo state left by an older build (item `running`, NO attempt row at
+/// all) must be swept by the next run instead of hanging the batch: nothing
+/// else may claim such an item (resume/retry only claim
+/// pending/execution_failed/cancelled/blocked, cancel only pending/blocked).
+#[test]
+fn resume_sweeps_running_item_without_any_attempt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let db = root.join("state.db");
+    let runs = root.join("runs");
+
+    let plan = plan_with("bp-limbo", "solo", "none", serde_json::json!({}));
+    let plan_file = root.join("plan.json");
+    std::fs::write(&plan_file, plan.to_string()).unwrap();
+    let db_s = db.to_string_lossy().to_string();
+    let runs_s = runs.to_string_lossy().to_string();
+    let plan_s = plan_file.to_string_lossy().to_string();
+
+    // Register the plan; the runner dies in the claim -> insert window.
+    let out = run_cli(&[
+        "run",
+        "--plan",
+        &plan_s,
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+        "--inject-crash-before-insert",
+    ]);
+    assert_eq!(out.status.code(), Some(70));
+
+    // Simulate the limbo of an older build: the item is `running` but no
+    // attempt row exists (the current code writes both atomically, so this
+    // state is produced through the store API on purpose).
+    let store = michelangelo_batch::Store::open(&db).unwrap();
+    assert!(store
+        .set_item_status("bp-limbo", "solo", "running", None, None, None)
+        .unwrap());
+    assert!(store.list_attempts("bp-limbo").unwrap().is_empty());
+    drop(store);
+
+    // The next run must sweep the limbo and finish the batch.
+    let (stdout, stderr, code) = run_cli_ok(&[
+        "resume",
+        "--plan-id",
+        "bp-limbo",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+    ]);
+    assert_eq!(code, 0, "resume failed: {stderr}\n{stdout}");
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(item_status(&report, "solo"), "awaiting_review");
+    assert_eq!(item_attempts(&report, "solo"), 1);
+
+    // The sweep is recorded in the event log and the honest reason is kept.
+    let store = michelangelo_batch::Store::open(&db).unwrap();
+    let events = store.events_tail("bp-limbo", 100).unwrap();
+    let kinds: Vec<&str> = events.iter().map(|e| e.3.as_str()).collect();
+    assert!(
+        kinds.contains(&"item_running_without_attempt_swept"),
+        "sweep event missing; got {kinds:?}"
+    );
+    let item = store.get_item("bp-limbo", "solo").unwrap().unwrap();
+    assert!(
+        item.last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no live attempt"),
+        "honest reason missing: {:?}",
+        item.last_error
+    );
+    drop(store);
+    assert!(item_last_error(&report, "solo").contains("no live attempt"));
 }
 
 /// Plan identity is immutable: the same plan id with a different payload is
@@ -247,7 +462,8 @@ fn plan_identity_is_immutable_and_registration_idempotent() {
     let runs_s = runs.to_string_lossy().to_string();
     let plan_s = plan_file.to_string_lossy().to_string();
 
-    let (_so, _se, code) = run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    let (_so, _se, code) =
+        run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
     assert_eq!(code, 0);
 
     // Same payload again: idempotent, no new attempts.
@@ -255,7 +471,11 @@ fn plan_identity_is_immutable_and_registration_idempotent() {
         run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
     assert_eq!(code, 0, "idempotent re-run must succeed");
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(item_attempts(&report, "solo"), 1, "no new attempts on re-run");
+    assert_eq!(
+        item_attempts(&report, "solo"),
+        1,
+        "no new attempts on re-run"
+    );
     assert_eq!(count_attempt_dirs(&runs, "solo"), 1);
 
     // Mutated payload under the same plan id: rejected.

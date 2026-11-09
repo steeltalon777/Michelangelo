@@ -145,16 +145,45 @@ pub enum FailureMode {
 pub enum PlanError {
     Io(std::io::Error),
     Json(serde_json::Error),
-    SchemaMismatch { found: String },
+    SchemaMismatch {
+        found: String,
+    },
     NoItems,
-    DuplicateItem { item_id: String },
-    BadItemId { item_id: String },
-    UnknownDependency { item_id: String, dep: String },
-    SelfDependency { item_id: String },
-    Cycle { remains: Vec<String> },
-    InputMissing { path: PathBuf },
-    InputRead { path: PathBuf, source: std::io::Error },
-    BadWorkerSpec { item_id: String, reason: String },
+    DuplicateItem {
+        item_id: String,
+    },
+    BadItemId {
+        item_id: String,
+    },
+    UnknownDependency {
+        item_id: String,
+        dep: String,
+    },
+    SelfDependency {
+        item_id: String,
+    },
+    Cycle {
+        remains: Vec<String>,
+    },
+    InputMissing {
+        path: PathBuf,
+    },
+    InputRead {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// The plan declared a sha256 for an input, but the actual file bytes
+    /// hash to something else. A declared hash is a contract: registration
+    /// never silently overwrites it with the observed value.
+    InputHashMismatch {
+        path: PathBuf,
+        declared: String,
+        actual: String,
+    },
+    BadWorkerSpec {
+        item_id: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for PlanError {
@@ -169,7 +198,8 @@ impl fmt::Display for PlanError {
             PlanError::DuplicateItem { item_id } => write!(f, "duplicate item id {item_id:?}"),
             PlanError::BadItemId { item_id } => write!(
                 f,
-                "item id {item_id:?} is invalid: allowed [a-zA-Z0-9._-], 1..=64 chars"
+                "item id {item_id:?} is invalid: allowed [a-zA-Z0-9._-], \
+                 first character must be [a-zA-Z0-9], 1..=64 chars"
             ),
             PlanError::UnknownDependency { item_id, dep } => {
                 write!(f, "item {item_id:?} depends on unknown item {dep:?}")
@@ -184,6 +214,15 @@ impl fmt::Display for PlanError {
             PlanError::InputRead { path, source } => {
                 write!(f, "input read failed for {}: {source}", path.display())
             }
+            PlanError::InputHashMismatch {
+                path,
+                declared,
+                actual,
+            } => write!(
+                f,
+                "input hash mismatch for {}: plan declares {declared}, actual bytes hash to {actual}",
+                path.display()
+            ),
             PlanError::BadWorkerSpec { item_id, reason } => {
                 write!(f, "invalid worker spec for item {item_id:?}: {reason}")
             }
@@ -330,15 +369,15 @@ impl BatchPlan {
     pub fn topo_order(&self) -> Result<Vec<String>, PlanError> {
         let ids: Vec<String> = self.items.iter().map(|i| i.item_id.clone()).collect();
         let mut deps: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
-        let mut indegree: std::collections::BTreeMap<&str, usize> = ids
-            .iter()
-            .map(|s| (s.as_str(), 0usize))
-            .collect();
+        let mut indegree: std::collections::BTreeMap<&str, usize> =
+            ids.iter().map(|s| (s.as_str(), 0usize)).collect();
         let by_id: std::collections::BTreeMap<&str, &PlanItem> =
             self.items.iter().map(|i| (i.item_id.as_str(), i)).collect();
         for item in &self.items {
             for dep in &item.depends_on {
-                deps.entry(dep.as_str()).or_default().push(item.item_id.as_str());
+                deps.entry(dep.as_str())
+                    .or_default()
+                    .push(item.item_id.as_str());
                 *indegree.get_mut(item.item_id.as_str()).unwrap() += 1;
             }
         }
@@ -364,8 +403,7 @@ impl BatchPlan {
             }
         }
         if order.len() != ids.len() {
-            let done: std::collections::BTreeSet<&str> =
-                order.iter().map(|s| s.as_str()).collect();
+            let done: std::collections::BTreeSet<&str> = order.iter().map(|s| s.as_str()).collect();
             let remains: Vec<String> = by_id
                 .keys()
                 .filter(|k| !done.contains(**k))
@@ -379,6 +417,12 @@ impl BatchPlan {
     /// Canonicalize input paths and fill missing sha256 fingerprints from the
     /// actual file bytes. Called once at registration; the filled plan is what
     /// gets persisted and later re-verified by resume.
+    ///
+    /// A plan MAY declare the expected sha256 of an input. A declared hash is
+    /// a contract, not a hint: if the actual file bytes hash to something
+    /// else the plan is rejected with [`PlanError::InputHashMismatch`] and
+    /// the declared value is never overwritten. Only an absent hash is filled
+    /// in from the observed bytes.
     pub fn pin_inputs(&mut self) -> Result<(), PlanError> {
         for item in &mut self.items {
             for input in &mut item.inputs {
@@ -395,8 +439,19 @@ impl BatchPlan {
                     path: abs.clone(),
                     source: e,
                 })?;
+                let actual = sha256_hex(&bytes);
+                if let Some(declared) = input.sha256.as_deref() {
+                    let declared = declared.trim().to_ascii_lowercase();
+                    if declared != actual {
+                        return Err(PlanError::InputHashMismatch {
+                            path: abs,
+                            declared,
+                            actual,
+                        });
+                    }
+                }
                 input.path = abs;
-                input.sha256 = Some(sha256_hex(&bytes));
+                input.sha256 = Some(actual);
             }
         }
         Ok(())
@@ -421,19 +476,56 @@ impl BatchPlan {
         }
         Ok(drifted)
     }
+
+    /// True when the actual bytes of THIS item's inputs no longer match the
+    /// pinned fingerprints. Used for the per-item drift check right before a
+    /// claim, where the up-front verification may already be stale.
+    pub fn item_inputs_drifted(&self, item_id: &str) -> Result<bool, PlanError> {
+        let Some(item) = self.items.iter().find(|i| i.item_id == item_id) else {
+            return Ok(false);
+        };
+        for input in &item.inputs {
+            let bytes = std::fs::read(&input.path).map_err(|e| PlanError::InputRead {
+                path: input.path.clone(),
+                source: e,
+            })?;
+            if Some(sha256_hex(&bytes)) != input.sha256 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
+/// Item ids are used as directory names under the runs root, so the grammar
+/// is deliberately narrow: the first character must be alphanumeric (which
+/// excludes "." and ".." and any path separator), the rest may additionally
+/// contain ".", "_" and "-".
 pub fn valid_item_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    if id.is_empty() || id.len() > 64 {
+        return false;
+    }
+    // "." and ".." would resolve to the runs root / its parent.
+    if id == "." || id == ".." {
+        return false;
+    }
+    let mut chars = id.chars();
+    let first = chars.next().unwrap_or_default();
+    if !first.is_ascii_alphanumeric() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
 /// Attempt directory layout under the runs root: `<runs>/<item_id>/attempt_<no:03>`.
+///
+/// `item_id` MUST satisfy [`valid_item_id`]: the first character is
+/// alphanumeric and no separator or "." / ".." is allowed, so the joined path
+/// always stays inside the runs root.
 pub fn attempt_dir(runs_root: &Path, item_id: &str, attempt_no: u32) -> PathBuf {
-    runs_root.join(item_id).join(format!("attempt_{attempt_no:03}"))
+    runs_root
+        .join(item_id)
+        .join(format!("attempt_{attempt_no:03}"))
 }
 
 /// Deterministic fake artifact bytes derived from the attempt identity.
@@ -484,9 +576,16 @@ mod tests {
 
     #[test]
     fn topo_order_respects_dependencies_and_is_stable() {
-        let plan = plan_with(vec![item("c", &["a", "b"]), item("b", &["a"]), item("a", &[])]);
+        let plan = plan_with(vec![
+            item("c", &["a", "b"]),
+            item("b", &["a"]),
+            item("a", &[]),
+        ]);
         let order = plan.topo_order().unwrap();
-        assert_eq!(order, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(
+            order,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -503,24 +602,39 @@ mod tests {
     #[test]
     fn validation_rejects_unknown_dep_self_dep_and_bad_ids() {
         let plan = plan_with(vec![item("a", &["ghost"])]);
-        assert!(matches!(plan.validate(), Err(PlanError::UnknownDependency { .. })));
+        assert!(matches!(
+            plan.validate(),
+            Err(PlanError::UnknownDependency { .. })
+        ));
 
         let plan = plan_with(vec![item("a", &["a"])]);
-        assert!(matches!(plan.validate(), Err(PlanError::SelfDependency { .. })));
+        assert!(matches!(
+            plan.validate(),
+            Err(PlanError::SelfDependency { .. })
+        ));
 
         let plan = plan_with(vec![item("bad id!", &[])]);
         assert!(matches!(plan.validate(), Err(PlanError::BadItemId { .. })));
 
         let plan = plan_with(vec![item("a", &[]), item("a", &[])]);
-        assert!(matches!(plan.validate(), Err(PlanError::DuplicateItem { .. })));
+        assert!(matches!(
+            plan.validate(),
+            Err(PlanError::DuplicateItem { .. })
+        ));
 
         let mut plan = plan_with(vec![item("a", &[])]);
         plan.schema = "wrong".into();
-        assert!(matches!(plan.validate(), Err(PlanError::SchemaMismatch { .. })));
+        assert!(matches!(
+            plan.validate(),
+            Err(PlanError::SchemaMismatch { .. })
+        ));
 
         let mut plan = plan_with(vec![item("a", &[])]);
         plan.limits.heavy_workers = 4;
-        assert!(matches!(plan.validate(), Err(PlanError::BadWorkerSpec { .. })));
+        assert!(matches!(
+            plan.validate(),
+            Err(PlanError::BadWorkerSpec { .. })
+        ));
     }
 
     #[test]
@@ -572,6 +686,103 @@ mod tests {
         assert_eq!(
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn item_id_grammar_rejects_path_traversal() {
+        for hostile in [
+            ".", "..", "...", ".hidden", "-lead", "_lead", "a/b", "a\\b", "", "a b", "a:b",
+        ] {
+            assert!(
+                !valid_item_id(hostile),
+                "item id {hostile:?} must be rejected"
+            );
+        }
+        for good in [
+            "a", "A", "0", "item-1", "item_1", "item.1", "a.b-c_d", "0abc",
+        ] {
+            assert!(valid_item_id(good), "item id {good:?} must be accepted");
+        }
+        // Too long.
+        assert!(!valid_item_id(&"a".repeat(65)));
+        assert!(valid_item_id(&"a".repeat(64)));
+    }
+
+    #[test]
+    fn attempt_dir_cannot_escape_the_runs_root() {
+        let root = Path::new("/runs");
+        for hostile in [".", "..", "a/b", "../escape", ".hidden"] {
+            assert!(
+                !valid_item_id(hostile),
+                "hostile id {hostile:?} must never reach attempt_dir"
+            );
+        }
+        for good in ["a", "item-1", "item_1", "item.1"] {
+            let dir = attempt_dir(root, good, 7);
+            assert!(dir.starts_with(root), "{dir:?} escaped {root:?}");
+            assert_eq!(dir, root.join(good).join("attempt_007"));
+        }
+    }
+
+    #[test]
+    fn pin_inputs_rejects_declared_hash_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.txt");
+        std::fs::write(&a, b"hello").unwrap();
+
+        let mut plan = plan_with(vec![PlanItem {
+            item_id: "a".into(),
+            inputs: vec![PlanInput {
+                path: a.clone(),
+                sha256: Some(sha256_hex(b"different bytes")),
+            }],
+            depends_on: vec![],
+            worker: item("a", &[]).worker,
+        }]);
+
+        match plan.pin_inputs() {
+            Err(PlanError::InputHashMismatch {
+                path,
+                declared,
+                actual,
+            }) => {
+                assert_eq!(path, std::fs::canonicalize(&a).unwrap());
+                assert_eq!(declared, sha256_hex(b"different bytes"));
+                assert_eq!(actual, sha256_hex(b"hello"));
+            }
+            other => panic!("expected InputHashMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pin_inputs_keeps_matching_declared_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.txt");
+        std::fs::write(&a, b"hello").unwrap();
+
+        let mut plan = plan_with(vec![PlanItem {
+            item_id: "a".into(),
+            inputs: vec![PlanInput {
+                path: a.clone(),
+                sha256: Some(sha256_hex(b"hello")),
+            }],
+            depends_on: vec![],
+            worker: item("a", &[]).worker,
+        }]);
+        plan.pin_inputs().unwrap();
+        assert_eq!(
+            plan.items[0].inputs[0].sha256.as_deref(),
+            Some(sha256_hex(b"hello").as_str())
+        );
+        assert!(!plan.item_inputs_drifted("a").unwrap());
+
+        // Tampered bytes are detected per item as well.
+        std::fs::write(&a, b"tampered").unwrap();
+        assert!(plan.item_inputs_drifted("a").unwrap());
+        assert_eq!(
+            plan.verify_input_fingerprints().unwrap(),
+            vec!["a".to_string()]
         );
     }
 }

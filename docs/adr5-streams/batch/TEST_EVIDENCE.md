@@ -1,16 +1,32 @@
 # TEST EVIDENCE — GLM-3 Durable Batch Executor (fake worker)
 
-Дата: 2026-11-08. Стенд: Windows 10.0.26100 x64, Git Bash, rustc/cargo 1.96.0.
-Crate: `michelangelo_batch` (standalone), bin `mbatch`. База среза: b861547.
+Дата: 2026-11-09 (Asia/Chita). Стенд: Windows 10.0.26100 x64, Git Bash, rustc/cargo 1.96.0.
+Crate: `michelangelo_batch` (standalone), bin `mbatch`. База среза: b861547, ветка `feat/adr5-batch`.
 GPU/Blender smoke не выполнялся и не заявляется — worker фейковый по заданию.
 
-## 1. Команды
+Ревизия: fix-раунд по итогам независимого ревью (DSH_REVIEW_WAVE1.md, §5 GLM-3,
+findings F1/F2/F3/F4/F5). Изменения — только в `michelangelo_batch/` и этом каталоге.
+
+## 1. Команды (финальный gate)
 
 ```
 cd michelangelo_batch
-CARGO_NET_OFFLINE=true cargo test          # весь набор (unit + integration)
-CARGO_NET_OFFLINE=true cargo build         # ноль warnings
+CARGO_NET_OFFLINE=true cargo test                                  # весь набор (unit + integration)
+cargo fmt --check                                                   # exit 0
+CARGO_NET_OFFLINE=true cargo clippy --all-targets -- -D warnings    # exit 0
 ```
+
+Фактические результаты финального прогона (после fix-раунда):
+
+| Команда | Exit code | Результат |
+|---|---|---|
+| `CARGO_NET_OFFLINE=true cargo test` | **0** | 38 passed; 0 failed; 0 ignored (17 unit + 21 integration) |
+| `cargo fmt --check` | **0** | diff пуст (форматирование всего крейта приведено к rustfmt) |
+| `CARGO_NET_OFFLINE=true cargo clippy --all-targets -- -D warnings` | **0** | 0 warnings; 0 errors (было: exit 101, 6 линтов) |
+
+До fix-раунда: `cargo fmt --check` = exit 1, `cargo clippy --all-targets -- -D warnings` =
+exit 101 (6 линтов: `collapsible_match`, `single_match` ×2, `unnecessary_map_or`,
+`type_complexity`, `unnecessary_cast`).
 
 Сборка standalone: корневой workspace не используется (пустая секция
 `[workspace]` в `michelangelo_batch/Cargo.toml`); зависимости взяты из
@@ -21,32 +37,38 @@ sha2 0.10, tempfile (dev).
 
 | Suite | Результат |
 |---|---|
-| unittests src/lib.rs (unit: plan/store/locks) | **ok. 13 passed; 0 failed** (0.12s) |
+| unittests src/lib.rs (unit: plan/store/locks) | **ok. 17 passed; 0 failed** (0.12s) |
 | unittests src/bin/mbatch.rs | ok. 0 passed (нет unit-тестов в bin) |
-| tests/crash_recovery.rs | **ok. 4 passed; 0 failed** (10.22s) |
-| tests/policies.rs | **ok. 7 passed; 0 failed** (0.59s) |
-| tests/two_process.rs | **ok. 4 passed; 0 failed** (9.10s) |
+| tests/crash_recovery.rs | **ok. 6 passed; 0 failed** (10.11s) |
+| tests/plan_guards.rs | **ok. 4 passed; 0 failed** (4.08s) — новый suite fix-раунда |
+| tests/policies.rs | **ok. 7 passed; 0 failed** (0.56s) |
+| tests/two_process.rs | **ok. 4 passed; 0 failed** (9.11s) |
 
-Итого 28 тестов, 0 упавших, 0 warnings. Дополнительно: 10 последовательных
-прогонов `two_process + crash_recovery + policies` — 10/10 без сбоев (после
-устранения двух гонок, см. §6).
+Итого 38 тестов, 0 упавших, 0 warnings. До fix-раунда было 28 тестов
+(13 unit + 15 integration); добавлено 10 (4 unit в `plan.rs`, 6 integration:
+2 в `crash_recovery.rs`, 4 в `plan_guards.rs`).
 
 ## 3. Покрытие свойств задания
 
 | Требование | Тест(ы) | Что зафиксировано |
 |---|---|---|
 | Immutable plan id / item ids | `plan_identity_is_immutable_and_registration_idempotent`, unit `register_is_idempotent...` | повторная регистрация с тем же payload — идемпотентна; мутированный payload под тем же plan_id отклонён (exit 4, «immutable») |
+| **Fingerprint покрывает фактические входы** | `correct_declared_input_hash_is_accepted_and_pinned`, unit `pin_and_verify_inputs_roundtrip` | fingerprint и `plan_id` вычисляются **после** `pin_inputs`, т.е. по каноническим путям и реальным SHA-256 байтов; в зарегистрированном плане лежит фактический digest входа |
+| **Объявленный hash входа — контракт, а не подсказка** | `declared_input_hash_mismatch_is_rejected`, unit `pin_inputs_rejects_declared_hash_mismatch` | plan с неверным `input.sha256` отклоняется (exit 4, «hash mismatch»), план **не регистрируется**, ни один attempt не стартует; объявленное значение никогда не перезаписывается наблюдаемым |
 | Persist batch/item/attempt переходы (отдельная disposable SQLite) | все интеграционные тесты; unit store | таблицы `mb_batches/mb_items/mb_attempts/mb_events`, CAS-переходы, WAL |
 | Atomic reservation attempt-директорий, без overwrite; retry = новый attempt | `runner_crash_after_reserve_recovers_with_new_attempt`, `transient_budget_exhausted_then_explicit_retry_gets_new_attempts` | после crash директория attempt_001 сохранена нетронутой; артефакт только в attempt_002; 6 attempt-директорий при 2 циклах по 3 попытки |
+| **Claim и attempt-строка — одна транзакция (F1)** | `crash_between_claim_and_attempt_insert_does_not_strand_the_item` | инъекция краша строго в окне claim→insert: claim откатывается, item **не** остаётся `running` без attempt (в старой схеме — висел бы навсегда), item снова `pending`, resume завершает пачку; каталог упавшего attempt сохранён как `attempt_001.orphan-*`, не перезаписан |
+| **Свип лимбо-состояния (F1)** | `resume_sweeps_running_item_without_any_attempt` | item `running` **без** attempt-строки (состояние старой сборки) подметается в `execution_failed` следующим запуском, событие `item_running_without_attempt_swept` в event log, честная причина в `last_error` |
 | Успех одной задачи не откатывается чужой ошибкой | `permanent_failure_no_retry_dependent_blocked_independent_success_kept`, `io_failure_stops_launches_and_keeps_successes` | `execution_failed` у одного item, `blocked` у зависимого, `awaiting_review` + артефакт у независимого сохранены |
 | Retry только transient, bounded attempts/backoff | `transient_retry_bounded_and_recovers`, `transient_budget_exhausted_then_explicit_retry_gets_new_attempts`, `worker_crash_before_finalize_retries_and_never_promotes_old_artifact` | 2 transient-провала → успех на 3-й; исчерпание бюджета ровно после max_attempts; crash артефакта не публикуется (attempt failed_transient, без result.json) |
 | Invalid input / quality fail без бесконечных повторов | `permanent_failure_no_retry...` (attempts=1), `validation_failed_is_distinct_and_not_retryable` (attempts=1, retry отклонён) | перманентные вердикты не ретраятся |
-| Resume сверяет fingerprints и commit state; старое accepted не сбрасывается | `resume_verifies_input_fingerprints_and_success_is_stable` | подмена байтов входа → `blocked(input_drift)`, попыток нет; успешный item остаётся awaiting_review с 1 attempt |
+| **Сверка fingerprints во всех режимах + в claim-loop (F3)** | `resume_verifies_input_fingerprints_and_success_is_stable`, `fresh_run_verifies_input_drift_before_claiming_an_item` | reconcile выполняется в `run`/`resume`/`retry`; непосредственно перед claim входы item'а пересчитываются заново — подмена байтов после старта пачки даёт `blocked(input_drift)` и **0 попыток** даже в fresh-режиме |
+| **Грамматика item_id без обхода пути (F5)** | `item_id_dot_dot_is_rejected_before_anything_is_written`, unit `item_id_grammar_rejects_path_traversal`, `attempt_dir_cannot_escape_the_runs_root` | `..`, `.`, `.hidden`, `-lead`, `a/b` отклоняются валидацией плана (exit 4) **до** любой записи; первый символ обязан быть `[A-Za-z0-9]`; попытка выхода за runs root не создаёт ни одного каталога |
 | Cross-process ownership/admission (лимит 1), не in-memory mutex | `heavy_worker_slot_is_exclusive_across_processes`, `two_concurrent_runners_execute_each_item_exactly_once` | OS файл-лок: занятый слот во время исполнения подтверждён из второго процесса; второй runner — честный отказ; 4 items × 4 параллельных runner-процесса — ровно 1 attempt на item, по 1 директории |
 | Fencing против позднего старого attempt | unit CAS (`attempt_reservation_and_transitions`), `attempt_already_finalized_by_other`-путь в cancel-тесте | двойная финализация невозможна: второй CAS running→terminal = 0 строк |
 | Cancel: остановка process tree, запрет зависимых стадий | `cancel_from_second_process_stops_worker_and_dependents` | worker-pid мёртв после cancel; зависимый item cancelled с 0 попыток; batch cancelled; явный resume завершает пачку (2 попытки у первого item, директории не переиспользованы) |
 | Crash/restart без двойной записи и без второго worker при живом первом | `orphan_worker_blocks_second_worker_until_cancel` | убийство ТОЛЬКО runner: осиротевший worker держит OS-лок; resume честно предупреждает «appears live» и не создаёт второй attempt; cancel убивает осиротевший pid (проверка живости через лок); resume завершает пачку |
-| Crash injection around reservation/finalize | `runner_crash_after_reserve...` (exit 70 после резерва), `worker_crash_before_finalize...` (exit 70 worker после записи артефакта) | оба случая восстановлены, дубликатов нет |
+| Crash injection around reservation/finalize | `runner_crash_after_reserve...` (exit 70 после резерва), `worker_crash_before_finalize...` (exit 70 worker после записи артефакта), `crash_between_claim_and_attempt_insert...` (exit 70 в окне claim→insert) | все три случая восстановлены, дубликатов нет |
 | Delayed finish, статус во время исполнения | `delayed_finish_status_from_second_process` | второй процесс видит `live_attempt {attempt_no, state, owner_pid}` пока worker жив |
 | Различные исходы, не «файл есть = accepted» | `validation_failed_is_distinct_and_not_retryable`, mixed-smoke §4, `event_log_records_lifecycle` | built / awaiting_review / validation_failed / execution_failed / blocked / cancelled — разные статусы; event log полный |
 | Idempotency | `plan_identity...` (re-run без новых попыток) | повторный run: те же 1 attempt на item |
@@ -98,12 +120,43 @@ attempt dirs of w1: attempt_001            <- сохранён, не переи�
 3. Retry-бюджет считался от общего attempt_no → после исчерпания явный retry
    делал только 1 попытку. Исправлено: бюджет на цикл исполнения
    (fixed at first claim of each run/resume/retry invocation).
+4. **Fix-раунд (F1):** claim item и вставка attempt-строки были двумя
+   отдельными операциями → пачка могла навсегда зависнуть в `running` без
+   attempt-строки. Исправлено: claim и attempt-строка пишутся одной
+   транзакцией (лимибо-состояние не представимо), плюс reconcile подметает
+   `running`-items без живых attempt'ов в `execution_failed` и переносит
+   известный исход завершённого attempt'а на item.
+5. **Fix-раунд (F2):** `pin_inputs` безусловно перезаписывал объявленный
+   `input.sha256`, а fingerprint считался до пиннинга → объявленный hash не
+   проверялся, идентичность плана не покрывала фактические входы. Исправлено:
+   расхождение → `InputHashMismatch` (exit 4), fingerprint/plan_id — по
+   пиннутой форме.
+6. **Fix-раунд (F3):** fresh-run не вызывал reconcile и не сверял drift в
+   claim-loop. Исправлено: reconcile во всех режимах + повторная сверка
+   входов конкретного item непосредственно перед его claim.
+7. **Fix-раунд (F5):** `valid_item_id` пропускал `.`/`..` → `attempt_dir` мог
+   уйти за пределы runs root. Исправлено: явный запрет `.`/`..` и требование
+   первого символа `[A-Za-z0-9]`.
 
 ## 7. Честные пометки
 
 - SKIPPED/BLOCKED: GPU smoke, Blender smoke, RAM/VRAM admission, canonical
   accept, multi-worker (>1) — не реализованы и не помечены как PASS.
-- Восстановление «crash между mkdir и insert» покрыто кодом
-  (`orphan_attempt_dir_renamed`), отдельного теста-инъекции именно этого окна
-  нет (проверено unit-логикой ветки AlreadyExists); помечено для Round 3.
+- Восстановление «crash между mkdir и insert» теперь покрыто тестом
+  `crash_between_claim_and_attempt_insert_does_not_strand_the_item`: каталог
+  упавшего attempt сохраняется как `attempt_NNN.orphan-<token>`, новый
+  attempt получает свой каталог, содержимое не перезаписывается.
+- Свип лимбо-состояния (`running` без attempt-строки) воспроизводится в
+  тесте через API хранилища: текущий код пишет claim и attempt атомарно,
+  поэтому такое состояние в живом прогоне не возникает — тест фиксирует
+  совместимость с базами, созданными старой сборкой.
+- Известное ограничение reconcile: если владелец умер между финализацией
+  attempt'а (`failed_transient`) и обновлением item, item переносится в
+  `execution_failed`, и автоматический retry этого attempt'а теряется
+  (ограниченное окно ~2 мс, требует параллельного reconcile-процесса).
+  Исход attempt'а при этом не теряется и не подменяется.
 - `pid_alive` в тестах использует `tasklist` (Windows), с повторной пробой.
+- Race-окно между `claim` и вставкой attempt-строки закрыто транзакцией;
+  отдельного «мягкого» heartbeat/lease на item нет — при следующем раунде
+  это стоит рассмотреть, если понадобится отличать «долгий живой attempt»
+  от «мёртвый runner» без OS-лока.

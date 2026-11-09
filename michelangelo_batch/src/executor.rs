@@ -26,12 +26,22 @@ use crate::report::BatchReport;
 use crate::store::{
     self, Store, StoreError, ATTEMPT_CANCELLED, ATTEMPT_INTERRUPTED, ATTEMPT_RESERVED,
     ATTEMPT_RUNNING, ATTEMPT_SUCCEEDED, BATCH_CANCELLED, BATCH_COMPLETED, BATCH_FAILED,
-    BATCH_RUNNING, ITEM_AWAITING_REVIEW, ITEM_BUILT, ITEM_BLOCKED, ITEM_CANCELLED,
-    ITEM_EXECUTION_FAILED, ITEM_PENDING, ITEM_RUNNING, ITEM_SUCCESS_STATES,
-    ITEM_VALIDATION_FAILED,
+    BATCH_RUNNING, ITEM_AWAITING_REVIEW, ITEM_BLOCKED, ITEM_BUILT, ITEM_CANCELLED,
+    ITEM_EXECUTION_FAILED, ITEM_PENDING, ITEM_RUNNING, ITEM_SUCCESS_STATES, ITEM_VALIDATION_FAILED,
+    RUNNING_WITHOUT_ATTEMPT_REASON,
 };
 use crate::worker::{worker_exit, WorkerInvocation, WorkerResult};
 use crate::{exit_codes, timeutil};
+
+/// Honest reason recorded when the actual input bytes no longer match the
+/// fingerprints pinned at registration.
+const INPUT_DRIFT_REASON: &str =
+    "input_drift: actual input files no longer match the registered fingerprints";
+
+/// Attempt states that still have a (possibly alive) owner. An item whose
+/// latest attempt is in one of these states is owned by a live process and
+/// must never be reconciled away.
+const LIVE_ATTEMPT_STATES: &[&str] = &[ATTEMPT_RESERVED, ATTEMPT_RUNNING];
 
 /// How the executor selects claimable items.
 #[derive(Debug, Clone)]
@@ -66,6 +76,11 @@ pub struct ExecOptions {
     /// Test-only crash injection: exit abruptly right after the first attempt
     /// reservation (DB row + directory) but before spawning a worker.
     pub inject_crash_after_reserve: bool,
+    /// Test-only crash injection: exit abruptly in the window between the item
+    /// claim (`running`) and the attempt row insert. The runner dies with the
+    /// item claimed and NO attempt row: the state a crashed runner leaves
+    /// behind, which reconciliation must sweep out of the limbo.
+    pub inject_crash_before_insert: bool,
 }
 
 impl Default for ExecOptions {
@@ -73,6 +88,7 @@ impl Default for ExecOptions {
         ExecOptions {
             slot_wait_ms: 10_000,
             inject_crash_after_reserve: false,
+            inject_crash_before_insert: false,
         }
     }
 }
@@ -83,11 +99,18 @@ pub enum ExecError {
     Store(StoreError),
     Lock(LockError),
     Io(std::io::Error),
-    SlotBusy { waited_ms: u64 },
+    SlotBusy {
+        waited_ms: u64,
+    },
     BatchCancelled,
-    PlanNotFound { plan_id: String },
+    PlanNotFound {
+        plan_id: String,
+    },
     Conflict(String),
-    Json { context: String, source: serde_json::Error },
+    Json {
+        context: String,
+        source: serde_json::Error,
+    },
 }
 
 impl std::fmt::Display for ExecError {
@@ -137,12 +160,20 @@ impl From<std::io::Error> for ExecError {
 /// Load a plan file, validate it and register it immutably. Returns the
 /// authoritative (pinned) plan actually used for execution plus its id and
 /// provided-form fingerprint.
+///
+/// The inputs are pinned BEFORE the identity is derived: the fingerprint must
+/// cover the actual bytes the batch will consume, otherwise the immutable
+/// plan identity would not protect the inputs at all. A plan that declares an
+/// input hash which does not match the file is rejected here
+/// ([`PlanError::InputHashMismatch`]) instead of being silently overwritten.
 pub fn load_or_register(
     plan_file: &Path,
     store: &Store,
 ) -> Result<(BatchPlan, String, String), ExecError> {
-    let provided = BatchPlan::load(plan_file)?;
+    let mut provided = BatchPlan::load(plan_file)?;
     provided.validate()?;
+    // Pin actual input paths and fingerprints once (before the identity).
+    provided.pin_inputs()?;
     let fingerprint = provided.fingerprint()?;
     let plan_id = provided.resolved_plan_id()?;
 
@@ -152,27 +183,27 @@ pub fn load_or_register(
                 plan_id: plan_id.clone(),
             }));
         }
-        let stored: BatchPlan = serde_json::from_str(&stored_json).map_err(|source| {
-            ExecError::Json {
+        let stored: BatchPlan =
+            serde_json::from_str(&stored_json).map_err(|source| ExecError::Json {
                 context: "stored plan".into(),
                 source,
-            }
-        })?;
+            })?;
         stored.validate()?;
         return Ok((stored, plan_id, stored_fp));
     }
 
-    // New registration: pin actual input paths and fingerprints once.
-    let mut pinned = provided;
-    pinned.pin_inputs()?;
-    let filled_json = pinned.to_canonical_json()?;
-    let item_ids: Vec<String> = pinned.items.iter().map(|i| i.item_id.clone()).collect();
+    // New registration: the filled (pinned) plan is what gets persisted.
+    let filled_json = provided.to_canonical_json()?;
+    let item_ids: Vec<String> = provided.items.iter().map(|i| i.item_id.clone()).collect();
     store.register_plan(&plan_id, &fingerprint, &filled_json, &item_ids)?;
-    Ok((pinned, plan_id, fingerprint))
+    Ok((provided, plan_id, fingerprint))
 }
 
 /// Load a previously registered plan by id (resume/retry/status path).
-pub fn load_registered(plan_id: &str, store: &Store) -> Result<(BatchPlan, String, String), ExecError> {
+pub fn load_registered(
+    plan_id: &str,
+    store: &Store,
+) -> Result<(BatchPlan, String, String), ExecError> {
     let (plan_json, fingerprint, _status) = store.load_plan_json(plan_id)?;
     let plan: BatchPlan = serde_json::from_str(&plan_json).map_err(|source| ExecError::Json {
         context: "stored plan".into(),
@@ -211,13 +242,10 @@ fn execute_with_store(
     std::fs::create_dir_all(runs_dir)?;
     let order = plan.topo_order()?;
 
-    match &mode {
-        RunMode::FreshRun => {
-            if store.batch_status(plan_id)?.as_deref() == Some(BATCH_CANCELLED) {
-                return Err(ExecError::BatchCancelled);
-            }
-        }
-        _ => {}
+    if matches!(mode, RunMode::FreshRun)
+        && store.batch_status(plan_id)?.as_deref() == Some(BATCH_CANCELLED)
+    {
+        return Err(ExecError::BatchCancelled);
     }
     store.set_batch_status(plan_id, BATCH_RUNNING, None)?;
     store.append_event(
@@ -229,13 +257,14 @@ fn execute_with_store(
     )?;
 
     let mut warnings: Vec<String> = Vec::new();
-    let mut drifted_items: std::collections::BTreeSet<String> = Default::default();
 
-    if !matches!(mode, RunMode::FreshRun) {
-        let (w, drifted) = reconcile_before_resume(store, plan, plan_id)?;
-        warnings.extend(w);
-        drifted_items = drifted;
-    }
+    // Reconciliation runs in EVERY mode (run/resume/retry): the actual input
+    // bytes are verified before anything is executed, dead owners are
+    // interrupted, and items left `running` by a crashed runner are swept out
+    // of the limbo state. A fresh run is not an excuse to execute against
+    // inputs that no longer match the registered plan.
+    let (w, drifted_items) = reconcile_state(store, plan, plan_id)?;
+    warnings.extend(w);
 
     let mut stop_all: Option<String> = None;
     // Retry budget baseline per item, captured at the FIRST claim of this
@@ -273,7 +302,7 @@ fn execute_with_store(
                 && row
                     .blocked_reason
                     .as_deref()
-                    .map_or(false, |r| r.starts_with("input_drift"))
+                    .is_some_and(|r| r.starts_with("input_drift"))
                 && drifted_items.contains(item_id)
             {
                 continue 'items;
@@ -307,7 +336,42 @@ fn execute_with_store(
                 DepGate::Ok => {}
             }
 
-            // Claim.
+            // Input drift is re-verified for THIS item right before the
+            // claim: the up-front verification can be stale by the time this
+            // item is reached. A drifted item is never executed.
+            if plan.item_inputs_drifted(item_id)? {
+                let blocked = store.set_item_status(
+                    plan_id,
+                    item_id,
+                    ITEM_BLOCKED,
+                    Some(&[
+                        ITEM_PENDING,
+                        ITEM_RUNNING,
+                        ITEM_EXECUTION_FAILED,
+                        ITEM_CANCELLED,
+                    ]),
+                    Some(INPUT_DRIFT_REASON),
+                    None,
+                )?;
+                if blocked {
+                    store.append_event(
+                        plan_id,
+                        Some(item_id),
+                        None,
+                        "input_drift_blocked",
+                        Some(&serde_json::json!({ "reason": INPUT_DRIFT_REASON }).to_string()),
+                    )?;
+                    warnings.push(format!("item {item_id} blocked: input files drifted"));
+                }
+                continue 'items;
+            }
+
+            // ---- claim + attempt reservation ---------------------------
+            // The item claim (`running`) and the attempt row are written in
+            // ONE transaction. A runner that dies between them rolls the
+            // claim back: the item stays `pending` and can be claimed again,
+            // instead of being stranded in `running` with no attempt (a state
+            // nothing else is allowed to claim).
             let claim_allowed: &[&str] = match &mode {
                 RunMode::FreshRun => &[ITEM_PENDING],
                 RunMode::Resume => &[
@@ -325,13 +389,61 @@ fn execute_with_store(
                     &[ITEM_EXECUTION_FAILED, ITEM_PENDING]
                 }
             };
-            if !store.set_item_status(
+
+            attempt_no = store.next_attempt_no(plan_id, item_id)?;
+            let dir = attempt_dir(runs_dir, item_id, attempt_no);
+
+            let invocation = WorkerInvocation {
+                schema: crate::worker::WORKER_SPEC_SCHEMA.to_string(),
+                plan_id: plan_id.to_string(),
+                item_id: item_id.clone(),
+                attempt_no,
+                worker: plan
+                    .items
+                    .iter()
+                    .find(|i| &i.item_id == item_id)
+                    .map(|i| i.worker.clone())
+                    .ok_or_else(|| {
+                        ExecError::Conflict(format!("item {item_id:?} missing in plan"))
+                    })?,
+                inputs: plan
+                    .items
+                    .iter()
+                    .find(|i| &i.item_id == item_id)
+                    .map(|i| i.inputs.clone())
+                    .unwrap_or_default(),
+            };
+            let spec_path = dir.join("worker_spec.json");
+            let spec_json =
+                serde_json::to_string_pretty(&invocation).map_err(|source| ExecError::Json {
+                    context: "worker spec".into(),
+                    source,
+                })?;
+            let owner_token = timeutil::new_owner_token();
+
+            let mut reserve = || -> Result<(), StoreError> {
+                reserve_attempt_dir(&dir, store, plan_id, item_id, attempt_no)?;
+                std::fs::write(&spec_path, &spec_json).map_err(StoreError::Io)?;
+                if opts.inject_crash_before_insert {
+                    // Crash injection INSIDE the claim -> insert window. The
+                    // claim is rolled back with the transaction, so the item
+                    // must NOT stay `running` without an attempt.
+                    eprintln!(
+                        "[inject] crash before attempt insert for {item_id}#{attempt_no} \
+                         (claim rolled back, attempt row never written)"
+                    );
+                    std::process::exit(exit_codes::INJECTED_CRASH);
+                }
+                Ok(())
+            };
+            if !store.claim_item_with_attempt(
                 plan_id,
                 item_id,
-                ITEM_RUNNING,
-                Some(claim_allowed),
-                None,
-                None,
+                attempt_no,
+                &dir,
+                &owner_token,
+                claim_allowed,
+                &mut reserve,
             )? {
                 // Lost claim arbitration: someone else moved this item.
                 continue 'items;
@@ -363,47 +475,6 @@ fn execute_with_store(
                     Some(&serde_json::json!({ "from": row.status }).to_string()),
                 )?;
             }
-
-            // ---- attempt reservation -------------------------------------
-            attempt_no = store.next_attempt_no(plan_id, item_id)?;
-            let dir = attempt_dir(runs_dir, item_id, attempt_no);
-            reserve_attempt_dir(&dir, store, plan_id, item_id, attempt_no)?;
-
-            let invocation = WorkerInvocation {
-                schema: crate::worker::WORKER_SPEC_SCHEMA.to_string(),
-                plan_id: plan_id.to_string(),
-                item_id: item_id.clone(),
-                attempt_no,
-                worker: plan
-                    .items
-                    .iter()
-                    .find(|i| &i.item_id == item_id)
-                    .map(|i| i.worker.clone())
-                    .ok_or_else(|| {
-                        ExecError::Conflict(format!("item {item_id:?} missing in plan"))
-                    })?,
-                inputs: plan
-                    .items
-                    .iter()
-                    .find(|i| &i.item_id == item_id)
-                    .map(|i| i.inputs.clone())
-                    .unwrap_or_default(),
-            };
-            let spec_path = dir.join("worker_spec.json");
-            std::fs::write(
-                &spec_path,
-                serde_json::to_string_pretty(&invocation).map_err(|source| ExecError::Json {
-                    context: "worker spec".into(),
-                    source,
-                })?,
-            )?;
-
-            let owner_token = timeutil::new_owner_token();
-            if !store.insert_attempt(plan_id, item_id, attempt_no, &dir, &owner_token)? {
-                return Err(ExecError::Conflict(format!(
-                    "attempt {item_id}#{attempt_no} already reserved by another process"
-                )));
-            }
             store.bump_attempts_used(plan_id, item_id, attempt_no)?;
             store.append_event(
                 plan_id,
@@ -414,9 +485,7 @@ fn execute_with_store(
             )?;
 
             if opts.inject_crash_after_reserve {
-                eprintln!(
-                    "[inject] crash after reservation of attempt {item_id}#{attempt_no}"
-                );
+                eprintln!("[inject] crash after reservation of attempt {item_id}#{attempt_no}");
                 std::process::exit(exit_codes::INJECTED_CRASH);
             }
 
@@ -459,10 +528,12 @@ fn execute_with_store(
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|source| ExecError::Io(std::io::Error::new(
-                    source.kind(),
-                    format!("spawn worker failed: {source}"),
-                )))?;
+                .map_err(|source| {
+                    ExecError::Io(std::io::Error::new(
+                        source.kind(),
+                        format!("spawn worker failed: {source}"),
+                    ))
+                })?;
             let worker_pid = child.id();
 
             // reserved -> running; if we lose this CAS, cancel already
@@ -505,8 +576,12 @@ fn execute_with_store(
 
             let (attempt_state, failure_kind) = match &verdict {
                 Verdict::Success { .. } => (ATTEMPT_SUCCEEDED, None),
-                Verdict::ValidationFailed { .. } => (store::ATTEMPT_FAILED_PERMANENT, Some("validation")),
-                Verdict::Permanent { kind, .. } => (store::ATTEMPT_FAILED_PERMANENT, Some(kind.as_str())),
+                Verdict::ValidationFailed { .. } => {
+                    (store::ATTEMPT_FAILED_PERMANENT, Some("validation"))
+                }
+                Verdict::Permanent { kind, .. } => {
+                    (store::ATTEMPT_FAILED_PERMANENT, Some(kind.as_str()))
+                }
                 Verdict::Fenced => (store::ATTEMPT_FAILED_PERMANENT, Some("fenced")),
                 Verdict::Transient { .. } | Verdict::Crash { .. } => {
                     (store::ATTEMPT_FAILED_TRANSIENT, Some("transient"))
@@ -545,11 +620,14 @@ fn execute_with_store(
                 Some(item_id),
                 Some(attempt_no),
                 "attempt_finished",
-                Some(&serde_json::json!({
-                    "state": attempt_state,
-                    "exit_code": code,
-                    "reason": reason_text,
-                }).to_string()),
+                Some(
+                    &serde_json::json!({
+                        "state": attempt_state,
+                        "exit_code": code,
+                        "reason": reason_text,
+                    })
+                    .to_string(),
+                ),
             )?;
 
             match verdict {
@@ -608,10 +686,13 @@ fn execute_with_store(
                         Some(item_id),
                         Some(attempt_no),
                         "item_outcome",
-                        Some(&serde_json::json!({
-                            "status": ITEM_EXECUTION_FAILED,
-                            "kind": kind,
-                        }).to_string()),
+                        Some(
+                            &serde_json::json!({
+                                "status": ITEM_EXECUTION_FAILED,
+                                "kind": kind,
+                            })
+                            .to_string(),
+                        ),
                     )?;
                     if kind == "io" {
                         // Disk/storage unreliable: stop launching new work,
@@ -653,11 +734,14 @@ fn execute_with_store(
                             Some(item_id),
                             Some(attempt_no),
                             "retry_scheduled",
-                            Some(&serde_json::json!({
-                                "next_attempt": attempt_no + 1,
-                                "backoff_ms": backoff,
-                                "reason": reason,
-                            }).to_string()),
+                            Some(
+                                &serde_json::json!({
+                                    "next_attempt": attempt_no + 1,
+                                    "backoff_ms": backoff,
+                                    "reason": reason,
+                                })
+                                .to_string(),
+                            ),
                         )?;
                         std::thread::sleep(Duration::from_millis(backoff));
                         continue; // next attempt for the same item
@@ -668,17 +752,22 @@ fn execute_with_store(
                         ITEM_EXECUTION_FAILED,
                         Some(&[ITEM_RUNNING]),
                         None,
-                        Some(&format!("retries exhausted after attempt {attempt_no}: {reason}")),
+                        Some(&format!(
+                            "retries exhausted after attempt {attempt_no}: {reason}"
+                        )),
                     )?;
                     store.append_event(
                         plan_id,
                         Some(item_id),
                         Some(attempt_no),
                         "item_outcome",
-                        Some(&serde_json::json!({
-                            "status": ITEM_EXECUTION_FAILED,
-                            "kind": "retries_exhausted",
-                        }).to_string()),
+                        Some(
+                            &serde_json::json!({
+                                "status": ITEM_EXECUTION_FAILED,
+                                "kind": "retries_exhausted",
+                            })
+                            .to_string(),
+                        ),
                     )?;
                     continue 'items;
                 }
@@ -723,19 +812,22 @@ fn execute_with_store(
 }
 
 // ---------------------------------------------------------------------------
-// Resume reconciliation
+// Reconciliation (every mode)
 // ---------------------------------------------------------------------------
 
-/// Before resume/retry: verify input fingerprints, then reconcile attempts
-/// whose owner died. Returns honest warnings and the set of items whose
-/// inputs currently drift from the registered fingerprints.
-fn reconcile_before_resume(
+/// Before any execution (run/resume/retry): verify input fingerprints, sweep
+/// items left `running` by a crashed runner, then reconcile attempts whose
+/// owner died. Returns honest warnings and the set of items whose inputs
+/// currently drift from the registered fingerprints.
+fn reconcile_state(
     store: &Store,
     plan: &BatchPlan,
     plan_id: &str,
 ) -> Result<(Vec<String>, std::collections::BTreeSet<String>), ExecError> {
     let mut warnings = Vec::new();
 
+    // 1. Input drift: the actual bytes are compared with the pinned
+    //    fingerprints in EVERY mode. A drifted item is blocked, never run.
     let drifted: std::collections::BTreeSet<String> =
         plan.verify_input_fingerprints()?.into_iter().collect();
     for item_id in &drifted {
@@ -743,22 +835,97 @@ fn reconcile_before_resume(
             plan_id,
             item_id,
             ITEM_BLOCKED,
-            Some(&[ITEM_PENDING, ITEM_RUNNING, ITEM_EXECUTION_FAILED, ITEM_CANCELLED]),
-            Some("input_drift: actual input files no longer match the registered fingerprints"),
+            Some(&[
+                ITEM_PENDING,
+                ITEM_RUNNING,
+                ITEM_EXECUTION_FAILED,
+                ITEM_CANCELLED,
+            ]),
+            Some(INPUT_DRIFT_REASON),
             None,
         )?;
         if marked {
             warnings.push(format!("item {item_id} blocked: input files drifted"));
-            store.append_event(
-                plan_id,
-                Some(item_id),
-                None,
-                "input_drift_blocked",
-                None,
-            )?;
+            store.append_event(plan_id, Some(item_id), None, "input_drift_blocked", None)?;
         }
     }
 
+    // 2. Items left `running` by a crashed runner.
+    //
+    //    Two shapes are possible:
+    //    (a) the runner died between the claim and the attempt row: the item
+    //        has NO attempt at all, so nothing can ever claim it again
+    //        (resume/retry only claim pending/execution_failed/cancelled/
+    //        blocked, cancel only pending/blocked). It is swept into
+    //        `execution_failed`, which resume/retry can pick up again.
+    //    (b) the runner died after the attempt was finalized but before the
+    //        item was updated: the attempt outcome is known, so it is
+    //        re-applied to the item instead of being thrown away.
+    //
+    //    An item with a LIVE attempt is never touched here: its owner may
+    //    still be running (it is handled by the live-attempt loop below).
+    for item in store.list_running_items(plan_id)? {
+        match store.latest_attempt(plan_id, &item.item_id)? {
+            None => {
+                let swept = store.set_item_status(
+                    plan_id,
+                    &item.item_id,
+                    ITEM_EXECUTION_FAILED,
+                    Some(&[ITEM_RUNNING]),
+                    None,
+                    Some(RUNNING_WITHOUT_ATTEMPT_REASON),
+                )?;
+                if swept {
+                    store.append_event(
+                        plan_id,
+                        Some(&item.item_id),
+                        None,
+                        "item_running_without_attempt_swept",
+                        Some(
+                            &serde_json::json!({ "reason": RUNNING_WITHOUT_ATTEMPT_REASON })
+                                .to_string(),
+                        ),
+                    )?;
+                    warnings.push(format!(
+                        "item {} was left running without a live attempt \
+                         (runner died before the attempt was recorded); \
+                         swept to execution_failed",
+                        item.item_id
+                    ));
+                }
+            }
+            Some(attempt) if !LIVE_ATTEMPT_STATES.contains(&attempt.state.as_str()) => {
+                let target = item_status_for_attempt(&attempt);
+                let reapplied = store.set_item_status(
+                    plan_id,
+                    &item.item_id,
+                    target,
+                    Some(&[ITEM_RUNNING]),
+                    None,
+                    Some(&format!(
+                        "recovered from attempt {} (owner died before the item was updated)",
+                        attempt.attempt_no
+                    )),
+                )?;
+                if reapplied {
+                    store.append_event(
+                        plan_id,
+                        Some(&item.item_id),
+                        Some(attempt.attempt_no),
+                        "item_running_attempt_outcome_reapplied",
+                        Some(&serde_json::json!({ "status": target }).to_string()),
+                    )?;
+                    warnings.push(format!(
+                        "item {} was left running after attempt {}; outcome {target} re-applied",
+                        item.item_id, attempt.attempt_no
+                    ));
+                }
+            }
+            Some(_) => {}
+        }
+    }
+
+    // 3. Attempts whose owner died: the OS lock is the liveness proof.
     for attempt in store.list_live_attempts(plan_id)? {
         let lock_path = attempt_lock_path(Path::new(&attempt.dir));
         if FileLock::is_locked_elsewhere(&lock_path)? {
@@ -813,7 +980,6 @@ fn reconcile_before_resume(
             ));
         }
     }
-    let _ = plan; // fingerprints already verified above
     Ok((warnings, drifted))
 }
 
@@ -821,6 +987,28 @@ enum DepGate {
     Ok,
     Skip,
     Block(String),
+}
+
+/// The item status implied by a finished attempt. Used to recover an item
+/// whose owner died between the attempt finalize and the item update: the
+/// recorded attempt outcome is authoritative, so it is re-applied instead of
+/// being discarded.
+fn item_status_for_attempt(attempt: &crate::store::AttemptRow) -> &'static str {
+    match attempt.state.as_str() {
+        ATTEMPT_SUCCEEDED => match attempt
+            .worker_result_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<WorkerResult>(raw).ok())
+        {
+            Some(result) if result.outcome == "awaiting_review" => ITEM_AWAITING_REVIEW,
+            _ => ITEM_BUILT,
+        },
+        ATTEMPT_CANCELLED => ITEM_CANCELLED,
+        // A transient failure would normally be retried; the retry budget is
+        // enforced by the runner, so the item is reported as failed here
+        // rather than silently claiming an outcome the runner never wrote.
+        _ => ITEM_EXECUTION_FAILED,
+    }
 }
 
 fn dep_gate(
@@ -867,11 +1055,11 @@ fn reserve_attempt_dir(
     plan_id: &str,
     item_id: &str,
     attempt_no: u32,
-) -> Result<(), ExecError> {
+) -> Result<(), StoreError> {
     // Parents (runs root / per-item dir) are plain infrastructure; the leaf
     // attempt directory itself is the atomic reservation unit.
     if let Some(parent) = dir.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(StoreError::Io)?;
     }
     match std::fs::create_dir(dir) {
         Ok(()) => Ok(()),
@@ -885,32 +1073,37 @@ fn reserve_attempt_dir(
                     attempt_no,
                     &timeutil::new_owner_token()[..12]
                 ));
-                std::fs::rename(dir, &orphan)?;
+                std::fs::rename(dir, &orphan).map_err(StoreError::Io)?;
                 store.append_event(
                     plan_id,
                     Some(item_id),
                     Some(attempt_no),
                     "orphan_attempt_dir_renamed",
-                    Some(&serde_json::json!({
-                        "from": dir.to_string_lossy(),
-                        "to": orphan.to_string_lossy(),
-                    }).to_string()),
+                    Some(
+                        &serde_json::json!({
+                            "from": dir.to_string_lossy(),
+                            "to": orphan.to_string_lossy(),
+                        })
+                        .to_string(),
+                    ),
                 )?;
-                std::fs::create_dir(dir).map_err(|e| {
-                    ExecError::Conflict(format!(
+                std::fs::create_dir(dir).map_err(|e| StoreError::Inconsistent {
+                    context: format!(
                         "cannot reserve attempt dir {} after orphan rename: {e}",
                         dir.display()
-                    ))
+                    ),
                 })?;
                 Ok(())
             } else {
-                Err(ExecError::Conflict(format!(
-                    "attempt dir {} already exists with a DB row; refusing to overwrite",
-                    dir.display()
-                )))
+                Err(StoreError::Inconsistent {
+                    context: format!(
+                        "attempt dir {} already exists with a DB row; refusing to overwrite",
+                        dir.display()
+                    ),
+                })
             }
         }
-        Err(e) => Err(ExecError::Io(e)),
+        Err(e) => Err(StoreError::Io(e)),
     }
 }
 
@@ -918,12 +1111,14 @@ fn reserve_attempt_dir(
 // Worker wait / verdicts
 // ---------------------------------------------------------------------------
 
-fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> Result<std::process::ExitStatus, ExecError> {
+fn wait_with_timeout(
+    child: &mut Child,
+    timeout_ms: u64,
+) -> Result<std::process::ExitStatus, ExecError> {
     let start = Instant::now();
     loop {
-        match child.try_wait()? {
-            Some(status) => return Ok(status),
-            None => {}
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
         }
         if start.elapsed().as_millis() as u64 >= timeout_ms {
             kill_tree(child.id());
@@ -994,11 +1189,9 @@ fn classify_exit(code: Option<i32>, result: Option<&WorkerResult>) -> Verdict {
     };
     match code {
         Some(worker_exit::SUCCESS) => match result {
-            Some(r) if r.outcome == "built" || r.outcome == "awaiting_review" => {
-                Verdict::Success {
-                    outcome: r.outcome.clone(),
-                }
-            }
+            Some(r) if r.outcome == "built" || r.outcome == "awaiting_review" => Verdict::Success {
+                outcome: r.outcome.clone(),
+            },
             Some(r) => Verdict::Crash {
                 reason: format!("exit 0 with unexpected outcome {:?}", r.outcome),
             },
@@ -1135,13 +1328,7 @@ pub fn cancel_batch(
 
     if item_filter.is_none() {
         store.set_batch_status(plan_id, BATCH_CANCELLED, None)?;
-        store.append_event(
-            plan_id,
-            None,
-            None,
-            "batch_cancelled",
-            None,
-        )?;
+        store.append_event(plan_id, None, None, "batch_cancelled", None)?;
     }
 
     BatchReport::build(&store, &plan, plan_id, &fingerprint).map_err(ExecError::from)

@@ -52,18 +52,35 @@ pub const BATCH_COMPLETED: &str = "completed";
 pub const BATCH_CANCELLED: &str = "cancelled";
 pub const BATCH_FAILED: &str = "failed";
 
+/// Honest reason recorded for an item that was left `running` by a runner
+/// that died before its attempt row was written.
+pub const RUNNING_WITHOUT_ATTEMPT_REASON: &str =
+    "orphaned running state: no live attempt (runner died before the attempt was recorded)";
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub enum StoreError {
-    Sqlite { context: String, source: rusqlite::Error },
-    Serde { context: String, source: serde_json::Error },
+    Sqlite {
+        context: String,
+        source: rusqlite::Error,
+    },
+    Serde {
+        context: String,
+        source: serde_json::Error,
+    },
     Io(std::io::Error),
-    PlanNotFound { plan_id: String },
-    PlanImmutable { plan_id: String },
-    Inconsistent { context: String },
+    PlanNotFound {
+        plan_id: String,
+    },
+    PlanImmutable {
+        plan_id: String,
+    },
+    Inconsistent {
+        context: String,
+    },
 }
 
 impl fmt::Display for StoreError {
@@ -129,6 +146,9 @@ pub struct AttemptRow {
     pub created_at: String,
     pub finished_at: Option<String>,
 }
+
+/// One row of the append-only event log: (ts, item_id, attempt_no, kind).
+pub type EventRow = (String, String, Option<u32>, String);
 
 // ---------------------------------------------------------------------------
 // Store
@@ -332,7 +352,9 @@ impl Store {
             .map(|s| s.to_string())
             .collect();
         let sql = match expected {
-            None => "UPDATE mb_batches SET status = ?2, updated_at = ?3 WHERE plan_id = ?1".to_string(),
+            None => {
+                "UPDATE mb_batches SET status = ?2, updated_at = ?3 WHERE plan_id = ?1".to_string()
+            }
             Some(list) => {
                 let placeholders = (0..list.len())
                     .map(|i| format!("?{}", i + 4))
@@ -344,9 +366,11 @@ impl Store {
                 )
             }
         };
-        let mut stmt = self.conn.prepare(&sql).map_err(sql_err("prepare batch cas"))?;
-        let mut p: Vec<&dyn rusqlite::ToSql> =
-            vec![&plan_id_s, &status_s, &now];
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(sql_err("prepare batch cas"))?;
+        let mut p: Vec<&dyn rusqlite::ToSql> = vec![&plan_id_s, &status_s, &now];
         for c in &cond {
             p.push(c);
         }
@@ -377,7 +401,8 @@ impl Store {
                 })
             })
             .map_err(sql_err("query items"))?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(sql_err("collect items"))
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sql_err("collect items"))
     }
 
     pub fn get_item(&self, plan_id: &str, item_id: &str) -> Result<Option<ItemRow>, StoreError> {
@@ -434,15 +459,12 @@ impl Store {
                 .join(", ");
             sql.push_str(&format!(" AND status IN ({placeholders})"));
         }
-        let mut stmt = self.conn.prepare(&sql).map_err(sql_err("prepare item cas"))?;
-        let mut p: Vec<&dyn rusqlite::ToSql> = vec![
-            &plan_id_s,
-            &item_id_s,
-            &to_s,
-            &blocked_s,
-            &error_s,
-            &now,
-        ];
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(sql_err("prepare item cas"))?;
+        let mut p: Vec<&dyn rusqlite::ToSql> =
+            vec![&plan_id_s, &item_id_s, &to_s, &blocked_s, &error_s, &now];
         for c in &cond {
             p.push(c);
         }
@@ -474,8 +496,19 @@ impl Store {
         dir: &Path,
         owner_token: &str,
     ) -> Result<bool, StoreError> {
-        let n = self
-            .conn
+        self.insert_attempt_row(plan_id, item_id, attempt_no, dir, owner_token)?;
+        Ok(true)
+    }
+
+    fn insert_attempt_row(
+        &self,
+        plan_id: &str,
+        item_id: &str,
+        attempt_no: u32,
+        dir: &Path,
+        owner_token: &str,
+    ) -> Result<(), StoreError> {
+        self.conn
             .execute(
                 "INSERT INTO mb_attempts (plan_id, item_id, attempt_no, dir, state, owner_token, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -506,7 +539,77 @@ impl Store {
                     }
                 }
             })?;
-        Ok(n > 0)
+        Ok(())
+    }
+
+    /// Claim an item AND register its attempt row in ONE transaction.
+    ///
+    /// The item claim (`running`) and the attempt row are written atomically,
+    /// so the limbo state "item running without an attempt row" is not
+    /// representable: a runner that dies in this window rolls the claim back
+    /// and leaves the item `pending`, instead of stranding it in `running`
+    /// where no other runner could ever claim it again.
+    ///
+    /// `between_claim_and_insert` runs inside the transaction, after the
+    /// claim and before the attempt row is inserted: it reserves the attempt
+    /// directory and writes the worker spec (and hosts the crash injection).
+    /// Database side effects are rolled back with the transaction; filesystem
+    /// side effects are not, so a leftover attempt directory is preserved as
+    /// an orphan by the next run instead of being overwritten.
+    ///
+    /// Returns false when the claim was lost: another owner moved the item.
+    #[allow(clippy::too_many_arguments)]
+    pub fn claim_item_with_attempt<F>(
+        &self,
+        plan_id: &str,
+        item_id: &str,
+        attempt_no: u32,
+        dir: &Path,
+        owner_token: &str,
+        claim_allowed: &[&str],
+        between_claim_and_insert: &mut F,
+    ) -> Result<bool, StoreError>
+    where
+        F: FnMut() -> Result<(), StoreError>,
+    {
+        let tx = self.tx()?;
+        let now = timeutil::now_iso8601();
+        let plan_id_s = plan_id.to_string();
+        let item_id_s = item_id.to_string();
+        let running_s = ITEM_RUNNING.to_string();
+        let cond: Vec<String> = claim_allowed.iter().map(|s| s.to_string()).collect();
+        let placeholders = (0..cond.len())
+            .map(|i| format!("?{}", i + 5))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE mb_items SET status = ?3, updated_at = ?4
+              WHERE plan_id = ?1 AND item_id = ?2 AND status IN ({placeholders})"
+        );
+        {
+            let mut stmt = self
+                .conn
+                .prepare(&sql)
+                .map_err(sql_err("prepare claim cas"))?;
+            let mut p: Vec<&dyn rusqlite::ToSql> = vec![&plan_id_s, &item_id_s, &running_s, &now];
+            for c in &cond {
+                p.push(c);
+            }
+            let n = stmt.execute(p.as_slice()).map_err(sql_err("claim cas"))?;
+            if n == 0 {
+                // Lost arbitration: roll the transaction back so nothing is
+                // written for an item we do not own.
+                let _ = tx.rollback();
+                return Ok(false);
+            }
+        }
+        // Attempt reservation (filesystem) inside the transaction.
+        between_claim_and_insert()?;
+        // The attempt row: same transaction, so the item can never be
+        // `running` without an attempt.
+        self.insert_attempt_row(plan_id, item_id, attempt_no, dir, owner_token)?;
+        tx.commit().map_err(sql_err("commit claim"))?;
+        Ok(true)
     }
 
     pub fn bump_attempts_used(
@@ -636,6 +739,53 @@ impl Store {
             .map_err(sql_err("collect attempts"))
     }
 
+    /// Items currently in the `running` state. A crashed runner can leave an
+    /// item there without any attempt (see [`Store::claim_item_with_attempt`]
+    /// and the executor reconciliation).
+    pub fn list_running_items(&self, plan_id: &str) -> Result<Vec<ItemRow>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT item_id, status, blocked_reason, attempts_used, last_error, updated_at
+                 FROM mb_items WHERE plan_id = ?1 AND status = 'running' ORDER BY item_id",
+            )
+            .map_err(sql_err("prepare running items"))?;
+        let rows = stmt
+            .query_map(params![plan_id], |row| {
+                Ok(ItemRow {
+                    plan_id: plan_id.to_string(),
+                    item_id: row.get(0)?,
+                    status: row.get(1)?,
+                    blocked_reason: row.get(2)?,
+                    attempts_used: row.get::<_, i64>(3)? as u32,
+                    last_error: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            })
+            .map_err(sql_err("query running items"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sql_err("collect running items"))
+    }
+
+    /// The attempt with the highest number for an item (if any).
+    pub fn latest_attempt(
+        &self,
+        plan_id: &str,
+        item_id: &str,
+    ) -> Result<Option<AttemptRow>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT item_id, attempt_no, dir, state, failure_kind, owner_pid, owner_token, \
+                        worker_result_json, error, created_at, finished_at
+                 FROM mb_attempts WHERE plan_id = ?1 AND item_id = ?2
+                 ORDER BY attempt_no DESC LIMIT 1",
+                params![plan_id, item_id],
+                |row| Ok(attempt_from_row(plan_id, row)),
+            )
+            .optional()
+            .map_err(sql_err("latest attempt"))
+    }
+
     // -- events ---------------------------------------------------------------
 
     pub fn append_event(
@@ -663,11 +813,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn events_tail(
-        &self,
-        plan_id: &str,
-        limit: usize,
-    ) -> Result<Vec<(String, String, Option<u32>, String)>, StoreError> {
+    pub fn events_tail(&self, plan_id: &str, limit: usize) -> Result<Vec<EventRow>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(
@@ -685,7 +831,7 @@ impl Store {
                 ))
             })
             .map_err(sql_err("query events"))?;
-        let mut out: Vec<(String, String, Option<u32>, String)> = rows
+        let mut out: Vec<EventRow> = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(sql_err("collect events"))?;
         out.reverse();
@@ -757,7 +903,14 @@ mod tests {
             .set_item_status("bp-1", "a", ITEM_RUNNING, Some(&[ITEM_PENDING]), None, None)
             .unwrap());
         assert!(store
-            .set_item_status("bp-1", "a", ITEM_AWAITING_REVIEW, Some(&[ITEM_RUNNING]), None, None)
+            .set_item_status(
+                "bp-1",
+                "a",
+                ITEM_AWAITING_REVIEW,
+                Some(&[ITEM_RUNNING]),
+                None,
+                None
+            )
             .unwrap());
     }
 
@@ -781,18 +934,42 @@ mod tests {
 
         assert!(store
             .attempt_transition(
-                "bp-1", "a", 1, &[ATTEMPT_RESERVED], ATTEMPT_RUNNING, Some(4242), None, None, None
+                "bp-1",
+                "a",
+                1,
+                &[ATTEMPT_RESERVED],
+                ATTEMPT_RUNNING,
+                Some(4242),
+                None,
+                None,
+                None
             )
             .unwrap());
         assert!(store
             .attempt_transition(
-                "bp-1", "a", 1, &[ATTEMPT_RUNNING], ATTEMPT_SUCCEEDED, None, None, None, None
+                "bp-1",
+                "a",
+                1,
+                &[ATTEMPT_RUNNING],
+                ATTEMPT_SUCCEEDED,
+                None,
+                None,
+                None,
+                None
             )
             .unwrap());
         // Double finalize must fail (already terminal).
         assert!(!store
             .attempt_transition(
-                "bp-1", "a", 1, &[ATTEMPT_RUNNING], ATTEMPT_SUCCEEDED, None, None, None, None
+                "bp-1",
+                "a",
+                1,
+                &[ATTEMPT_RUNNING],
+                ATTEMPT_SUCCEEDED,
+                None,
+                None,
+                None,
+                None
             )
             .unwrap());
         let row = store.get_attempt("bp-1", "a", 1).unwrap().unwrap();
@@ -807,7 +984,9 @@ mod tests {
             .register_plan("bp-1", "fp", "{}", &["a".to_string()])
             .unwrap();
         for kind in ["e1", "e2", "e3"] {
-            store.append_event("bp-1", Some("a"), None, kind, None).unwrap();
+            store
+                .append_event("bp-1", Some("a"), None, kind, None)
+                .unwrap();
         }
         let tail = store.events_tail("bp-1", 10).unwrap();
         let kinds: Vec<&str> = tail.iter().map(|e| e.3.as_str()).collect();

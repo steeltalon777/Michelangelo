@@ -9,7 +9,12 @@ use common::*;
 
 const PLAN_SCHEMA: &str = "michelangelo.batch-plan/provisional-0";
 
-fn item(id: &str, failure_mode: &str, deps: &[&str], extra: serde_json::Value) -> serde_json::Value {
+fn item(
+    id: &str,
+    failure_mode: &str,
+    deps: &[&str],
+    extra: serde_json::Value,
+) -> serde_json::Value {
     let mut worker = serde_json::json!({
         "failure_mode": failure_mode,
         "delay_ms": 30,
@@ -58,7 +63,12 @@ fn permanent_failure_no_retry_dependent_blocked_independent_success_kept() {
         "bp-partial",
         serde_json::json!([
             item("ok-alone", "none", &[], serde_json::json!({})),
-            item("bad", "permanent", &[], serde_json::json!({"reason": "unsupported input format"})),
+            item(
+                "bad",
+                "permanent",
+                &[],
+                serde_json::json!({"reason": "unsupported input format"})
+            ),
             item("child-of-bad", "none", &["bad"], serde_json::json!({}))
         ]),
         3,
@@ -69,7 +79,8 @@ fn permanent_failure_no_retry_dependent_blocked_independent_success_kept() {
     let runs_s = runs.to_string_lossy().to_string();
     let plan_s = plan_file.to_string_lossy().to_string();
 
-    let (stdout, _se, code) = run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, _se, code) =
+        run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
     assert_eq!(code, 2, "partial failure exit code expected");
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
 
@@ -81,9 +92,16 @@ fn permanent_failure_no_retry_dependent_blocked_independent_success_kept() {
     assert_eq!(item_attempts(&report, "ok-alone"), 1);
 
     // Success artifact of the independent item still on disk with its result.
-    let artifact = runs.join("ok-alone").join("attempt_001").join("ok-alone.out");
+    let artifact = runs
+        .join("ok-alone")
+        .join("attempt_001")
+        .join("ok-alone.out");
     assert!(artifact.exists());
-    assert!(runs.join("ok-alone").join("attempt_001").join("result.json").exists());
+    assert!(runs
+        .join("ok-alone")
+        .join("attempt_001")
+        .join("result.json")
+        .exists());
 }
 
 /// Transient failure: bounded automatic retry with new attempt per retry;
@@ -97,9 +115,12 @@ fn transient_retry_bounded_and_recovers() {
 
     let plan = plan(
         "bp-transient",
-        serde_json::json!([
-            item("flaky", "transient_until_attempt", &[], serde_json::json!({"transient_until_attempt": 3}))
-        ]),
+        serde_json::json!([item(
+            "flaky",
+            "transient_until_attempt",
+            &[],
+            serde_json::json!({"transient_until_attempt": 3})
+        )]),
         4,
     );
     let plan_file = root.join("plan.json");
@@ -108,11 +129,16 @@ fn transient_retry_bounded_and_recovers() {
     let runs_s = runs.to_string_lossy().to_string();
     let plan_s = plan_file.to_string_lossy().to_string();
 
-    let (stdout, _se, code) = run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, _se, code) =
+        run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
     assert_eq!(code, 0, "flaky item must recover within budget");
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "flaky"), "awaiting_review");
-    assert_eq!(item_attempts(&report, "flaky"), 3, "two transient failures then success");
+    assert_eq!(
+        item_attempts(&report, "flaky"),
+        3,
+        "two transient failures then success"
+    );
     assert_eq!(count_attempt_dirs(&runs, "flaky"), 3);
 
     let store = michelangelo_batch::Store::open(&db).unwrap();
@@ -133,9 +159,12 @@ fn transient_budget_exhausted_then_explicit_retry_gets_new_attempts() {
 
     let plan = plan(
         "bp-exhaust",
-        serde_json::json!([
-            item("flaky", "transient_until_attempt", &[], serde_json::json!({"transient_until_attempt": 9}))
-        ]),
+        serde_json::json!([item(
+            "flaky",
+            "transient_until_attempt",
+            &[],
+            serde_json::json!({"transient_until_attempt": 9})
+        )]),
         3,
     );
     let plan_file = root.join("plan.json");
@@ -144,7 +173,8 @@ fn transient_budget_exhausted_then_explicit_retry_gets_new_attempts() {
     let runs_s = runs.to_string_lossy().to_string();
     let plan_s = plan_file.to_string_lossy().to_string();
 
-    let (stdout, _se, code) = run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, _se, code) =
+        run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
     assert_eq!(code, 2);
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "flaky"), "execution_failed");
@@ -153,12 +183,24 @@ fn transient_budget_exhausted_then_explicit_retry_gets_new_attempts() {
     // Explicit retry of the selected failed item: bounded again (3 more),
     // still failing while the fake infra is still flaky.
     let (stdout, _se, code) = run_cli_ok(&[
-        "retry", "--plan-id", "bp-exhaust", "--items", "flaky", "--db", &db_s, "--runs", &runs_s,
+        "retry",
+        "--plan-id",
+        "bp-exhaust",
+        "--items",
+        "flaky",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
     ]);
     assert_eq!(code, 2);
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "flaky"), "execution_failed");
-    assert_eq!(item_attempts(&report, "flaky"), 6, "explicit retry appends new attempts");
+    assert_eq!(
+        item_attempts(&report, "flaky"),
+        6,
+        "explicit retry appends new attempts"
+    );
     assert_eq!(count_attempt_dirs(&runs, "flaky"), 6, "no directory reuse");
 }
 
@@ -173,9 +215,12 @@ fn validation_failed_is_distinct_and_not_retryable() {
 
     let plan = plan(
         "bp-validation",
-        serde_json::json!([
-            item("bad-quality", "validation_fail", &[], serde_json::json!({"reason": "silhouette drifted"}))
-        ]),
+        serde_json::json!([item(
+            "bad-quality",
+            "validation_fail",
+            &[],
+            serde_json::json!({"reason": "silhouette drifted"})
+        )]),
         3,
     );
     let plan_file = root.join("plan.json");
@@ -184,18 +229,35 @@ fn validation_failed_is_distinct_and_not_retryable() {
     let runs_s = runs.to_string_lossy().to_string();
     let plan_s = plan_file.to_string_lossy().to_string();
 
-    let (stdout, _se, code) = run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, _se, code) =
+        run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
     assert_eq!(code, 2);
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "bad-quality"), "validation_failed");
-    assert_eq!(item_attempts(&report, "bad-quality"), 1, "quality verdict: no retry");
+    assert_eq!(
+        item_attempts(&report, "bad-quality"),
+        1,
+        "quality verdict: no retry"
+    );
 
     let (_so, se, _code) = run_cli_ok(&[
-        "retry", "--plan-id", "bp-validation", "--items", "bad-quality", "--db", &db_s, "--runs", &runs_s,
+        "retry",
+        "--plan-id",
+        "bp-validation",
+        "--items",
+        "bad-quality",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
     ]);
     let report = poll_status(&db, "bp-validation", Duration::from_secs(5), |_| true);
     assert_eq!(item_status(&report, "bad-quality"), "validation_failed");
-    assert_eq!(item_attempts(&report, "bad-quality"), 1, "retry must not touch validation verdicts");
+    assert_eq!(
+        item_attempts(&report, "bad-quality"),
+        1,
+        "retry must not touch validation verdicts"
+    );
     assert!(se.is_empty() || !se.contains("panicked"));
 }
 
@@ -223,13 +285,18 @@ fn io_failure_stops_launches_and_keeps_successes() {
     let runs_s = runs.to_string_lossy().to_string();
     let plan_s = plan_file.to_string_lossy().to_string();
 
-    let (stdout, _se, code) = run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, _se, code) =
+        run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
     assert_eq!(code, 2);
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(report["batch_status"], "failed");
     assert_eq!(item_status(&report, "a-ok"), "awaiting_review");
     assert_eq!(item_status(&report, "b-io"), "execution_failed");
-    assert_eq!(item_status(&report, "c-never"), "pending", "launches stopped after IO failure");
+    assert_eq!(
+        item_status(&report, "c-never"),
+        "pending",
+        "launches stopped after IO failure"
+    );
     assert_eq!(item_attempts(&report, "c-never"), 0);
 
     // Honest warning recorded in the report.
@@ -277,7 +344,8 @@ fn resume_verifies_input_fingerprints_and_success_is_stable() {
     let runs_s = runs.to_string_lossy().to_string();
     let plan_s = plan_file.to_string_lossy().to_string();
 
-    let (_so, _se, code) = run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
+    let (_so, _se, code) =
+        run_cli_ok(&["run", "--plan", &plan_s, "--db", &db_s, "--runs", &runs_s]);
     assert_eq!(code, 2, "drifty is permanent-failed");
 
     // Change the actual input bytes of `drifty` after registration.
@@ -285,13 +353,24 @@ fn resume_verifies_input_fingerprints_and_success_is_stable() {
 
     // Resume: drifty must be blocked as input_drift, NOT re-executed;
     // stable must stay awaiting_review (never reset, never re-run).
-    let (stdout, _se, _code) =
-        run_cli_ok(&["resume", "--plan-id", "bp-drift", "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, _se, _code) = run_cli_ok(&[
+        "resume",
+        "--plan-id",
+        "bp-drift",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+    ]);
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "stable"), "awaiting_review");
     assert_eq!(item_attempts(&report, "stable"), 1);
     assert_eq!(item_status(&report, "drifty"), "blocked");
-    assert_eq!(item_attempts(&report, "drifty"), 1, "no attempt after input drift");
+    assert_eq!(
+        item_attempts(&report, "drifty"),
+        1,
+        "no attempt after input drift"
+    );
     let reason = report["items"]
         .as_array()
         .unwrap()
@@ -306,8 +385,15 @@ fn resume_verifies_input_fingerprints_and_success_is_stable() {
     // Restore the input; resume again: drifty may run again (still fails:
     // permanent mode), the reason updates but stable remains untouched.
     std::fs::write(&drift_input, "original bytes").unwrap();
-    let (stdout, _se, _code) =
-        run_cli_ok(&["resume", "--plan-id", "bp-drift", "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, _se, _code) = run_cli_ok(&[
+        "resume",
+        "--plan-id",
+        "bp-drift",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+    ]);
     let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&report, "stable"), "awaiting_review");
     assert_eq!(item_attempts(&report, "stable"), 1);

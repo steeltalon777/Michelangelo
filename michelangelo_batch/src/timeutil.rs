@@ -70,6 +70,6 @@ pub fn new_owner_token() -> String {
     hasher.write_u64(nanos.rotate_left(17));
     hasher.write_u64(counter);
     hasher.write_u64(std::process::id() as u64);
-    let mixed = hasher.finish() ^ (nanos << 1) ^ (counter as u64).rotate_left(31);
+    let mixed = hasher.finish() ^ (nanos << 1) ^ counter.rotate_left(31);
     format!("{:016x}{:016x}", mixed, (!mixed).rotate_left(13))
 }

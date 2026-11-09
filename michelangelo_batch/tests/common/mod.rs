@@ -17,10 +17,8 @@ pub fn mbatch_exe() -> PathBuf {
 pub fn run_cli(args: &[&str]) -> Output {
     let mut cmd = Command::new(mbatch_exe());
     cmd.args(args);
-    let out = cmd
-        .output()
-        .expect("failed to spawn mbatch; tests must run via cargo test");
-    out
+    cmd.output()
+        .expect("failed to spawn mbatch; tests must run via cargo test")
 }
 
 /// Run the CLI with a time limit by polling (the child outlives the call only
@@ -38,8 +36,7 @@ pub fn run_cli_ok(args: &[&str]) -> (String, String, i32) {
 pub fn spawn_cli(args: &[&str]) -> std::process::Child {
     let mut cmd = Command::new(mbatch_exe());
     cmd.args(args);
-    cmd.spawn()
-        .expect("failed to spawn mbatch in background")
+    cmd.spawn().expect("failed to spawn mbatch in background")
 }
 
 /// Poll `mbatch status` from this (second) process until `pred` holds.
@@ -86,8 +83,7 @@ pub fn item_status(report: &Value, item_id: &str) -> String {
         .unwrap()
         .iter()
         .find(|i| i["item_id"] == item_id)
-        .unwrap_or_else(|| panic!("item {item_id} missing in report"))
-        ["status"]
+        .unwrap_or_else(|| panic!("item {item_id} missing in report"))["status"]
         .as_str()
         .unwrap()
         .to_string()
@@ -99,10 +95,51 @@ pub fn item_attempts(report: &Value, item_id: &str) -> u64 {
         .unwrap()
         .iter()
         .find(|i| i["item_id"] == item_id)
-        .unwrap_or_else(|| panic!("item {item_id} missing in report"))
-        ["attempts_used"]
+        .unwrap_or_else(|| panic!("item {item_id} missing in report"))["attempts_used"]
         .as_u64()
         .unwrap()
+}
+
+/// The recorded `last_error` of an item (empty string when absent).
+pub fn item_last_error(report: &Value, item_id: &str) -> String {
+    report["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["item_id"] == item_id)
+        .unwrap_or_else(|| panic!("item {item_id} missing in report"))["last_error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The recorded `blocked_reason` of an item (empty string when absent).
+pub fn item_blocked_reason(report: &Value, item_id: &str) -> String {
+    report["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["item_id"] == item_id)
+        .unwrap_or_else(|| panic!("item {item_id} missing in report"))["blocked_reason"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The names of the attempt directories of an item under the runs root.
+pub fn attempt_dir_names(runs: &Path, item_id: &str) -> Vec<String> {
+    let item_dir = runs.join(item_id);
+    if !item_dir.exists() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = std::fs::read_dir(&item_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("attempt_"))
+        .collect();
+    names.sort();
+    names
 }
 
 pub fn count_attempt_dirs(runs: &Path, item_id: &str) -> usize {
@@ -113,11 +150,7 @@ pub fn count_attempt_dirs(runs: &Path, item_id: &str) -> usize {
     std::fs::read_dir(&item_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with("attempt_")
-        })
+        .filter(|e| e.file_name().to_string_lossy().starts_with("attempt_"))
         .count()
 }
 

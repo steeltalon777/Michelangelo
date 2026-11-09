@@ -1,6 +1,6 @@
 # SCOPE — GLM-3 / Durable Batch Executor (stream C, ADR 0005)
 
-Дата: 2026-11-08. База: `dev@b8615477b735c1f60c93518b59f8fe32613a7556` (IT-8D).
+Дата: 2026-11-08 (fix-раунд: 2026-11-09). База: `dev@b8615477b735c1f60c93518b59f8fe32613a7556` (IT-8D).
 Ветка: `feat/adr5-batch` (worktree `I:/prog/michelangelo-adr5-batch`). Push/merge не выполнялись.
 
 ## Статус
@@ -10,13 +10,16 @@ Implemented (PoC, fake worker first). Все заявленные свойств
 smoke не запускался и не требуется (fake worker). Ничего здесь не является
 production-ready, UE-ready или безопасным запуском недоверенных файлов.
 
+Fix-раунд (по DSH_REVIEW_WAVE1.md §5, findings F1/F2/F3/F4/F5) меняет
+поведение в четырёх местах — см. §«Изменения fix-раунда» ниже.
+
 ## Фактические пути владения (единоличные)
 
 | Путь | Назначение |
 |---|---|
 | `michelangelo_batch/` | Новый standalone crate: `michelangelo_batch` (lib) + bin `mbatch`. Собственный `Cargo.toml` с пустой секцией `[workspace]` — crate НЕ входит в корневый workspace (корневой `Cargo.toml`/`Cargo.lock` не изменялись). |
 | `michelangelo_batch/src/` | `lib.rs`, `plan.rs`, `store.rs`, `locks.rs`, `executor.rs`, `worker.rs`, `report.rs`, `timeutil.rs`, `bin/mbatch.rs` |
-| `michelangelo_batch/tests/` | `common/mod.rs`, `two_process.rs`, `crash_recovery.rs`, `policies.rs` |
+| `michelangelo_batch/tests/` | `common/mod.rs`, `two_process.rs`, `crash_recovery.rs`, `policies.rs`, `plan_guards.rs` |
 | `docs/adr5-streams/batch/` | Этот SCOPE, TEST_EVIDENCE.md, INTEGRATION_NOTES.md |
 
 Disposable state в рантайме: тесты используют `tempfile::TempDir` (OS TEMP);
@@ -29,7 +32,12 @@ Disposable state в рантайме: тесты используют `tempfile:
    SHA-256 канонического JSON плана; повторная регистрация того же payload
    идемпотентна, другой payload под тем же id отклоняется
    (`StoreError::PlanImmutable`). Входы пинруются: абсолютные пути + фактические
-   SHA-256 файлов (`pin_inputs`) при первой регистрации.
+   SHA-256 файлов (`pin_inputs`) при первой регистрации. **Fingerprint и
+   `plan_id` вычисляются по пиннутой форме**, то есть идентичность плана
+   покрывает фактические входы, а не только объявленные пути. Объявленный
+   входом `sha256` — контракт: расхождение с фактическими байтами →
+   `PlanError::InputHashMismatch` (exit 4), объявленное значение никогда не
+   перезаписывается наблюдаемым.
 2. **Durable state в отдельной disposable SQLite.** Таблицы `mb_batches`,
    `mb_items`, `mb_attempts`, `mb_events` (append-only event log). WAL +
    busy_timeout; все переходы — CAS `UPDATE ... WHERE status IN (...)`, поэтому
@@ -38,7 +46,10 @@ Disposable state в рантайме: тесты используют `tempfile:
    создаётся `create_dir` (AlreadyExists → конфликт); crash между mkdir и DB
    insert обрабатывается честно: старая директория переименовывается в
    `attempt_NNN.orphan-<token>` (без overwrite содержимого), резервируется
-   новая. Каждый retry — новый attempt_no и новая директория.
+   новая. Каждый retry — новый attempt_no и новая директория. Идентификатор
+   item'а — строгий: первый символ `[A-Za-z0-9]`, символы `[A-Za-z0-9._-]`,
+   `.`/`..` запрещены, поэтому `attempt_dir` физически не может выйти за
+   пределы runs root.
 4. **Cross-process admission тяжёлого worker (лимит 1).** Файловая блокировка
    `heavy_worker.slot.lock` через `std::fs::File::try_lock` (LockFileEx на
    Windows), освобождается ядром при смерти владельца — crash-safe, без
@@ -54,11 +65,19 @@ Disposable state в рантайме: тесты используют `tempfile:
    (per-cycle budget = `max_attempts`, backoff base*2^n с cap). Invalid input,
    validation fail — перманентные вердикты без повторов; IO/storage failure
    останавливает запуск новых items (успехи ранее выполненных сохраняются).
-7. **Resume/Retry.** Resume сверяет фактические SHA-256 входов: drift → item
-   `blocked(input_drift)`, не выполняется; успешные items никогда не
-   сбрасываются и не перезапускаются; прерванные владельцы (мёртвые по OS-локу)
-   помечаются `interrupted`. `retry --items` даёт новый bounded-цикл выбранным
-   items; `validation_failed` повторам не подлежит.
+7. **Resume/Retry.** Reconciliation выполняется **во всех режимах**
+   (`run`/`resume`/`retry`): фактические SHA-256 входов сверяются до
+   запуска чего бы то ни было; drift → item `blocked(input_drift)`, не
+   выполняется; непосредственно перед claim входы конкретного item'а
+   пересчитываются ещё раз (свежая проверка на момент claim). Успешные items
+   никогда не сбрасываются и не перезапускаются; прерванные владельцы (мёртвые
+   по OS-локу) помечаются `interrupted`. `retry --items` даёт новый
+   bounded-цикл выбранным items; `validation_failed` повторам не подлежит.
+   Items, оставленные упавшим runner'ом в `running` без живой attempt-строки,
+   подметаются в `execution_failed` (иначе пачка висела бы вечно: claim
+   разрешён только из `pending/execution_failed/cancelled/blocked`, cancel —
+   только из `pending/blocked`). Исход уже завершённого attempt'а
+   переносится на item, а не выбрасывается.
 8. **Cancel.** Отдельный процесс `cancel`: убивает process tree живого worker
    (`taskkill /T /F`), ждёт освобождения лока, CAS-переводит attempt/item в
    `cancelled`; pending/blocked → `cancelled` (зависимые стадии не стартуют).
@@ -86,6 +105,19 @@ Disposable state в рантайме: тесты используют `tempfile:
 - Контракт GLM-1 отсутствовал: DTO (`BatchPlan`, `WorkerInvocation`,
   `WorkerResult`, `BatchReport`) — private provisional c маркерами
   `provisional-0` и adapter seam (см. INTEGRATION_NOTES.md).
+
+## Изменения fix-раунда (2026-11-09, findings DSH_REVIEW_WAVE1 §5)
+
+| Finding | Что изменено | Где |
+|---|---|---|
+| F1 (HIGH) | Claim item (`running`) и вставка attempt-строки выполняются **одной транзакцией** → состояние «running без attempt'а» не представимо. Дополнительно reconcile подметает такие items в `execution_failed` и переносит исход завершённого attempt'а на item. Добавлена инъекция краша в окне claim→insert (`--inject-crash-before-insert`) и 2 теста | `src/store.rs` (`claim_item_with_attempt`), `src/executor.rs` (`reconcile_state`), `src/bin/mbatch.rs`, `tests/crash_recovery.rs` |
+| F2 (HIGH) | `pin_inputs` проверяет объявленный `sha256` → `PlanError::InputHashMismatch`; fingerprint и `plan_id` считаются по пиннутой форме. 2 теста | `src/plan.rs`, `src/executor.rs` (`load_or_register`), `tests/plan_guards.rs` |
+| F3 (MEDIUM) | Reconciliation выполняется во всех режимах; входы item'а пересчитываются непосредственно перед claim. 1 тест | `src/executor.rs`, `tests/plan_guards.rs` |
+| F4 (MEDIUM, gate) | `cargo fmt --check` → exit 0, `cargo clippy --all-targets -- -D warnings` → exit 0; фактические результаты в TEST_EVIDENCE.md | весь крейт |
+| F5 (MEDIUM) | `valid_item_id`: явный запрет `.`/`..`, первый символ `[A-Za-z0-9]`. 1 интеграционный + 2 unit-теста | `src/plan.rs`, `tests/plan_guards.rs` |
+
+Новый файл: `michelangelo_batch/tests/plan_guards.rs`. Прочие каталоги репозитория
+не тронуты.
 
 ## Не изменённые (запрещённые) файлы
 

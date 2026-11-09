@@ -61,7 +61,12 @@ pub struct LiveAttemptInfo {
 }
 
 impl BatchReport {
-    pub fn build(store: &Store, plan: &BatchPlan, plan_id: &str, fingerprint: &str) -> Result<BatchReport, StoreError> {
+    pub fn build(
+        store: &Store,
+        plan: &BatchPlan,
+        plan_id: &str,
+        fingerprint: &str,
+    ) -> Result<BatchReport, StoreError> {
         let items = store.list_items(plan_id)?;
         let attempts = store.list_attempts(plan_id)?;
         let batch_status = store
@@ -87,7 +92,9 @@ impl BatchReport {
             }
             let live = attempts
                 .iter()
-                .find(|a| a.item_id == row.item_id && (a.state == "reserved" || a.state == "running"))
+                .find(|a| {
+                    a.item_id == row.item_id && (a.state == "reserved" || a.state == "running")
+                })
                 .map(|a| LiveAttemptInfo {
                     attempt_no: a.attempt_no,
                     state: a.state.clone(),
@@ -122,8 +129,7 @@ impl BatchReport {
 
     /// True when every item ended in a successful domain outcome.
     pub fn all_success(&self) -> bool {
-        self.counts
-            .pending
+        self.counts.pending
             + self.counts.running
             + self.counts.validation_failed
             + self.counts.execution_failed

@@ -4,7 +4,7 @@
 //! touches the existing CLI dispatcher nor reuses its transport. Subcommands:
 //!
 //!   run      --plan <file> --db <sqlite> --runs <dir> [--slot-wait-ms N]
-//!            [--inject-crash-after-reserve]
+//!            [--inject-crash-after-reserve] [--inject-crash-before-insert]
 //!   resume   --plan-id <id>  --db <sqlite> --runs <dir>
 //!   retry    --plan-id <id>  --db <sqlite> --runs <dir> --items a,b
 //!   status   --plan-id <id>  --db <sqlite>
@@ -21,17 +21,15 @@ use michelangelo_batch::executor::{
     cancel_batch, execute, load_or_register, load_registered, read_status, ExecError, ExecOptions,
     RunMode,
 };
-use michelangelo_batch::worker::run_worker;
 use michelangelo_batch::exit_codes;
+use michelangelo_batch::worker::run_worker;
 
 fn fail(err: &ExecError) -> ExitCode {
     eprintln!("mbatch: {err}");
     match err {
         ExecError::SlotBusy { .. } => ExitCode::from(exit_codes::SLOT_BUSY as u8),
         ExecError::BatchCancelled => ExitCode::from(exit_codes::USAGE as u8),
-        ExecError::Plan(_) | ExecError::Conflict(_) => {
-            ExitCode::from(exit_codes::USAGE as u8)
-        }
+        ExecError::Plan(_) | ExecError::Conflict(_) => ExitCode::from(exit_codes::USAGE as u8),
         ExecError::Store(michelangelo_batch::StoreError::PlanImmutable { .. }) => {
             ExitCode::from(exit_codes::USAGE as u8)
         }
@@ -146,10 +144,15 @@ fn cmd_run(args: &Args) -> ExitCode {
         Ok(v) => PathBuf::from(v),
         Err(e) => return usage_err(&e),
     };
-    let slot_wait_ms = args.opt_u64("slot-wait-ms").ok().flatten().unwrap_or(10_000);
+    let slot_wait_ms = args
+        .opt_u64("slot-wait-ms")
+        .ok()
+        .flatten()
+        .unwrap_or(10_000);
     let opts = ExecOptions {
         slot_wait_ms,
         inject_crash_after_reserve: args.is_set("inject-crash-after-reserve"),
+        inject_crash_before_insert: args.is_set("inject-crash-before-insert"),
     };
 
     let store = match michelangelo_batch::Store::open(&db) {
@@ -212,10 +215,15 @@ fn cmd_with_stored_plan(args: &Args, plan_id: &str, mode: RunMode) -> ExitCode {
         Ok(v) => PathBuf::from(v),
         Err(e) => return usage_err(&e),
     };
-    let slot_wait_ms = args.opt_u64("slot-wait-ms").ok().flatten().unwrap_or(10_000);
+    let slot_wait_ms = args
+        .opt_u64("slot-wait-ms")
+        .ok()
+        .flatten()
+        .unwrap_or(10_000);
     let opts = ExecOptions {
         slot_wait_ms,
         inject_crash_after_reserve: false,
+        inject_crash_before_insert: false,
     };
     let store = match michelangelo_batch::Store::open(&db) {
         Ok(s) => s,
@@ -226,15 +234,7 @@ fn cmd_with_stored_plan(args: &Args, plan_id: &str, mode: RunMode) -> ExitCode {
         Err(e) => return fail(&e),
     };
     drop(store);
-    match execute(
-        &plan,
-        &plan_id,
-        &fingerprint,
-        &db,
-        &runs,
-        mode,
-        &opts,
-    ) {
+    match execute(&plan, &plan_id, &fingerprint, &db, &runs, mode, &opts) {
         Ok(report) => finish_with_report(&report),
         Err(e) => fail(&e),
     }

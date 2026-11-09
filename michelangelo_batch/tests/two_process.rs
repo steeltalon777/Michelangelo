@@ -48,7 +48,10 @@ fn delayed_finish_status_from_second_process() {
     let db = root.join("state.db");
     let runs = root.join("runs");
 
-    let plan = simple_plan("bp-delayed", serde_json::json!([build_item("solo", 4000, &[])]));
+    let plan = simple_plan(
+        "bp-delayed",
+        serde_json::json!([build_item("solo", 4000, &[])]),
+    );
     let plan_file = root.join("plan.json");
     std::fs::write(&plan_file, plan.to_string()).unwrap();
     let db_s = db.to_string_lossy().to_string();
@@ -61,7 +64,10 @@ fn delayed_finish_status_from_second_process() {
     // Second process (this test): observe a live running attempt mid-flight.
     let mid = poll_status(&db, "bp-delayed", Duration::from_secs(20), |v| {
         item_status(v, "solo") == "running"
-            && v["items"][0]["live_attempt"]["owner_pid"].as_i64().unwrap_or(0) > 0
+            && v["items"][0]["live_attempt"]["owner_pid"]
+                .as_i64()
+                .unwrap_or(0)
+                > 0
     });
     let live = mid["items"][0]["live_attempt"].clone();
     assert!(
@@ -156,7 +162,15 @@ fn cancel_from_second_process_stops_worker_and_dependents() {
     assert_eq!(item_status(&after, "second"), "cancelled");
 
     // Explicit resume re-runs cancelled items and completes.
-    let (stdout, stderr, code) = run_cli_ok(&["resume", "--plan-id", "bp-cancel", "--db", &db_s, "--runs", &runs_s]);
+    let (stdout, stderr, code) = run_cli_ok(&[
+        "resume",
+        "--plan-id",
+        "bp-cancel",
+        "--db",
+        &db_s,
+        "--runs",
+        &runs_s,
+    ]);
     assert!(code == 0, "resume failed: {stderr}\n{stdout}");
     let resumed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(item_status(&resumed, "first"), "awaiting_review");
@@ -223,7 +237,10 @@ fn heavy_worker_slot_is_exclusive_across_processes() {
     let db = root.join("state.db");
     let runs = root.join("runs");
 
-    let plan = simple_plan("bp-slot", serde_json::json!([build_item("long", 9000, &[])]));
+    let plan = simple_plan(
+        "bp-slot",
+        serde_json::json!([build_item("long", 9000, &[])]),
+    );
     let plan_file = root.join("plan.json");
     std::fs::write(&plan_file, plan.to_string()).unwrap();
     let db_s = db.to_string_lossy().to_string();
@@ -234,7 +251,10 @@ fn heavy_worker_slot_is_exclusive_across_processes() {
 
     poll_status(&db, "bp-slot", Duration::from_secs(20), |v| {
         item_status(v, "long") == "running"
-            && v["items"][0]["live_attempt"]["owner_pid"].as_i64().unwrap_or(0) > 0
+            && v["items"][0]["live_attempt"]["owner_pid"]
+                .as_i64()
+                .unwrap_or(0)
+                > 0
     });
 
     // From this second process: the slot must be busy while the worker runs.
