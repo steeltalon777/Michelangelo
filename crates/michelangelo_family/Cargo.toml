@@ -1,0 +1,17 @@
+[package]
+name = "michelangelo_family"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ADR 0005 Family Builder / Pure Planner V0-V1 (provisional private DTOs, no Blender, no execution)"
+
+# Standalone crate: intentionally NOT a member of the repository root workspace
+# (root Cargo.toml members list is explicit and must not be modified per ADR 0005
+# parallel dispatch rules). The empty [workspace] table detaches this crate so it
+# builds and tests in isolation with its own Cargo.lock.
+[workspace]
+
+[dependencies]
+# Intentionally empty: zero external dependencies so the crate is fully
+# offline-buildable and byte-deterministic. SHA-256 and canonical JSON are
+# implemented in-crate and covered by tests.

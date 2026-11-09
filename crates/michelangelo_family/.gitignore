@@ -1,0 +1,3 @@
+# Standalone crate builds into its own target dir (root /target/ rule does
+# not cover nested standalone crates).
+/target/
