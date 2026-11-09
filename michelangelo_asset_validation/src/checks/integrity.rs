@@ -238,7 +238,8 @@ pub fn check_asset_digest_full(
             ));
         }
     } else {
-        failures.push("SNAPSHOT_MISMATCH: the manifest does not declare an asset_digest".to_string());
+        failures
+            .push("SNAPSHOT_MISMATCH: the manifest does not declare an asset_digest".to_string());
     }
     let mut pinned_digest: Option<String> = None;
     match resolve_pinned(context, profile, reference_keys::EXPECTED_ASSET_DIGEST)? {
@@ -283,7 +284,11 @@ pub fn check_asset_digest_full(
             evidence,
         ))
     } else {
-        Ok(fail(CheckId::AssetDigestFull, failures.join("; "), evidence))
+        Ok(fail(
+            CheckId::AssetDigestFull,
+            failures.join("; "),
+            evidence,
+        ))
     }
 }
 
@@ -367,7 +372,11 @@ pub fn check_dependency_closure(
             evidence,
         ))
     } else {
-        Ok(fail(CheckId::DependencyClosure, failures.join("; "), evidence))
+        Ok(fail(
+            CheckId::DependencyClosure,
+            failures.join("; "),
+            evidence,
+        ))
     }
 }
 
@@ -382,20 +391,36 @@ pub fn check_path_containment(
     let mut failures = Vec::new();
     for artifact in &manifest.artifacts {
         if let Err(err) = crate::ids::validate_rel_path(&artifact.path) {
-            failures.push(format!("PATH_ESCAPE: artifact '{}': {}", artifact.artifact_id, err.message()));
+            failures.push(format!(
+                "PATH_ESCAPE: artifact '{}': {}",
+                artifact.artifact_id,
+                err.message()
+            ));
             continue;
         }
         if let Err(err) = crate::ids::resolve_under(context.root(), &artifact.path) {
-            failures.push(format!("PATH_ESCAPE: artifact '{}': {}", artifact.artifact_id, err.message()));
+            failures.push(format!(
+                "PATH_ESCAPE: artifact '{}': {}",
+                artifact.artifact_id,
+                err.message()
+            ));
         }
     }
     for dep in &manifest.dependencies {
         if let Err(err) = crate::ids::validate_rel_path(&dep.path) {
-            failures.push(format!("PATH_ESCAPE: dependency '{}': {}", dep.dep_id, err.message()));
+            failures.push(format!(
+                "PATH_ESCAPE: dependency '{}': {}",
+                dep.dep_id,
+                err.message()
+            ));
             continue;
         }
         if let Err(err) = crate::ids::resolve_under(context.root(), &dep.path) {
-            failures.push(format!("PATH_ESCAPE: dependency '{}': {}", dep.dep_id, err.message()));
+            failures.push(format!(
+                "PATH_ESCAPE: dependency '{}': {}",
+                dep.dep_id,
+                err.message()
+            ));
         }
     }
     if failures.is_empty() {
@@ -406,16 +431,25 @@ pub fn check_path_containment(
             Vec::new(),
         ))
     } else {
-        Ok(fail(CheckId::PathContainment, failures.join("; "), Vec::new()))
+        Ok(fail(
+            CheckId::PathContainment,
+            failures.join("; "),
+            Vec::new(),
+        ))
     }
 }
 
 /// Defensive helper used by the evaluator: every required check id must come
 /// from the closed registry (F8 belt-and-braces guard; the profile layer
 /// already refuses unknown ids at load time).
-pub fn assert_registry_ids(profile: &ValidationProfile) -> Result<(), crate::error::ValidationError> {
+pub fn assert_registry_ids(
+    profile: &ValidationProfile,
+) -> Result<(), crate::error::ValidationError> {
     for check in &profile.required_checks {
-        if crate::check::CheckId::ALL.iter().all(|known| known != check) {
+        if crate::check::CheckId::ALL
+            .iter()
+            .all(|known| known != check)
+        {
             return Err(crate::error::ValidationError::rule(
                 VALIDATION_UNKNOWN_REQUIRED,
                 format!("the required check '{}' is unknown", check.as_str()),

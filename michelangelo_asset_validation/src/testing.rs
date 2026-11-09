@@ -98,7 +98,14 @@ impl WorkspaceBuilder {
         roles: &[&str],
         protected: bool,
     ) -> String {
-        self.add_artifact(artifact_id, rel_path, "geometry", content.as_bytes(), roles, protected)
+        self.add_artifact(
+            artifact_id,
+            rel_path,
+            "geometry",
+            content.as_bytes(),
+            roles,
+            protected,
+        )
     }
 
     /// Add a dependency from bytes.
@@ -151,7 +158,14 @@ impl WorkspaceBuilder {
     ) -> String {
         let document = crate::checks::parsing::LayoutDoc { components };
         let bytes = serde_json::to_vec_pretty(&document).expect("layout json");
-        self.add_artifact(artifact_id, "metadata/scene_layout.json", "scene_layout", &bytes, &[], false)
+        self.add_artifact(
+            artifact_id,
+            "metadata/scene_layout.json",
+            "scene_layout",
+            &bytes,
+            &[],
+            false,
+        )
     }
 
     /// Write the sockets metadata artifact.
@@ -162,7 +176,14 @@ impl WorkspaceBuilder {
     ) -> String {
         let document = crate::checks::parsing::SocketsDoc { sockets };
         let bytes = serde_json::to_vec_pretty(&document).expect("sockets json");
-        self.add_artifact(artifact_id, "metadata/sockets.json", "metadata", &bytes, &[], false)
+        self.add_artifact(
+            artifact_id,
+            "metadata/sockets.json",
+            "metadata",
+            &bytes,
+            &[],
+            false,
+        )
     }
 
     /// Write the rig_definition artifact.
@@ -300,7 +321,11 @@ pub fn make_profile(
 }
 
 /// Attach a pinned reference digest to the profile.
-pub fn with_reference(mut profile: ValidationProfile, key: &str, digest: &str) -> ValidationProfile {
+pub fn with_reference(
+    mut profile: ValidationProfile,
+    key: &str,
+    digest: &str,
+) -> ValidationProfile {
     profile
         .references
         .reference_digests
@@ -317,10 +342,21 @@ pub fn with_clips(mut profile: ValidationProfile, clips: Vec<DocRef>) -> Validat
 /// A minimal OBJ cube with UVs (deterministic text).
 pub fn cube_obj() -> String {
     [
-        "v 0 0 0", "v 1 0 0", "v 1 1 0", "v 0 1 0", "v 0 0 1", "v 1 0 1", "v 1 1 1", "v 0 1 1",
-        "vt 0 0", "vt 1 0", "vt 1 1", "vt 0 1",
+        "v 0 0 0",
+        "v 1 0 0",
+        "v 1 1 0",
+        "v 0 1 0",
+        "v 0 0 1",
+        "v 1 0 1",
+        "v 1 1 1",
+        "v 0 1 1",
+        "vt 0 0",
+        "vt 1 0",
+        "vt 1 1",
+        "vt 0 1",
         "usemtl wall",
-        "f 1/1 2/2 3/3", "f 1/1 3/3 4/4",
+        "f 1/1 2/2 3/3",
+        "f 1/1 3/3 4/4",
     ]
     .join("\n")
 }
@@ -429,8 +465,20 @@ pub fn build_family_workspace(
     ws.add_dependency("wall-mtl", "deps/wall.mtl", mtl.as_bytes(), 1);
     ws.add_dependency("wall-tex", "textures/wall.png", &[9u8, 8, 7], 1);
 
-    let _body = ws.add_obj("body-mesh", "artifacts/body.obj", &block_obj(1.0, 2), &["wall"], false);
-    ws.add_obj("roof-mesh", "artifacts/roof.obj", &block_obj(1.0, 2), &["roof"], false);
+    let _body = ws.add_obj(
+        "body-mesh",
+        "artifacts/body.obj",
+        &block_obj(1.0, 2),
+        &["wall"],
+        false,
+    );
+    ws.add_obj(
+        "roof-mesh",
+        "artifacts/roof.obj",
+        &block_obj(1.0, 2),
+        &["roof"],
+        false,
+    );
     let anchor = ws.add_obj(
         "anchor-mesh",
         "artifacts/anchor.obj",
@@ -438,7 +486,13 @@ pub fn build_family_workspace(
         &["entry-anchor"],
         true,
     );
-    ws.add_obj("door-mesh", "artifacts/door.obj", &block_obj(1.0, 2), &["entrance"], false);
+    ws.add_obj(
+        "door-mesh",
+        "artifacts/door.obj",
+        &block_obj(1.0, 2),
+        &["entrance"],
+        false,
+    );
 
     let identity = [
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -552,11 +606,36 @@ pub fn build_family_workspace(
         ],
         vec![CheckId::FormatLossDeclared],
         vec![
-            threshold(CheckId::BudgetGeometry, "max_evaluated_triangles", Comparison::AtMost, 100_000.0),
-            threshold(CheckId::MaximumDimension, "max_extent_x_m", Comparison::AtMost, 10.0),
-            threshold(CheckId::MaximumDimension, "max_extent_z_m", Comparison::AtMost, 20.0),
-            threshold(CheckId::MinimumClearance, "min_clearance_m", Comparison::AtLeast, 1.2),
-            threshold(CheckId::ConnectorCompatibility, "connector_tolerance_m", Comparison::AtMost, 0.1),
+            threshold(
+                CheckId::BudgetGeometry,
+                "max_evaluated_triangles",
+                Comparison::AtMost,
+                100_000.0,
+            ),
+            threshold(
+                CheckId::MaximumDimension,
+                "max_extent_x_m",
+                Comparison::AtMost,
+                10.0,
+            ),
+            threshold(
+                CheckId::MaximumDimension,
+                "max_extent_z_m",
+                Comparison::AtMost,
+                20.0,
+            ),
+            threshold(
+                CheckId::MinimumClearance,
+                "min_clearance_m",
+                Comparison::AtLeast,
+                1.2,
+            ),
+            threshold(
+                CheckId::ConnectorCompatibility,
+                "connector_tolerance_m",
+                Comparison::AtMost,
+                0.1,
+            ),
         ],
         vec![
             "constraints:connector".to_string(),

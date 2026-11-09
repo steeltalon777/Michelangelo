@@ -110,18 +110,25 @@ pub fn validate_rel_path(path: &str) -> Result<(), ValidationError> {
 
 /// Resolve a validated workspace-relative path under a root, re-checking
 /// containment on the joined result.
-pub fn resolve_under(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, ValidationError> {
+pub fn resolve_under(
+    root: &std::path::Path,
+    rel: &str,
+) -> Result<std::path::PathBuf, ValidationError> {
     validate_rel_path(rel)?;
     let joined = root.join(rel);
-    let canonical_base = root
-        .canonicalize()
-        .map_err(|err| ValidationError::io(root, format!("the workspace root is not usable: {err}")))?;
+    let canonical_base = root.canonicalize().map_err(|err| {
+        ValidationError::io(root, format!("the workspace root is not usable: {err}"))
+    })?;
     // The target may not exist yet; containment is checked on the parent.
     let parent = joined
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| joined.clone());
-    let anchor = if parent.exists() { parent } else { joined.clone() };
+    let anchor = if parent.exists() {
+        parent
+    } else {
+        joined.clone()
+    };
     if let Ok(resolved) = anchor.canonicalize() {
         if !resolved.starts_with(&canonical_base) {
             return Err(ValidationError::rule(

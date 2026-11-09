@@ -13,7 +13,8 @@ use michelangelo_asset_validation::canonical::sha256_hex;
 use michelangelo_asset_validation::check::{CheckId, CheckRecord, CheckStatus, Verdict};
 use michelangelo_asset_validation::profile::{Comparison, ProfileKind, ProfileReferences};
 use michelangelo_asset_validation::registry::{
-    load_registry, verify_registered_report, write_and_register, Reservation,
+    load_registry, report_file_path, store_pinned_profile, verify_registered_report,
+    write_and_register, write_registry, RegistryEntry, Reservation,
 };
 use michelangelo_asset_validation::report::{BundleRef, ProfileRef, ValidationReport};
 use michelangelo_asset_validation::testing::*;
@@ -49,13 +50,18 @@ fn rewrite_artifact_and_manifest(ws: &FinalizedWorkspace, artifact_id: &str, byt
             )
         })
         .collect();
-    manifest.asset_digest = Some(michelangelo_asset_validation::canonical::asset_digest(&entries));
+    manifest.asset_digest = Some(michelangelo_asset_validation::canonical::asset_digest(
+        &entries,
+    ));
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("manifest");
     std::fs::write(ws.root().join("manifest.json"), manifest_bytes).expect("manifest rewrite");
 }
 
 /// Rewrite the scene_layout artifact bytes (and repair the manifest).
-fn rewrite_layout(ws: &FinalizedWorkspace, layout: &michelangelo_asset_validation::checks::parsing::LayoutDoc) {
+fn rewrite_layout(
+    ws: &FinalizedWorkspace,
+    layout: &michelangelo_asset_validation::checks::parsing::LayoutDoc,
+) {
     let bytes = serde_json::to_vec_pretty(layout).expect("layout bytes");
     rewrite_artifact_and_manifest(ws, "layout", &bytes);
 }
@@ -83,10 +89,34 @@ fn rewrite_dependency_and_manifest(ws: &FinalizedWorkspace, dep_id: &str, bytes:
         .iter()
         .map(|d| (d.dep_id.clone(), d.revision.to_string(), d.sha256.clone()))
         .collect();
-    manifest.dependency_digest =
-        Some(michelangelo_asset_validation::canonical::dependency_digest(&entries));
+    manifest.dependency_digest = Some(michelangelo_asset_validation::canonical::dependency_digest(
+        &entries,
+    ));
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("manifest");
     std::fs::write(ws.root().join("manifest.json"), manifest_bytes).expect("manifest rewrite");
+}
+
+/// Register a hand-assembled report by writing the report file and the
+/// registry index directly. This bypasses `write_and_register` on purpose:
+/// the independent verification and seam guards must refuse the report too.
+fn force_register(root: &std::path::Path, report: &ValidationReport) -> String {
+    let bytes = report.to_json_bytes().expect("report bytes");
+    let digest = sha256_hex(&bytes);
+    let path = report_file_path(root, &report.report_id);
+    std::fs::create_dir_all(path.parent().expect("report parent")).expect("report dir");
+    std::fs::write(&path, &bytes).expect("report write");
+    let mut registry = load_registry(root).expect("registry");
+    registry.entries.push(RegistryEntry {
+        report_id: report.report_id.clone(),
+        report_path: format!("validation/reports/{}/report.json", report.report_id),
+        sha256: digest.clone(),
+        bundle_sha256: report.bundle_ref.sha256.clone(),
+        profile_sha256: report.profile_ref.profile_sha256.clone(),
+        verdict: report.verdict,
+        created_at: report.created_at.clone(),
+    });
+    write_registry(root, &registry).expect("registry write");
+    digest
 }
 
 fn record_of(report: &ValidationReport, check: CheckId) -> &CheckRecord {
@@ -117,11 +147,19 @@ fn f1_geometry_and_manifest_substitution_is_refused() {
 
     let (tampered, _) = evaluate_fixture(&ws, &profile, "vr-f1b").expect("tampered evaluation");
     let payload = record_of(&tampered, CheckId::PayloadIntegrity);
-    assert_eq!(payload.result, CheckStatus::Pass, "the repaired manifest passes payload");
+    assert_eq!(
+        payload.result,
+        CheckStatus::Pass,
+        "the repaired manifest passes payload"
+    );
     let digest_check = record_of(&tampered, CheckId::AssetDigestFull);
     assert_eq!(digest_check.result, CheckStatus::Fail);
     assert!(
-        digest_check.detail.as_deref().unwrap_or_default().contains("SNAPSHOT_MISMATCH"),
+        digest_check
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("SNAPSHOT_MISMATCH"),
         "detail: {:?}",
         digest_check.detail
     );
@@ -136,17 +174,20 @@ fn f2_input_changed_after_validation_is_detected() {
     let _ = std::fs::remove_dir_all(&temp);
     let (ws, profile) = build_family_workspace(&temp, "cand-house-f2");
 
-    let reservation = Reservation::reserve(&temp, "vr-f2", &ws.manifest_sha256, TIMESTAMP)
-        .expect("reservation");
+    let reservation =
+        Reservation::reserve(&temp, "vr-f2", &ws.manifest_sha256, TIMESTAMP).expect("reservation");
     let (report, _) = evaluate_fixture(&ws, &profile, "vr-f2").expect("evaluation");
-    write_and_register(&temp, &reservation, &report).expect("registration");
+    write_and_register(&temp, &reservation, &report, &profile).expect("registration");
     verify_registered_report(&temp, "vr-f2", Some(&profile)).expect("verify before tamper");
 
     // PNG swap after validation (bytes only; the manifest is untouched).
     std::fs::write(ws.root().join("textures/wall.png"), b"tampered-png-bytes").expect("swap");
 
     let error = verify_registered_report(&temp, "vr-f2", Some(&profile)).expect_err("F2");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::VALIDATION_INPUT_CHANGED);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::VALIDATION_INPUT_CHANGED
+    );
     let message = error.message().to_string();
     assert!(message.contains("textures/wall.png"), "message: {message}");
 }
@@ -164,7 +205,10 @@ fn f9_parent_transform_moves_protected_child() {
     let (ws, profile) = build_family_workspace(&temp, "cand-house-f9");
 
     let (baseline, _) = evaluate_fixture(&ws, &profile, "vr-f9a").expect("baseline");
-    assert_eq!(record_of(&baseline, CheckId::ProtectedRoles).result, CheckStatus::Pass);
+    assert_eq!(
+        record_of(&baseline, CheckId::ProtectedRoles).result,
+        CheckStatus::Pass
+    );
 
     // The attacker changes only the PARENT transform (an allowed role) and
     // repairs the manifest/layout digests. The protected child mesh bytes
@@ -233,7 +277,7 @@ fn seam_refuses_missing_report_replay_and_stale_basis() {
     let reservation = Reservation::reserve(&temp, "vr-seam", &ws.manifest_sha256, TIMESTAMP)
         .expect("reservation");
     let (report, report_digest) = evaluate_fixture(&ws, &profile, "vr-seam").expect("evaluation");
-    write_and_register(&temp, &reservation, &report).expect("registration");
+    write_and_register(&temp, &reservation, &report, &profile).expect("registration");
 
     let record = |bundle_sha: &str, report_sha: &str, profile_sha: &str| AcceptanceRecord {
         schema: michelangelo_asset_validation::acceptance::ACCEPTANCE_SCHEMA.to_string(),
@@ -264,7 +308,11 @@ fn seam_refuses_missing_report_replay_and_stale_basis() {
     let seam = RegistryBackedSeam { root: &temp };
 
     // F14: an acceptance citing an unknown report digest.
-    let ghost = record(&ws.manifest_sha256, &"0".repeat(64), &profile.digest().expect("digest"));
+    let ghost = record(
+        &ws.manifest_sha256,
+        &"0".repeat(64),
+        &profile.digest().expect("digest"),
+    );
     let error = seam.check_prerequisites(&ghost).expect_err("F14");
     assert_eq!(
         error.code(),
@@ -272,36 +320,77 @@ fn seam_refuses_missing_report_replay_and_stale_basis() {
     );
 
     // A correct record passes all prerequisites.
-    let good = record(&ws.manifest_sha256, &report_digest, &profile.digest().expect("digest"));
+    let good = record(
+        &ws.manifest_sha256,
+        &report_digest,
+        &profile.digest().expect("digest"),
+    );
     let facts = seam.check_prerequisites(&good).expect("prerequisites");
-    assert!(facts.report_registered && facts.bundle_binding_matches && facts.profile_binding_matches);
+    assert!(
+        facts.report_registered && facts.bundle_binding_matches && facts.profile_binding_matches
+    );
     assert!(facts.verdict_sufficient);
 
     // Publication is refused: this module is not a publisher.
-    let error = seam.submit_for_publication(&good).expect_err("no publication");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::ACCEPT_SEAM_NOT_AVAILABLE);
+    let error = seam
+        .submit_for_publication(&good)
+        .expect_err("no publication");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::ACCEPT_SEAM_NOT_AVAILABLE
+    );
 
     // F5: the same record id replayed for a different bundle digest.
     let mut index = LocalReplayIndex::load(&temp).expect("replay index");
     index.record(&temp, &good).expect("first binding");
     let foreign_bundle = "1".repeat(64);
-    let replay = record(&foreign_bundle, &report_digest, &profile.digest().expect("digest"));
+    let replay = record(
+        &foreign_bundle,
+        &report_digest,
+        &profile.digest().expect("digest"),
+    );
     let error = index.record(&temp, &replay).expect_err("F5");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::ACCEPTANCE_REPLAY);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::ACCEPTANCE_REPLAY
+    );
 
     // A sibling candidate binding: the report binds ONE bundle digest.
-    let facts = seam.check_prerequisites(&replay).expect("prerequisites computed");
-    assert!(!facts.bundle_binding_matches, "the report must not bind a foreign bundle");
+    let facts = seam
+        .check_prerequisites(&replay)
+        .expect("prerequisites computed");
+    assert!(
+        !facts.bundle_binding_matches,
+        "the report must not bind a foreign bundle"
+    );
 
     // F19: a changed profile (stricter threshold) invalidates the basis.
     let mut profile_v2 = profile.clone();
     profile_v2.revision = 2;
-    profile_v2.thresholds = vec![threshold(CheckId::BudgetGeometry, "max_evaluated_triangles", Comparison::AtMost, 1.0)];
-    let stale = record(&ws.manifest_sha256, &report_digest, &profile_v2.digest().expect("digest v2"));
-    let facts = seam.check_prerequisites(&stale).expect("prerequisites computed");
-    assert!(!facts.profile_binding_matches, "the changed profile must not pass the basis check");
-    let error = verify_registered_report(&temp, "vr-seam", Some(&profile_v2)).expect_err("F19 verify");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::VALIDATION_PROFILE_CHANGED);
+    profile_v2.thresholds = vec![threshold(
+        CheckId::BudgetGeometry,
+        "max_evaluated_triangles",
+        Comparison::AtMost,
+        1.0,
+    )];
+    let stale = record(
+        &ws.manifest_sha256,
+        &report_digest,
+        &profile_v2.digest().expect("digest v2"),
+    );
+    let facts = seam
+        .check_prerequisites(&stale)
+        .expect("prerequisites computed");
+    assert!(
+        !facts.profile_binding_matches,
+        "the changed profile must not pass the basis check"
+    );
+    let error =
+        verify_registered_report(&temp, "vr-seam", Some(&profile_v2)).expect_err("F19 verify");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::VALIDATION_PROFILE_CHANGED
+    );
 
     // An acceptance of an unavailable verdict is refused (unavailable is
     // never a pass).
@@ -309,19 +398,34 @@ fn seam_refuses_missing_report_replay_and_stale_basis() {
     let _ = std::fs::remove_dir_all(&temp2);
     let (ws2, profile2) = build_family_workspace(&temp2, "cand-house-seam2");
     let profile_roundtrip = declare_export_artifact(&ws2, &profile2);
-    let reservation2 = Reservation::reserve(&temp2, "vr-seam2", &ws2.manifest_sha256, TIMESTAMP)
-        .expect("reservation 2");
-    let (report2, digest2) = evaluate_fixture(&ws2, &profile_roundtrip, "vr-seam2").expect("evaluation 2");
+    // declare_export_artifact rewrites the manifest (adds the glb artifact),
+    // so the live bundle digest is the rewritten manifest's digest.
+    let bundle2 = sha256_hex(&std::fs::read(ws2.root().join("manifest.json")).expect("manifest"));
+    let reservation2 =
+        Reservation::reserve(&temp2, "vr-seam2", &bundle2, TIMESTAMP).expect("reservation 2");
+    let (report2, digest2) =
+        evaluate_fixture(&ws2, &profile_roundtrip, "vr-seam2").expect("evaluation 2");
     assert_eq!(report2.verdict, Verdict::Unavailable);
-    write_and_register(&temp2, &reservation2, &report2).expect("registration 2");
+    write_and_register(&temp2, &reservation2, &report2, &profile_roundtrip)
+        .expect("registration 2");
     let seam2 = RegistryBackedSeam { root: &temp2 };
-    let record_unavailable = record(&ws2.manifest_sha256, &digest2, &profile_roundtrip.digest().expect("digest 3"));
-    let facts = seam2.check_prerequisites(&record_unavailable).expect("prerequisites computed");
-    assert!(!facts.verdict_sufficient, "an unavailable verdict must not authorize acceptance");
+    let record_unavailable = record(
+        &bundle2,
+        &digest2,
+        &profile_roundtrip.digest().expect("digest 3"),
+    );
+    let facts = seam2
+        .check_prerequisites(&record_unavailable)
+        .expect("prerequisites computed");
+    assert!(
+        !facts.verdict_sufficient,
+        "an unavailable verdict must not authorize acceptance"
+    );
 }
 
-/// F8 behavioral: a registered report that lacks one required check is
-/// refused by verification against the profile.
+/// F8 behavioral: a report that lacks one required check is refused both at
+/// registration and by verification against the profile (forged registry
+/// entry, bypassing the registration guard).
 #[test]
 fn f8_report_missing_required_check_is_refused() {
     let temp = std::env::temp_dir().join("gav-adv-f8");
@@ -342,7 +446,9 @@ fn f8_report_missing_required_check_is_refused() {
             revision: profile.revision,
             profile_sha256: profile.digest().expect("profile digest"),
         },
-        [(ws.manifest_path.clone(), ws.manifest_sha256.clone())].into_iter().collect(),
+        [(ws.manifest_path.clone(), ws.manifest_sha256.clone())]
+            .into_iter()
+            .collect(),
         vec![CheckRecord {
             check_id: CheckId::PayloadIntegrity,
             result: CheckStatus::Pass,
@@ -351,15 +457,28 @@ fn f8_report_missing_required_check_is_refused() {
             applicability_ref: None,
             evidence: Vec::new(),
         }],
-        [( "test", "0" )].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        [("test", "0")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
     )
     .expect("assemble");
-    let reservation = Reservation::reserve(&temp, "vr-f8", &ws.manifest_sha256, TIMESTAMP)
-        .expect("reservation");
-    write_and_register(&temp, &reservation, &report).expect("registration");
+    let reservation =
+        Reservation::reserve(&temp, "vr-f8", &ws.manifest_sha256, TIMESTAMP).expect("reservation");
+    let error = write_and_register(&temp, &reservation, &report, &profile)
+        .expect_err("F8 registration guard");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::MISSING_REQUIRED_CHECK
+    );
 
+    // The verification guard is independent of registration: forge the entry.
+    force_register(&temp, &report);
     let error = verify_registered_report(&temp, "vr-f8", Some(&profile)).expect_err("F8");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::MISSING_REQUIRED_CHECK);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::MISSING_REQUIRED_CHECK
+    );
 }
 
 /// F16: not_required without an applicability reference is refused; an
@@ -380,9 +499,10 @@ fn f16_not_required_and_unavailable_are_never_pass() {
         revision: profile.revision,
         profile_sha256: profile.digest().expect("profile digest"),
     };
-    let inputs: std::collections::BTreeMap<String, String> = [(ws.manifest_path.clone(), ws.manifest_sha256.clone())]
-        .into_iter()
-        .collect();
+    let inputs: std::collections::BTreeMap<String, String> =
+        [(ws.manifest_path.clone(), ws.manifest_sha256.clone())]
+            .into_iter()
+            .collect();
 
     // not_required without applicability_ref.
     let error = ValidationReport::assemble(
@@ -399,10 +519,16 @@ fn f16_not_required_and_unavailable_are_never_pass() {
             applicability_ref: None,
             evidence: Vec::new(),
         }],
-        [("test", "0")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        [("test", "0")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
     )
     .expect_err("F16 not_required");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::INVALID_NOT_REQUIRED);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
+    );
 
     // A report whose stored verdict contradicts the fold (unavailable ->
     // pass tampering) is refused at parse time.
@@ -461,7 +587,10 @@ fn f16_not_required_and_unavailable_are_never_pass() {
     tampered["verdict"] = serde_json::json!("pass");
     let bytes = serde_json::to_vec_pretty(&tampered).expect("bytes");
     let error = ValidationReport::from_json_bytes(&bytes).expect_err("fold violation");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::INVALID_VERDICT_FOLD);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::INVALID_VERDICT_FOLD
+    );
 
     // not_required is not a verdict value at the type level: parsing a
     // report with verdict "not_required" fails.
@@ -469,7 +598,10 @@ fn f16_not_required_and_unavailable_are_never_pass() {
     bogus["verdict"] = serde_json::json!("not_required");
     let bytes = serde_json::to_vec_pretty(&bogus).expect("bytes");
     let error = ValidationReport::from_json_bytes(&bytes).expect_err("not_required verdict");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::DOCUMENT_INVALID);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::DOCUMENT_INVALID
+    );
 }
 
 /// F13-adjacent: artifact paths leaving the workspace refuse at context
@@ -482,20 +614,25 @@ fn f13_path_escape_is_refused() {
 
     // Patch the manifest with an escaping artifact path.
     let mut manifest = ws.manifest.clone();
-    manifest.artifacts.push(michelangelo_asset_validation::context::ArtifactEntry {
-        artifact_id: "evil".to_string(),
-        path: "../outside.obj".to_string(),
-        sha256: "0".repeat(64),
-        size_bytes: 1,
-        content_kind: "geometry".to_string(),
-        roles: Vec::new(),
-        protected: false,
-    });
+    manifest
+        .artifacts
+        .push(michelangelo_asset_validation::context::ArtifactEntry {
+            artifact_id: "evil".to_string(),
+            path: "../outside.obj".to_string(),
+            sha256: "0".repeat(64),
+            size_bytes: 1,
+            content_kind: "geometry".to_string(),
+            roles: Vec::new(),
+            protected: false,
+        });
     let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest");
     std::fs::write(ws.root().join("manifest.json"), bytes).expect("manifest write");
 
     let error = evaluate_fixture(&ws, &profile, "vr-f13").expect_err("path escape");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::PATH_ESCAPE);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::PATH_ESCAPE
+    );
 }
 
 /// The no-clobber registry: a repeated report (same id, different bytes) is
@@ -509,12 +646,15 @@ fn registry_refuses_overwrite_and_unreserved_registration() {
     let wrong_reservation = Reservation::reserve(&temp, "other-id", &ws.manifest_sha256, TIMESTAMP)
         .expect("reservation");
     let (report, _) = evaluate_fixture(&ws, &profile, "vr-nc").expect("evaluation");
-    let error = write_and_register(&temp, &wrong_reservation, &report).expect_err("F-id");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::RESERVATION_REQUIRED);
+    let error = write_and_register(&temp, &wrong_reservation, &report, &profile).expect_err("F-id");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::RESERVATION_REQUIRED
+    );
 
-    let reservation = Reservation::reserve(&temp, "vr-nc", &ws.manifest_sha256, TIMESTAMP)
-        .expect("reservation");
-    write_and_register(&temp, &reservation, &report).expect("registration");
+    let reservation =
+        Reservation::reserve(&temp, "vr-nc", &ws.manifest_sha256, TIMESTAMP).expect("reservation");
+    write_and_register(&temp, &reservation, &report, &profile).expect("registration");
 
     // Same id, different bytes (a different profile digest).
     let mut profile_v2 = profile.clone();
@@ -522,12 +662,276 @@ fn registry_refuses_overwrite_and_unreserved_registration() {
     let (report_v2, _) = evaluate_fixture(&ws, &profile_v2, "vr-nc").expect("evaluation v2");
     let reservation_v2 = Reservation::reserve(&temp, "vr-nc", &ws.manifest_sha256, TIMESTAMP)
         .expect("reservation v2");
-    let error = write_and_register(&temp, &reservation_v2, &report_v2).expect_err("no-clobber");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::NO_CLOBBER_VIOLATION);
+    let error = write_and_register(&temp, &reservation_v2, &report_v2, &profile_v2)
+        .expect_err("no-clobber");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::NO_CLOBBER_VIOLATION
+    );
     // The registry still holds exactly the original report.
     let registry = load_registry(&temp).expect("registry");
     assert_eq!(registry.entries.len(), 1);
     assert_eq!(registry.entries[0].report_id, "vr-nc");
+}
+
+/// M1: registration requires a LIVE on-disk reservation. An in-memory
+/// `Reservation` value (public fields) and a reservation taken for a different
+/// bundle never authorize a report.
+#[test]
+fn m1_registration_requires_a_live_on_disk_reservation() {
+    let temp = std::env::temp_dir().join("gav-adv-m1");
+    let _ = std::fs::remove_dir_all(&temp);
+    let (ws, profile) = build_family_workspace(&temp, "cand-house-m1");
+    let (report, _) = evaluate_fixture(&ws, &profile, "vr-m1").expect("evaluation");
+
+    // A fabricated in-memory reservation with matching fields.
+    let phantom = Reservation {
+        report_id: "vr-m1".to_string(),
+        bundle_sha256: ws.manifest_sha256.clone(),
+        reserved_at: TIMESTAMP.to_string(),
+    };
+    let error = write_and_register(&temp, &phantom, &report, &profile).expect_err("M1 phantom");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::RESERVATION_REQUIRED
+    );
+
+    // A live reservation for a DIFFERENT bundle does not authorize the report.
+    let wrong = Reservation::reserve(&temp, "vr-m1", &"0".repeat(64), TIMESTAMP)
+        .expect("wrong reservation");
+    let error = write_and_register(&temp, &wrong, &report, &profile).expect_err("M1 bundle");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::RESERVATION_REQUIRED
+    );
+    let registry = load_registry(&temp).expect("registry");
+    assert!(registry.entries.is_empty(), "nothing may be registered");
+}
+
+/// M2: a conditional matrix check listed as optional while the profile
+/// carries its condition token is a profile conflict, so the probe cannot
+/// turn it into `not_required`. Without the token the optional entry is legal.
+#[test]
+fn m2_conditional_check_cannot_be_optional_when_condition_is_present() {
+    let conflict = make_profile(
+        "m2-v0",
+        ProfileKind::FamilyStatic,
+        1,
+        vec![CheckId::PayloadIntegrity],
+        vec![CheckId::MinimumClearance],
+        Vec::new(),
+        vec!["constraints:clearance".to_string()],
+        ProfileReferences::default(),
+    );
+    let error = conflict.validate().expect_err("M2 conditional conflict");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::VALIDATION_APPLICABILITY_CONFLICT
+    );
+
+    // An unconditionally required matrix check cannot be optional either.
+    let required_optional = make_profile(
+        "m2-v1",
+        ProfileKind::FamilyStatic,
+        1,
+        vec![CheckId::PayloadIntegrity],
+        vec![CheckId::ProtectedRoles],
+        Vec::new(),
+        Vec::new(),
+        ProfileReferences::default(),
+    );
+    let error = required_optional
+        .validate()
+        .expect_err("M2 required conflict");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::VALIDATION_APPLICABILITY_CONFLICT
+    );
+
+    // Without the condition token the optional entry is legitimate.
+    let mut relaxed = conflict;
+    relaxed.applies_to.conditions.clear();
+    relaxed.validate().expect("optional without the condition");
+}
+
+/// M3: ghost fields in the report, a check record or the profile are rejected
+/// instead of being silently dropped.
+#[test]
+fn m3_ghost_fields_are_rejected() {
+    let temp = std::env::temp_dir().join("gav-adv-m3");
+    let _ = std::fs::remove_dir_all(&temp);
+    let (ws, profile) = build_family_workspace(&temp, "cand-house-m3");
+    let (report, _) = evaluate_fixture(&ws, &profile, "vr-m3").expect("evaluation");
+
+    let mut value = serde_json::to_value(&report).expect("report value");
+    value["ghost_field"] = serde_json::json!("smuggled");
+    let bytes = serde_json::to_vec_pretty(&value).expect("bytes");
+    let error = ValidationReport::from_json_bytes(&bytes).expect_err("report ghost field");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::DOCUMENT_INVALID
+    );
+
+    let mut value = serde_json::to_value(&report).expect("report value");
+    value["checks"][0]["ghost_field"] = serde_json::json!(true);
+    let bytes = serde_json::to_vec_pretty(&value).expect("bytes");
+    let error = ValidationReport::from_json_bytes(&bytes).expect_err("check ghost field");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::DOCUMENT_INVALID
+    );
+
+    let mut value = serde_json::to_value(&profile).expect("profile value");
+    value["ghost_field"] = serde_json::json!(1);
+    let bytes = serde_json::to_vec_pretty(&value).expect("bytes");
+    let error = michelangelo_asset_validation::profile::ValidationProfile::from_json_bytes(&bytes)
+        .expect_err("profile ghost field");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::DOCUMENT_INVALID
+    );
+}
+
+/// M4: `uv_preservation` with measured vt lines but neither an
+/// `expected_uv_counts` pin nor a `min_uv_count` threshold is `unavailable`,
+/// never a pass by mere presence (it is required for family_rig_compatible).
+#[test]
+fn m4_uv_preservation_without_pin_or_threshold_is_unavailable() {
+    let temp = std::env::temp_dir().join("gav-adv-m4");
+    let _ = std::fs::remove_dir_all(&temp);
+    let (ws, mut profile) = build_family_workspace(&temp, "cand-house-m4");
+    profile
+        .references
+        .reference_digests
+        .remove("expected_uv_counts");
+
+    let (report, _) = evaluate_fixture(&ws, &profile, "vr-m4").expect("evaluation");
+    let uv = record_of(&report, CheckId::UvPreservation);
+    assert_eq!(uv.result, CheckStatus::Unavailable);
+    let detail = uv.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("expected_uv_counts") && detail.contains("min_uv_count"),
+        "detail: {detail}"
+    );
+    assert_eq!(report.verdict, Verdict::Unavailable);
+}
+
+/// H2: a required check recorded as `not_required` is structurally
+/// assembleable, but registration refuses it, and the forged-registration
+/// verification/seam path refuses it too. An accept decision citing such a
+/// report never obtains `verdict_sufficient=true`.
+#[test]
+fn h2_required_check_cannot_be_not_required() {
+    let temp = std::env::temp_dir().join("gav-adv-h2");
+    let _ = std::fs::remove_dir_all(&temp);
+    let (ws, profile) = build_family_workspace(&temp, "cand-house-h2");
+
+    // payload_integrity is REQUIRED for family_static, yet is recorded as
+    // not_required with a plausible applicability_ref. Assembly is structural
+    // only, so it accepts the document; the registration/verify guards are the
+    // load-bearing refusal.
+    let report = ValidationReport::assemble(
+        "vr-h2".to_string(),
+        TIMESTAMP.to_string(),
+        BundleRef {
+            kind: michelangelo_asset_validation::report::BundleKind::CandidateAssetBundle,
+            id: ws.manifest.candidate_id.clone(),
+            sha256: ws.manifest_sha256.clone(),
+        },
+        ProfileRef {
+            profile_id: profile.profile_id.clone(),
+            revision: profile.revision,
+            profile_sha256: profile.digest().expect("profile digest"),
+        },
+        [(ws.manifest_path.clone(), ws.manifest_sha256.clone())]
+            .into_iter()
+            .collect(),
+        vec![CheckRecord {
+            check_id: CheckId::PayloadIntegrity,
+            result: CheckStatus::NotRequired,
+            value: None,
+            detail: Some("mask the required measurement".to_string()),
+            applicability_ref: Some("bundle_scope:looks_optional".to_string()),
+            evidence: Vec::new(),
+        }],
+        [("test", "0")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    )
+    .expect("structurally valid report");
+    assert_eq!(
+        report.verdict,
+        Verdict::Pass,
+        "not_required folds neutrally"
+    );
+
+    // Registration with the pinned profile refuses before writing.
+    let reservation =
+        Reservation::reserve(&temp, "vr-h2", &ws.manifest_sha256, TIMESTAMP).expect("reservation");
+    let error =
+        write_and_register(&temp, &reservation, &report, &profile).expect_err("H2 registration");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
+    );
+
+    // A forged registry entry (bypassing registration) is refused by verify
+    // against the actual profile.
+    let report_digest = force_register(&temp, &report);
+    let error = verify_registered_report(&temp, "vr-h2", Some(&profile)).expect_err("H2 verify");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
+    );
+    // Without a stored basis profile a not_required report is unprovable and
+    // is refused rather than accepted.
+    let error = verify_registered_report(&temp, "vr-h2", None).expect_err("H2 no basis");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
+    );
+    // Even with the pinned profile copy present the guard fires.
+    store_pinned_profile(&temp, &profile).expect("pinned profile");
+    let error = verify_registered_report(&temp, "vr-h2", None).expect_err("H2 basis guard");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
+    );
+
+    // The accept path (the seam calls verify with no external profile) is
+    // blocked before any prerequisite fact is produced.
+    let record = AcceptanceRecord {
+        schema: michelangelo_asset_validation::acceptance::ACCEPTANCE_SCHEMA.to_string(),
+        record_id: "rec-h2".to_string(),
+        created_at: TIMESTAMP.to_string(),
+        decision: "accepted".to_string(),
+        target: michelangelo_asset_validation::acceptance::AcceptanceTarget {
+            kind: "candidate_asset_bundle".to_string(),
+            candidate_id: "cand-house-h2".to_string(),
+            bundle_sha256: ws.manifest_sha256.clone(),
+            asset_id: "asset-house".to_string(),
+            expected_current_revision: None,
+        },
+        basis: michelangelo_asset_validation::acceptance::AcceptanceBasis {
+            validation_report_sha256: report_digest,
+            report_registered: true,
+            profile_sha256: profile.digest().expect("profile digest"),
+            policy_refs: Vec::new(),
+            reason: None,
+        },
+        actor: michelangelo_asset_validation::acceptance::Actor {
+            name: "author".to_string(),
+            role: "owner".to_string(),
+        },
+        scope_note: None,
+    };
+    let seam = RegistryBackedSeam { root: &temp };
+    let error = seam.check_prerequisites(&record).expect_err("H2 seam");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::INVALID_NOT_REQUIRED
+    );
 }
 
 /// Declare a real export output on a finalized workspace and re-pin the

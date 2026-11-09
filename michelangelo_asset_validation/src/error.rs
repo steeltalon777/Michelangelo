@@ -58,10 +58,7 @@ pub const IO_ERROR: &str = "IO_ERROR";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     /// A contract rule is violated; `code` is one of the constants above.
-    Rule {
-        code: &'static str,
-        message: String,
-    },
+    Rule { code: &'static str, message: String },
     /// A file or directory could not be read or written.
     Io {
         path: std::path::PathBuf,
@@ -108,7 +105,11 @@ impl std::fmt::Display for ValidationError {
         match self {
             ValidationError::Rule { code, message } => write!(formatter, "{code}: {message}"),
             ValidationError::Io { path, message } => {
-                write!(formatter, "the path '{}' cannot be used: {message}", path.display())
+                write!(
+                    formatter,
+                    "the path '{}' cannot be used: {message}",
+                    path.display()
+                )
             }
         }
     }

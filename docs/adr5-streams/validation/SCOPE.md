@@ -16,7 +16,7 @@
 |---|---|
 | `michelangelo_asset_validation/` | standalone crate, свой `Cargo.toml` с пустой секцией `[workspace]` (cargo не присоединяет его к корневому workspace и не трогает корневой `Cargo.lock`); собственный `Cargo.lock` в своей директории |
 | `michelangelo_asset_validation/src/` | profile, check (реестр check_id + новая модель результата), checks/* (детерминированные evaluators), report, registry (reservation + no-clobber + verify), acceptance (seam), canonical, ids, error, testing (fixture builders, test-only) |
-| `michelangelo_asset_validation/tests/` | `positive_paths.rs` (9 тестов), `adversarial.rs` (9 негативов) |
+| `michelangelo_asset_validation/tests/` | `positive_paths.rs` (9 тестов), `adversarial.rs` (14 негативов, включая H2/M1/M2/M3/M4) |
 | `michelangelo_asset_validation/examples/dump_validation_report.rs` | локальный smoke-harness |
 | `docs/adr5-streams/validation/` | этот SCOPE, TEST_EVIDENCE.md, INTEGRATION_NOTES.md |
 
@@ -49,9 +49,9 @@ crates, IT-8D edit accept, reconstruction evaluator, текущий IT-8 enum �
 | `not_required` вне IT-8 enum (OP-7) | `CheckStatus::NotRequired` — только в новой модели отчёта, только для optional-проверок и только с `applicability_ref`; `Verdict` не имеет `not_required`; F16-тесты |
 | F2 input changed | `verify_registered_report` перечитывает все `input_digests` → `VALIDATION_INPUT_CHANGED` |
 | F5 replay | запись привязана к одному bundle digest: `PrerequisiteReport.bundle_binding_matches=false` для чужого бандла + `LocalReplayIndex` (test device) отказывает `ACCEPTANCE_REPLAY`; реестр отчётов append-only (повтор с другим digest → `NO_CLOBBER_VIOLATION`) |
-| F8 unknown required | schema: pre-parse JSON профиля отказывает до typed-парсинга; behavioral: отчёт без required-проверки → `MISSING_REQUIRED_CHECK` при verify с текущим профилем |
+| F8 unknown required | schema: pre-parse JSON профиля отказывает до typed-парсинга; behavioral: отчёт без required-проверки → `MISSING_REQUIRED_CHECK` при регистрации и при verify с текущим профилем |
 | F14 acceptance без отчёта | `RegistryBackedSeam::check_prerequisites` → `VALIDATION_REPORT_NOT_REGISTERED` |
-| F16 unavailable→pass | свёртка в `Verdict::fold`, отказ при несовпадении (`INVALID_VERDICT_FOLD`), verdict enum без `not_required`, тест «unavailable вердикт не авторизует acceptance» |
+| F16 unavailable→pass | свёртка в `Verdict::fold`, отказ при несовпадении (`INVALID_VERDICT_FOLD`), verdict enum без `not_required`, тест «unavailable вердикт не авторизует acceptance»; required-проверка с `not_required` блокируется при регистрации, verify и в seam (`INVALID_NOT_REQUIRED`, H2) |
 | F19 stale approval | digest профиля в отчёте против текущего профиля → `VALIDATION_PROFILE_CHANGED`; `profile_binding_matches=false` в seam |
 | F1 tamper / F9 effective protected change / F3 missing dep / F13 path escape | покрыты behavioral-тестами как смежные негативы (см. TEST_EVIDENCE.md) — основная ответственность GLM-2/GLM-4/GLM-5 |
 
@@ -81,11 +81,12 @@ crates, IT-8D edit accept, reconstruction evaluator, текущий IT-8 enum �
 
 ## 6. Статус реализации
 
-- Реализовано и протестировано: profile validation + applicability guard,
-  12 детерминированных проверок на fixture-форматах, assembly/свёртка,
-  reservation/no-clobber реестр, verify (F2/F3/F19), acceptance seam
-  prerequisites (F5/F14/F19), 9 позитивных + 9 adversarial тестов, smoke,
-  кросс-валидация против GLM-1 схем.
+- Реализовано и протестировано: profile validation + applicability guard
+  (включая optional-сторону, M2), 12 детерминированных проверок на
+  fixture-форматах, assembly/свёртка, reservation/no-clobber реестр с
+  live-reservation по диску (M1), verify (F2/F3/F19, H2), acceptance seam
+  prerequisites (F5/F14/F19, H2), 9 позитивных + 14 adversarial тестов,
+  smoke, кросс-валидация против GLM-1 схем.
 - Не входит в этот PoC: реальный Blender worker, SQLite, CLI, миграции,
   canonical publisher (seam только), UE-проверки, style-review автоматизация
   (запрещена ADR §4.1).

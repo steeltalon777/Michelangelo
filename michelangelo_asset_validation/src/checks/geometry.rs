@@ -5,10 +5,8 @@
 use std::collections::BTreeMap;
 
 use crate::check::{CheckId, CheckRecord, CheckStatus, DocRef};
-use crate::checks::parsing::{
-    parse_layout, parse_obj, world_transforms, BBox, Transform,
-};
-use crate::checks::integrity::{resolve_pinned, PinnedRef, reference_keys};
+use crate::checks::integrity::{reference_keys, resolve_pinned, PinnedRef};
+use crate::checks::parsing::{parse_layout, parse_obj, world_transforms, BBox, Transform};
 use crate::context::ValidationContext;
 use crate::error::ValidationError;
 use crate::profile::ValidationProfile;
@@ -198,7 +196,8 @@ pub fn check_protected_roles(
             .and_then(|list| list.as_array())
             .and_then(|list| {
                 list.iter().find(|entry| {
-                    entry.get("component_id").and_then(|v| v.as_str()) == Some(&component.component_id)
+                    entry.get("component_id").and_then(|v| v.as_str())
+                        == Some(&component.component_id)
                 })
             });
         let Some(entry) = entry else {
@@ -212,7 +211,10 @@ pub fn check_protected_roles(
         checked += 1;
 
         // Mesh bytes: the protected artifact must hash to the pinned value.
-        let pinned_sha = entry.get("artifact_sha256").and_then(|v| v.as_str()).unwrap_or_default();
+        let pinned_sha = entry
+            .get("artifact_sha256")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         if let Some(artifact) = artifact_by_id.get(component.artifact.as_str()) {
             let inputs = context.input_digests();
             match inputs.get(&artifact.path) {
@@ -311,28 +313,28 @@ pub fn check_connector_compatibility(
     context: &mut ValidationContext,
     profile: &ValidationProfile,
 ) -> Result<CheckRecord, ValidationError> {
-    let connector_profile = match resolve_pinned(context, profile, reference_keys::CONNECTOR_PROFILE)? {
-        PinnedRef::Present(value, _) => value,
-        PinnedRef::Changed(message) => {
-            return Ok(record(
-                CheckId::ConnectorCompatibility,
-                CheckStatus::Fail,
-                None,
-                format!("CONNECTOR_PROFILE_CHANGED: {message}"),
-                Vec::new(),
-            ));
-        }
-        PinnedRef::Missing => {
-            return Ok(record(
-                CheckId::ConnectorCompatibility,
-                CheckStatus::Unavailable,
-                None,
-                "the profile does not pin the connector_profile reference"
-                    .to_string(),
-                Vec::new(),
-            ));
-        }
-    };
+    let connector_profile =
+        match resolve_pinned(context, profile, reference_keys::CONNECTOR_PROFILE)? {
+            PinnedRef::Present(value, _) => value,
+            PinnedRef::Changed(message) => {
+                return Ok(record(
+                    CheckId::ConnectorCompatibility,
+                    CheckStatus::Fail,
+                    None,
+                    format!("CONNECTOR_PROFILE_CHANGED: {message}"),
+                    Vec::new(),
+                ));
+            }
+            PinnedRef::Missing => {
+                return Ok(record(
+                    CheckId::ConnectorCompatibility,
+                    CheckStatus::Unavailable,
+                    None,
+                    "the profile does not pin the connector_profile reference".to_string(),
+                    Vec::new(),
+                ));
+            }
+        };
     let parsed: crate::checks::parsing::ConnectorProfile =
         match serde_json::from_value(connector_profile) {
             Ok(value) => value,
@@ -397,7 +399,10 @@ pub fn check_connector_compatibility(
                         CheckId::ConnectorCompatibility,
                         CheckStatus::Unavailable,
                         None,
-                        format!("the scene_layout is unusable for socket positions: {}", err.message()),
+                        format!(
+                            "the scene_layout is unusable for socket positions: {}",
+                            err.message()
+                        ),
                         Vec::new(),
                     ));
                 }
@@ -494,7 +499,10 @@ pub fn check_connector_compatibility(
             CheckId::ConnectorCompatibility,
             CheckStatus::Pass,
             Some(parsed.pairs.len() as f64),
-            format!("{} pinned connector pairs fit within tolerance", parsed.pairs.len()),
+            format!(
+                "{} pinned connector pairs fit within tolerance",
+                parsed.pairs.len()
+            ),
             Vec::new(),
         ))
     } else {
@@ -578,7 +586,12 @@ pub fn check_maximum_dimension(
         }
         let bytes = context.read_bytes(&artifact.path)?;
         let data = parse_obj(&bytes)?;
-        if let Some(bbox) = BBox::of_transformed(world.get(&component.component_id).unwrap_or(&crate::checks::parsing::IDENTITY), &data.vertices) {
+        if let Some(bbox) = BBox::of_transformed(
+            world
+                .get(&component.component_id)
+                .unwrap_or(&crate::checks::parsing::IDENTITY),
+            &data.vertices,
+        ) {
             for axis in 0..3 {
                 min[axis] = min[axis].min(bbox.min[axis]);
                 max[axis] = max[axis].max(bbox.max[axis]);
@@ -676,8 +689,7 @@ pub fn check_minimum_clearance(
                 CheckId::MinimumClearance,
                 CheckStatus::Unavailable,
                 None,
-                "the bundle has no scene_layout artifact; clearance cannot be measured"
-                    .to_string(),
+                "the bundle has no scene_layout artifact; clearance cannot be measured".to_string(),
                 Vec::new(),
             ));
         }
@@ -727,9 +739,12 @@ pub fn check_minimum_clearance(
         }
         let bytes = context.read_bytes(&artifact.path)?;
         let data = parse_obj(&bytes)?;
-        if let Some(bbox) =
-            BBox::of_transformed(world.get(&component.component_id).unwrap_or(&crate::checks::parsing::IDENTITY), &data.vertices)
-        {
+        if let Some(bbox) = BBox::of_transformed(
+            world
+                .get(&component.component_id)
+                .unwrap_or(&crate::checks::parsing::IDENTITY),
+            &data.vertices,
+        ) {
             bboxes.insert(component.component_id.clone(), bbox);
         } else {
             unmeasured.push(component.component_id.clone());

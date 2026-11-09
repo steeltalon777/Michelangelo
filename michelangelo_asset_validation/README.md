@@ -5,8 +5,9 @@ Standalone validation layer PoC for ADR 0005 §§5.3/8/11 on the IT-8D base
 table in `Cargo.toml`); build from this directory:
 
 ```bash
-cargo test --offline          # 9 positive + 9 adversarial tests
-cargo clippy --offline        # clean
+cargo test --offline          # 9 positive + 14 adversarial tests
+cargo clippy --offline --all-targets -- -D warnings   # clean
+cargo fmt --check             # clean
 cargo run --offline --example dump_validation_report   # local smoke
 ```
 

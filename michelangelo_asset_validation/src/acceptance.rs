@@ -20,8 +20,8 @@ use crate::canonical::{digest_document, sha256_hex, to_pretty_json};
 use crate::error::ValidationError;
 use crate::ids::{validate_id, validate_rfc3339, validate_sha256};
 use crate::profile::ValidationProfile;
-use crate::report::ValidationReport;
 use crate::registry::{load_registry, registry_path, verify_registered_report};
+use crate::report::ValidationReport;
 
 /// The draft acceptance-record schema tag (provisional mirror).
 pub const ACCEPTANCE_SCHEMA: &str = "michelangelo.acceptance-record/draft-0.1";
@@ -118,13 +118,19 @@ impl AcceptanceRecord {
         if self.target.kind != "candidate_asset_bundle" {
             return Err(ValidationError::rule(
                 crate::error::DOCUMENT_INVALID,
-                format!("the target kind '{}' is not candidate_asset_bundle", self.target.kind),
+                format!(
+                    "the target kind '{}' is not candidate_asset_bundle",
+                    self.target.kind
+                ),
             ));
         }
         validate_id(&self.target.candidate_id, "candidate_id")?;
         validate_id(&self.target.asset_id, "asset_id")?;
         validate_sha256(&self.target.bundle_sha256, "bundle_sha256")?;
-        validate_sha256(&self.basis.validation_report_sha256, "validation_report_sha256")?;
+        validate_sha256(
+            &self.basis.validation_report_sha256,
+            "validation_report_sha256",
+        )?;
         validate_sha256(&self.basis.profile_sha256, "profile_sha256")?;
         if !self.basis.report_registered {
             return Err(ValidationError::rule(
@@ -207,8 +213,16 @@ impl CanonicalAcceptSeam for RegistryBackedSeam<'_> {
     ) -> Result<PrerequisiteReport, ValidationError> {
         record.validate()?;
         // F14: the cited report must be registered; verify recomputes the
-        // bytes digest and re-reads the inputs (F2 inside the seam).
-        let outcome = verify_registered_report(self.root, &locate_report(self.root, &record.basis.validation_report_sha256)?, None)?;
+        // bytes digest and re-reads the inputs (F2 inside the seam). With no
+        // external profile, verify re-applies the required-check guard from
+        // the pinned profile copy stored at registration (H2): a required
+        // check recorded as not_required refuses here, before any acceptance
+        // fact is produced.
+        let outcome = verify_registered_report(
+            self.root,
+            &locate_report(self.root, &record.basis.validation_report_sha256)?,
+            None,
+        )?;
         if outcome.report_sha256 != record.basis.validation_report_sha256 {
             return Err(ValidationError::rule(
                 crate::error::VALIDATION_REPORT_NOT_REGISTERED,
@@ -225,7 +239,8 @@ impl CanonicalAcceptSeam for RegistryBackedSeam<'_> {
         let profile_binding_matches = outcome.profile_sha256 == record.basis.profile_sha256;
         // An accepted decision requires a pass verdict (unavailable is not a
         // pass and never converts into one).
-        let verdict_sufficient = record.decision == "rejected" || outcome.verdict == crate::check::Verdict::Pass;
+        let verdict_sufficient =
+            record.decision == "rejected" || outcome.verdict == crate::check::Verdict::Pass;
         Ok(PrerequisiteReport {
             report_registered: true,
             bundle_binding_matches,
@@ -281,8 +296,9 @@ impl LocalReplayIndex {
                 bindings: BTreeMap::new(),
             });
         }
-        let bytes = std::fs::read(&path)
-            .map_err(|err| ValidationError::io(&path, format!("the replay index cannot be read: {err}")))?;
+        let bytes = std::fs::read(&path).map_err(|err| {
+            ValidationError::io(&path, format!("the replay index cannot be read: {err}"))
+        })?;
         let index: LocalReplayIndex = serde_json::from_slice(&bytes).map_err(|err| {
             ValidationError::rule(
                 crate::error::DOCUMENT_INVALID,
@@ -312,8 +328,10 @@ impl LocalReplayIndex {
             }
             return Ok(());
         }
-        self.bindings
-            .insert(record.record_id.clone(), record.target.bundle_sha256.clone());
+        self.bindings.insert(
+            record.record_id.clone(),
+            record.target.bundle_sha256.clone(),
+        );
         let path = registry_path(root)
             .parent()
             .map(|parent| parent.join("acceptance-index.json"))
@@ -322,12 +340,14 @@ impl LocalReplayIndex {
             .parent()
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| root.to_path_buf());
-        std::fs::create_dir_all(&parent)
-            .map_err(|err| ValidationError::io(&parent, format!("the directory cannot be created: {err}")))?;
+        std::fs::create_dir_all(&parent).map_err(|err| {
+            ValidationError::io(&parent, format!("the directory cannot be created: {err}"))
+        })?;
         let bytes = to_pretty_json(self)?;
         let temporary = parent.join("acceptance-index.json.tmp");
-        std::fs::write(&temporary, &bytes)
-            .map_err(|err| ValidationError::io(&temporary, format!("the index cannot be written: {err}")))?;
+        std::fs::write(&temporary, &bytes).map_err(|err| {
+            ValidationError::io(&temporary, format!("the index cannot be written: {err}"))
+        })?;
         std::fs::rename(&temporary, &path).map_err(|err| {
             let _ = std::fs::remove_file(&temporary);
             ValidationError::io(&path, format!("the index cannot be published: {err}"))

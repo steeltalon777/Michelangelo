@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::canonical::{parse_json, to_pretty_json};
 use crate::check::{CheckRecord, Verdict};
 use crate::error::ValidationError;
-use crate::ids::{validate_id, validate_rfc3339, validate_rel_path, validate_sha256};
+use crate::ids::{validate_id, validate_rel_path, validate_rfc3339, validate_sha256};
 
 /// The draft schema tag mirrored from the GLM-1 contract gate.
 pub const REPORT_SCHEMA: &str = "michelangelo.validation-report/draft-0.1";
@@ -30,6 +30,7 @@ pub enum BundleKind {
 
 /// The reference to the measured document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BundleRef {
     pub kind: BundleKind,
     pub id: String,
@@ -38,14 +39,17 @@ pub struct BundleRef {
 
 /// The reference to the pinned profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileRef {
     pub profile_id: String,
     pub revision: u32,
     pub profile_sha256: String,
 }
 
-/// The immutable validation report.
+/// The immutable validation report. Unknown fields are rejected: a ghost
+/// field (e.g. a smuggled decision flag) is never silently dropped.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidationReport {
     pub schema: String,
     pub report_id: String,
@@ -98,20 +102,18 @@ impl ValidationReport {
                 ));
             }
             match record.result {
-                crate::check::CheckStatus::NotRequired => {
-                    match &record.applicability_ref {
-                        Some(reference) if !reference.trim().is_empty() => {}
-                        _ => {
-                            return Err(ValidationError::rule(
-                                crate::error::INVALID_NOT_REQUIRED,
-                                format!(
-                                    "the check '{}' is not_required without an applicability_ref",
-                                    record.check_id.as_str()
-                                ),
-                            ));
-                        }
+                crate::check::CheckStatus::NotRequired => match &record.applicability_ref {
+                    Some(reference) if !reference.trim().is_empty() => {}
+                    _ => {
+                        return Err(ValidationError::rule(
+                            crate::error::INVALID_NOT_REQUIRED,
+                            format!(
+                                "the check '{}' is not_required without an applicability_ref",
+                                record.check_id.as_str()
+                            ),
+                        ));
                     }
-                }
+                },
                 crate::check::CheckStatus::Pass
                 | crate::check::CheckStatus::Fail
                 | crate::check::CheckStatus::Unavailable => {
@@ -169,8 +171,8 @@ impl ValidationReport {
 
     /// Parse and structurally re-verify a report from bytes.
     pub fn from_json_bytes(bytes: &[u8]) -> Result<ValidationReport, ValidationError> {
-        // Deny unknown fields via a strict round-trip: parse into Value first
-        // to control the schema tag, then into the typed struct.
+        // Parse into Value first to control the schema tag, then into the
+        // typed DTO whose `deny_unknown_fields` rejects ghost fields.
         let value = parse_json(bytes, "the validation report")?;
         let report: ValidationReport = serde_json::from_value(value).map_err(|err| {
             ValidationError::rule(

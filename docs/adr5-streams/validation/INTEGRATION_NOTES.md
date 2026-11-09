@@ -46,13 +46,20 @@ D1.2/D1.3-аналогов IT-8D.
    `uv_preserved`, `export:glb`, `clips_pinned`, `materials_preserved`,
    `textures_preserved`). Предложение: стандартизировать словарь condition-
    токенов в схеме профиля, чтобы applicability был машинно проверяемым.
-5. **not_required только для optional.** В моей реализации required-проверка
-   не может получить `not_required` (только pass/fail/unavailable). Это
-   stricter, чем текст CONTRACT_GATE §5 — предложение зафиксировать как
-   правило (F16-безопасно).
-6. **Registration-time structural guard.** Регистрация отказывает отчётам,
-   нарушающим свёртку/not_required-инварианты до записи на диск — предлагаю
-   включить в контракт реестра (сейчас это поведенческая гарантия потоков).
+5. **not_required только для optional.** Теперь это не только поведение
+   evaluator: регистрация (`write_and_register`) и verify
+   (`verify_registered_report`) требуют result ∈ {pass, fail, unavailable}
+   для каждой required-проверки профиля (`INVALID_NOT_REQUIRED`); проверка
+   без pinned-копии профиля, но с `not_required`-записями, отказывается как
+   недоказуемая. Профиль, где matrix-required проверка объявлена optional,
+   отвергается applicability-guard (M2). Это stricter, чем текст
+   CONTRACT_GATE §5 — предложение зафиксировать как правило (F16-безопасно).
+6. **Registration-time structural guard.** Регистрация требует live-
+   reservation на диске (M1; in-memory значение не доказательство) и
+   совпадения переданного профиля с пинованным basis отчёта; pinned-профиль
+   сохраняется digest-named копией (`validation/profiles/<sha>.json`), чтобы
+   verify/seam могли повторно применить required-guard. Предлагаю включить
+   в контракт реестра.
 7. **Реестр per-workspace.** Реестр отчётов лежит внутри validation workspace
    (`validation/reports/index.json`); input digests относительны корню
    workspace. Для batch из 30 items каждый item — свой workspace/registry

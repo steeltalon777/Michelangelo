@@ -19,8 +19,10 @@ fn passthrough_profile(ws: &FinalizedWorkspace) -> ValidationProfile {
         "textures/wall.png": ws.manifest.dependencies[1].sha256,
     });
     let expected = serde_json::json!({"asset_digest": ws.asset_digest});
+    let uv_counts = serde_json::json!({"counts": [{"path": "artifacts/body.obj", "vt": 4}]});
     let source_pin = write_reference(ws.root(), "source_payload_digests", &source_digests);
     let digest_pin = write_reference(ws.root(), "expected_asset_digest", &expected);
+    let uv_pin = write_reference(ws.root(), "expected_uv_counts", &uv_counts);
     let profile = make_profile(
         "passthrough-v0",
         ProfileKind::PassthroughPreservation,
@@ -45,7 +47,8 @@ fn passthrough_profile(ws: &FinalizedWorkspace) -> ValidationProfile {
         ProfileReferences::default(),
     );
     let profile = with_reference(profile, "source_payload_digests", &source_pin);
-    with_reference(profile, "expected_asset_digest", &digest_pin)
+    let profile = with_reference(profile, "expected_asset_digest", &digest_pin);
+    with_reference(profile, "expected_uv_counts", &uv_pin)
 }
 
 fn build_passthrough_workspace(root: &std::path::Path) -> FinalizedWorkspace {
@@ -70,7 +73,12 @@ fn passthrough_profile_a_passes_honestly() {
     let profile = passthrough_profile(&ws);
 
     let (report, digest) = evaluate_fixture(&ws, &profile, "vr-0001").expect("evaluation");
-    assert_eq!(report.verdict, Verdict::Pass, "verdict: {:?}", report.verdict);
+    assert_eq!(
+        report.verdict,
+        Verdict::Pass,
+        "verdict: {:?}",
+        report.verdict
+    );
     for check in [
         CheckId::PayloadIntegrity,
         CheckId::DependencyClosure,
@@ -86,7 +94,13 @@ fn passthrough_profile_a_passes_honestly() {
             .iter()
             .find(|record| record.check_id == check)
             .unwrap_or_else(|| panic!("missing record for {}", check.as_str()));
-        assert_eq!(record.result, CheckStatus::Pass, "{}: {:?}", check.as_str(), record.detail);
+        assert_eq!(
+            record.result,
+            CheckStatus::Pass,
+            "{}: {:?}",
+            check.as_str(),
+            record.detail
+        );
     }
     // The optional protected_roles probe: no scene_layout in this bundle.
     let protected = report
@@ -139,7 +153,14 @@ fn passthrough_with_declared_export_is_unavailable_without_backend() {
     ws.add_obj("body", "artifacts/body.obj", &obj, &["source"], false);
     // The declared export artifact whose roundtrip cannot be verified.
     let glb: Vec<u8> = vec![b'g', b'l', b'T', b'F', 1, 2, 3];
-    ws.add_artifact("exchange", "exports/model.glb", "other", &glb, &["exchange"], false);
+    ws.add_artifact(
+        "exchange",
+        "exports/model.glb",
+        "other",
+        &glb,
+        &["exchange"],
+        false,
+    );
     ws.declare_conversion("obj", "blend");
     ws.declare_loss("pbr_materials", "OBJ/MTL carries diffuse+spec only");
     ws.declare_outputs(true, true);
@@ -188,7 +209,11 @@ fn passthrough_with_declared_export_is_unavailable_without_backend() {
         .find(|record| record.check_id == CheckId::ExportRoundtrip)
         .expect("roundtrip record");
     assert_eq!(roundtrip.result, CheckStatus::Unavailable);
-    assert!(roundtrip.detail.as_deref().unwrap_or_default().contains("BLOCKED"));
+    assert!(roundtrip
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .contains("BLOCKED"));
     // An unavailable mandatory check folds to an unavailable verdict —
     // never to a pass.
     assert_eq!(report.verdict, Verdict::Unavailable);
@@ -200,7 +225,12 @@ fn family_static_profile_b_passes() {
     let _ = std::fs::remove_dir_all(&temp);
     let (ws, profile) = build_family_workspace(&temp, "cand-house-v1");
     let (report, _) = evaluate_fixture(&ws, &profile, "vr-0003").expect("evaluation");
-    assert_eq!(report.verdict, Verdict::Pass, "checks: {:#?}", report.checks);
+    assert_eq!(
+        report.verdict,
+        Verdict::Pass,
+        "checks: {:#?}",
+        report.checks
+    );
     for check in [
         CheckId::PayloadIntegrity,
         CheckId::DependencyClosure,
@@ -220,7 +250,13 @@ fn family_static_profile_b_passes() {
             .iter()
             .find(|record| record.check_id == check)
             .unwrap_or_else(|| panic!("missing record for {}", check.as_str()));
-        assert_eq!(record.result, CheckStatus::Pass, "{}: {:?}", check.as_str(), record.detail);
+        assert_eq!(
+            record.result,
+            CheckStatus::Pass,
+            "{}: {:?}",
+            check.as_str(),
+            record.detail
+        );
     }
     // Optional format_loss_declared with no conversions: not_required with
     // an applicability reference (F16-compliant).
@@ -230,7 +266,11 @@ fn family_static_profile_b_passes() {
         .find(|record| record.check_id == CheckId::FormatLossDeclared)
         .expect("format loss record");
     assert_eq!(loss.result, CheckStatus::NotRequired);
-    assert!(loss.applicability_ref.as_deref().unwrap_or_default().starts_with("bundle_scope:"));
+    assert!(loss
+        .applicability_ref
+        .as_deref()
+        .unwrap_or_default()
+        .starts_with("bundle_scope:"));
 }
 
 #[test]
@@ -243,7 +283,11 @@ fn family_rig_compatible_marks_clips_unavailable_without_backend() {
     let bones = vec![bone("root", None)];
     let skeleton = serde_json::json!({"skeleton_id": "base-skeleton", "bones": bones});
     let skeleton_pin = write_reference(ws.root(), "skeleton_profile", &skeleton);
-    let rig = rig_doc("base-skeleton", vec![bone("root", None)], vec![binding("body", "root")]);
+    let rig = rig_doc(
+        "base-skeleton",
+        vec![bone("root", None)],
+        vec![binding("body", "root")],
+    );
     ws.set_rig("rig", &rig, "metadata/rig.json");
     let clip_bytes: &[u8] = b"clip-walk-bytes";
     let clip_sha = ws.add_dependency("clip-walk", "clips/walk.clip", clip_bytes, 1);
@@ -285,7 +329,12 @@ fn family_rig_compatible_marks_clips_unavailable_without_backend() {
         .iter()
         .find(|record| record.check_id == CheckId::RigBindings)
         .expect("rig record");
-    assert_eq!(rig_record.result, CheckStatus::Pass, "{:?}", rig_record.detail);
+    assert_eq!(
+        rig_record.result,
+        CheckStatus::Pass,
+        "{:?}",
+        rig_record.detail
+    );
     let clips = report
         .checks
         .iter()
@@ -294,7 +343,11 @@ fn family_rig_compatible_marks_clips_unavailable_without_backend() {
     // Digest-verified clips still do not pass without playback: honest
     // unavailable (ADR §4.2/§8.1).
     assert_eq!(clips.result, CheckStatus::Unavailable);
-    assert!(clips.detail.as_deref().unwrap_or_default().contains("playback"));
+    assert!(clips
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .contains("playback"));
     assert_eq!(report.verdict, Verdict::Unavailable);
 }
 
@@ -314,7 +367,10 @@ fn reconstruction_kind_is_refused_not_reimplemented() {
         ProfileReferences::default(),
     );
     let error = evaluate_fixture(&ws, &profile, "vr-0005").expect_err("must refuse");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::UNSUPPORTED_PROFILE_KIND);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::UNSUPPORTED_PROFILE_KIND
+    );
 }
 
 #[test]
@@ -329,8 +385,9 @@ fn unknown_required_check_refuses_with_gate_code() {
         "required_checks": ["payload_integrity", "ghost_check"],
         "evaluator_versions": {"test": "0"}
     }"#;
-    let error = michelangelo_asset_validation::profile::ValidationProfile::from_json_bytes(json.as_bytes())
-        .expect_err("unknown check must refuse");
+    let error =
+        michelangelo_asset_validation::profile::ValidationProfile::from_json_bytes(json.as_bytes())
+            .expect_err("unknown check must refuse");
     assert_eq!(
         error.code(),
         michelangelo_asset_validation::error::VALIDATION_UNKNOWN_REQUIRED
@@ -348,7 +405,7 @@ fn registry_lifecycle_reserve_register_verify() {
     let reservation = Reservation::reserve(&temp, "vr-0007", &ws.manifest_sha256, TIMESTAMP)
         .expect("reservation");
     let (report, digest) = evaluate_fixture(&ws, &profile, "vr-0007").expect("evaluation");
-    let entry = write_and_register(&temp, &reservation, &report).expect("registration");
+    let entry = write_and_register(&temp, &reservation, &report, &profile).expect("registration");
     assert_eq!(entry.sha256, digest);
     assert_eq!(entry.bundle_sha256, ws.manifest_sha256);
 
@@ -358,15 +415,20 @@ fn registry_lifecycle_reserve_register_verify() {
     assert_eq!(outcome.verdict, Verdict::Pass);
 
     // A second reservation of the same id while a live one exists conflicts.
-    let _ = Reservation::reserve(&temp, "vr-0008", &ws.manifest_sha256, TIMESTAMP).expect("reserve 2");
+    let _ =
+        Reservation::reserve(&temp, "vr-0008", &ws.manifest_sha256, TIMESTAMP).expect("reserve 2");
     let conflict = Reservation::reserve(&temp, "vr-0008", &ws.manifest_sha256, TIMESTAMP)
         .expect_err("reservation conflict");
-    assert_eq!(conflict.code(), michelangelo_asset_validation::error::RESERVATION_CONFLICT);
+    assert_eq!(
+        conflict.code(),
+        michelangelo_asset_validation::error::RESERVATION_CONFLICT
+    );
 
     // Idempotent re-registration of the same bytes is a no-op.
     let reservation_again = Reservation::reserve(&temp, "vr-0007", &ws.manifest_sha256, TIMESTAMP)
         .expect("reserve again");
-    let entry_again = write_and_register(&temp, &reservation_again, &report).expect("re-register");
+    let entry_again =
+        write_and_register(&temp, &reservation_again, &report, &profile).expect("re-register");
     assert_eq!(entry_again.sha256, entry.sha256);
     let registry = load_registry(&temp).expect("registry");
     assert_eq!(registry.entries.len(), 1, "the registry is append-only");
@@ -378,9 +440,17 @@ fn registry_lifecycle_reserve_register_verify() {
         profile
     };
     let (report_v2, _) = evaluate_fixture(&ws, &profile_v2, "vr-0007").expect("evaluation v2");
-    let error = write_and_register(&temp, &reservation_again_2(&temp, &ws), &report_v2)
-        .expect_err("no-clobber");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::NO_CLOBBER_VIOLATION);
+    let error = write_and_register(
+        &temp,
+        &reservation_again_2(&temp, &ws),
+        &report_v2,
+        &profile_v2,
+    )
+    .expect_err("no-clobber");
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::NO_CLOBBER_VIOLATION
+    );
 }
 
 fn reservation_again_2(temp: &std::path::Path, ws: &FinalizedWorkspace) -> Reservation {
@@ -395,7 +465,7 @@ fn changed_profile_invalidates_the_report_basis() {
     let reservation = Reservation::reserve(&temp, "vr-0009", &ws.manifest_sha256, TIMESTAMP)
         .expect("reservation");
     let (report, _) = evaluate_fixture(&ws, &profile_v1, "vr-0009").expect("evaluation");
-    write_and_register(&temp, &reservation, &report).expect("registration");
+    write_and_register(&temp, &reservation, &report, &profile_v1).expect("registration");
 
     // Same id, stricter threshold: a different digest (a real revision).
     let mut profile_v2 = profile_v1.clone();
@@ -422,7 +492,9 @@ fn changed_profile_invalidates_the_report_basis() {
     verify_registered_report(&temp, "vr-0009", None).expect("self-verify");
 }
 
-use michelangelo_asset_validation::testing::{binding, bone, build_family_workspace, rig_doc, threshold};
+use michelangelo_asset_validation::testing::{
+    binding, bone, build_family_workspace, rig_doc, threshold,
+};
 
 #[test]
 fn report_rejects_an_imported_approval_flag() {
@@ -442,5 +514,8 @@ fn report_rejects_an_imported_approval_flag() {
         json.as_bytes(),
     )
     .expect_err("an 'approved' field must never parse");
-    assert_eq!(error.code(), michelangelo_asset_validation::error::DOCUMENT_INVALID);
+    assert_eq!(
+        error.code(),
+        michelangelo_asset_validation::error::DOCUMENT_INVALID
+    );
 }

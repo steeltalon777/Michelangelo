@@ -150,11 +150,11 @@ pub fn mul(left: &Transform, right: &Transform) -> Transform {
 /// Apply a transform to a point (translation included).
 pub fn apply(transform: &Transform, point: [f64; 3]) -> [f64; 3] {
     [
-        transform[0] * point[0] + transform[1] * point[1] + transform[2] * point[2]
-            + transform[3],
-        transform[4] * point[0] + transform[5] * point[1] + transform[6] * point[2]
-            + transform[7],
-        transform[8] * point[0] + transform[9] * point[1] + transform[10] * point[2]
+        transform[0] * point[0] + transform[1] * point[1] + transform[2] * point[2] + transform[3],
+        transform[4] * point[0] + transform[5] * point[1] + transform[6] * point[2] + transform[7],
+        transform[8] * point[0]
+            + transform[9] * point[1]
+            + transform[10] * point[2]
             + transform[11],
     ]
 }
@@ -279,7 +279,9 @@ pub fn parse_layout(bytes: &[u8]) -> Result<LayoutDoc, ValidationError> {
 /// Compute the world transform of each component (parent chain composed,
 /// cycle-checked). A layout with a parent cycle or unknown parent is an
 /// invalid document.
-pub fn world_transforms(layout: &LayoutDoc) -> Result<std::collections::BTreeMap<String, Transform>, ValidationError> {
+pub fn world_transforms(
+    layout: &LayoutDoc,
+) -> Result<std::collections::BTreeMap<String, Transform>, ValidationError> {
     use std::collections::BTreeMap;
     let by_id: BTreeMap<&str, &LayoutComponent> = layout
         .components
@@ -292,7 +294,10 @@ pub fn world_transforms(layout: &LayoutDoc) -> Result<std::collections::BTreeMap
         let mut current = Some(component);
         let mut guard = 0_usize;
         while let Some(link) = current {
-            if chain.iter().any(|seen| seen.component_id == link.component_id) {
+            if chain
+                .iter()
+                .any(|seen| seen.component_id == link.component_id)
+            {
                 return Err(ValidationError::rule(
                     crate::error::DOCUMENT_INVALID,
                     format!(

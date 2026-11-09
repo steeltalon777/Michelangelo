@@ -52,14 +52,22 @@ pub use acceptance::{
     PrerequisiteReport, RegistryBackedSeam,
 };
 pub use check::{CheckId, CheckRecord, CheckStatus, DocRef, Verdict};
-pub use context::{ArtifactEntry, BundleManifest, ConversionDecl, DependencyEntry, LossDecl, OutputDecls, ValidationContext};
-pub use error::{ValidationError, ACCEPTANCE_REPLAY, VALIDATION_INPUT_CHANGED, VALIDATION_UNKNOWN_REQUIRED, NO_CLOBBER_VIOLATION};
+pub use context::{
+    ArtifactEntry, BundleManifest, ConversionDecl, DependencyEntry, LossDecl, OutputDecls,
+    ValidationContext,
+};
+pub use error::{
+    ValidationError, ACCEPTANCE_REPLAY, NO_CLOBBER_VIOLATION, VALIDATION_INPUT_CHANGED,
+    VALIDATION_UNKNOWN_REQUIRED,
+};
 pub use evaluate::{evaluate, EvaluationRequest};
 pub use profile::{
-    AppliesTo, Comparison, ProfileKind, ProfileReferences, TargetKind, Threshold, ValidationProfile, PROFILE_SCHEMA,
+    AppliesTo, Comparison, ProfileKind, ProfileReferences, TargetKind, Threshold,
+    ValidationProfile, PROFILE_SCHEMA,
 };
 pub use registry::{
-    load_registry, registry_path, verify_registered_report, write_and_register,
-    RegistryEntry, ReportRegistry, Reservation, VerifyOutcome, REGISTRY_SCHEMA,
+    load_pinned_profile, load_registry, pinned_profile_path, registry_path, store_pinned_profile,
+    verify_registered_report, write_and_register, RegistryEntry, ReportRegistry, Reservation,
+    VerifyOutcome, PROFILES_DIR, REGISTRY_SCHEMA,
 };
 pub use report::{BundleKind, BundleRef, ProfileRef, ValidationReport, REPORT_SCHEMA};

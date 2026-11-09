@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::check::{CheckId, CheckRecord, CheckStatus, DocRef};
+use crate::checks::integrity::{reference_keys, resolve_pinned, PinnedRef};
 use crate::checks::parsing::parse_rig;
-use crate::checks::integrity::{resolve_pinned, PinnedRef, reference_keys};
 use crate::context::ValidationContext;
 use crate::error::ValidationError;
 use crate::profile::ValidationProfile;
@@ -51,40 +51,45 @@ pub fn check_rig_bindings(
                 check_id: CheckId::RigBindings,
                 result: CheckStatus::Unavailable,
                 value: None,
-                detail: Some(format!("the rig_definition artifact is unusable: {}", err.message())),
+                detail: Some(format!(
+                    "the rig_definition artifact is unusable: {}",
+                    err.message()
+                )),
                 applicability_ref: None,
                 evidence: Vec::new(),
             });
         }
     };
-    let (pinned_value, pinned_digest) = match resolve_pinned(context, profile, reference_keys::SKELETON_PROFILE)? {
-        PinnedRef::Present(value, digest) => (value, digest),
-        PinnedRef::Changed(message) => {
-            return Ok(CheckRecord {
-                check_id: CheckId::RigBindings,
-                result: CheckStatus::Fail,
-                value: None,
-                detail: Some(format!("RIG_MISMATCH: {message}")),
-                applicability_ref: None,
-                evidence: Vec::new(),
-            });
-        }
-        PinnedRef::Missing => {
-            return Ok(CheckRecord {
-                check_id: CheckId::RigBindings,
-                result: CheckStatus::Unavailable,
-                value: None,
-                detail: Some(
-                    "the profile does not pin the skeleton_profile reference; the rig \
+    let (pinned_value, pinned_digest) =
+        match resolve_pinned(context, profile, reference_keys::SKELETON_PROFILE)? {
+            PinnedRef::Present(value, digest) => (value, digest),
+            PinnedRef::Changed(message) => {
+                return Ok(CheckRecord {
+                    check_id: CheckId::RigBindings,
+                    result: CheckStatus::Fail,
+                    value: None,
+                    detail: Some(format!("RIG_MISMATCH: {message}")),
+                    applicability_ref: None,
+                    evidence: Vec::new(),
+                });
+            }
+            PinnedRef::Missing => {
+                return Ok(CheckRecord {
+                    check_id: CheckId::RigBindings,
+                    result: CheckStatus::Unavailable,
+                    value: None,
+                    detail: Some(
+                        "the profile does not pin the skeleton_profile reference; the rig \
                      identity cannot be verified"
-                        .to_string(),
-                ),
-                applicability_ref: None,
-                evidence: Vec::new(),
-            });
-        }
-    };
-    let pinned: crate::checks::parsing::SkeletonProfile = match serde_json::from_value(pinned_value) {
+                            .to_string(),
+                    ),
+                    applicability_ref: None,
+                    evidence: Vec::new(),
+                });
+            }
+        };
+    let pinned: crate::checks::parsing::SkeletonProfile = match serde_json::from_value(pinned_value)
+    {
         Ok(value) => value,
         Err(err) => {
             return Ok(CheckRecord {

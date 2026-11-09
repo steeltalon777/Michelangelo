@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::canonical::{dependency_digest, parse_json, sha256_hex};
 use crate::error::ValidationError;
-use crate::ids::{validate_rel_path, resolve_under};
+use crate::ids::{resolve_under, validate_rel_path};
 use crate::profile::{ProfileKind, ValidationProfile};
 
 /// One artifact of the measured bundle (private provisional DTO).
@@ -127,7 +127,13 @@ impl BundleManifest {
         let entries: Vec<(String, String, String)> = self
             .dependencies
             .iter()
-            .map(|dep| (dep.dep_id.clone(), dep.revision.to_string(), dep.sha256.clone()))
+            .map(|dep| {
+                (
+                    dep.dep_id.clone(),
+                    dep.revision.to_string(),
+                    dep.sha256.clone(),
+                )
+            })
             .collect();
         dependency_digest(&entries)
     }
@@ -157,10 +163,14 @@ pub struct ValidationContext {
 impl ValidationContext {
     /// Open a context: read the manifest bytes (recording their digest),
     /// parse the manifest, and validate its location containment.
-    pub fn open(root: &std::path::Path, manifest_path: &str) -> Result<ValidationContext, ValidationError> {
+    pub fn open(
+        root: &std::path::Path,
+        manifest_path: &str,
+    ) -> Result<ValidationContext, ValidationError> {
         let joined = resolve_under(root, manifest_path)?;
-        let bytes = std::fs::read(&joined)
-            .map_err(|err| ValidationError::io(&joined, format!("the manifest cannot be read: {err}")))?;
+        let bytes = std::fs::read(&joined).map_err(|err| {
+            ValidationError::io(&joined, format!("the manifest cannot be read: {err}"))
+        })?;
         let manifest = BundleManifest::from_json_bytes(&bytes)?;
         crate::ids::validate_id(&manifest.candidate_id, "candidate_id")?;
         for artifact in &manifest.artifacts {
@@ -219,8 +229,9 @@ impl ValidationContext {
     /// bytes (IT-8D D1.2 analog: hashes are over really-read bytes).
     pub fn read_bytes(&mut self, rel_path: &str) -> Result<Vec<u8>, ValidationError> {
         let joined = resolve_under(&self.root, rel_path)?;
-        let bytes = std::fs::read(&joined)
-            .map_err(|err| ValidationError::io(&joined, format!("the file cannot be read: {err}")))?;
+        let bytes = std::fs::read(&joined).map_err(|err| {
+            ValidationError::io(&joined, format!("the file cannot be read: {err}"))
+        })?;
         let digest = sha256_hex(&bytes);
         self.inputs.insert(rel_path.to_string(), digest);
         Ok(bytes)

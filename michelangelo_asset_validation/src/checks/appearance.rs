@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::canonical::sha256_hex;
 use crate::check::{CheckId, CheckRecord, CheckStatus, DocRef};
+use crate::checks::integrity::{reference_keys, resolve_pinned, PinnedRef};
 use crate::checks::parsing::{parse_mtl, parse_obj};
-use crate::checks::integrity::{resolve_pinned, PinnedRef, reference_keys};
 use crate::context::ValidationContext;
 use crate::error::ValidationError;
 use crate::profile::ValidationProfile;
@@ -173,7 +173,9 @@ pub fn check_texture_integrity(
 /// UV preservation: the vt counts of the actually read OBJ artifacts are
 /// compared with the pinned `expected_uv_counts` reference (when present) and
 /// with the `min_uv_count` threshold (when declared). No OBJ data -> not
-/// applicable; missing pin for a required check -> unavailable.
+/// applicable. Without a pin AND without a threshold the presence of vt lines
+/// proves nothing about preservation, so the honest result is `unavailable`
+/// (M4) — never `pass` by mere presence.
 pub fn check_uv_preservation(
     context: &mut ValidationContext,
     profile: &ValidationProfile,
@@ -200,42 +202,56 @@ pub fn check_uv_preservation(
     }
     let mut failures = Vec::new();
     let mut pinned_total = 0_usize;
+    let mut has_pin = false;
     match resolve_pinned(context, profile, reference_keys::EXPECTED_UV_COUNTS)? {
         PinnedRef::Present(value, _) => {
-            if let Some(entries) = value.get("counts").and_then(|v| v.as_array()) {
-                for entry in entries {
-                    let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or_default();
-                    let expected = entry.get("vt").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                    pinned_total += expected;
-                    match measured.get(path) {
-                        Some(actual) if *actual != expected => {
-                            failures.push(format!(
-                                "UV_CHANGED: the artifact '{}' has {} vt lines, the pinned \
-                                 expectation is {}",
-                                path, actual, expected
-                            ));
-                        }
-                        Some(_) => {}
-                        None => {
-                            failures.push(format!(
-                                "UV_CHANGED: the pinned UV expectation refers to '{}' which \
-                                 is not a measurable OBJ artifact",
-                                path
-                            ));
+            has_pin = true;
+            match value.get("counts").and_then(|v| v.as_array()) {
+                Some(entries) => {
+                    for entry in entries {
+                        let path = entry
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        let expected =
+                            entry.get("vt").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        pinned_total += expected;
+                        match measured.get(path) {
+                            Some(actual) if *actual != expected => {
+                                failures.push(format!(
+                                    "UV_CHANGED: the artifact '{}' has {} vt lines, the pinned \
+                                     expectation is {}",
+                                    path, actual, expected
+                                ));
+                            }
+                            Some(_) => {}
+                            None => {
+                                failures.push(format!(
+                                    "UV_CHANGED: the pinned UV expectation refers to '{}' which \
+                                     is not a measurable OBJ artifact",
+                                    path
+                                ));
+                            }
                         }
                     }
                 }
+                None => failures.push(
+                    "UV_PIN_INVALID: the expected_uv_counts pin carries no 'counts' array"
+                        .to_string(),
+                ),
             }
         }
         PinnedRef::Changed(message) => {
+            has_pin = true;
             failures.push(format!("UV_CHANGED: {message}"));
         }
         PinnedRef::Missing => {
-            // No pin: fall back to the threshold (or presence) below.
+            // No pin: the threshold below is the only preservation evidence.
         }
     }
     let total: usize = measured.values().sum();
-    if let Some(threshold) = profile.threshold(CheckId::UvPreservation, "min_uv_count") {
+    let threshold = profile.threshold(CheckId::UvPreservation, "min_uv_count");
+    if let Some(threshold) = threshold {
         if !threshold.comparison.holds(total as f64, threshold.value) {
             failures.push(format!(
                 "UV_MISSING: the bundle has {} vt lines in total, below the threshold {} {}",
@@ -244,6 +260,17 @@ pub fn check_uv_preservation(
                 threshold.value
             ));
         }
+    }
+    if failures.is_empty() && !has_pin && threshold.is_none() {
+        return Ok(record(
+            CheckId::UvPreservation,
+            CheckStatus::Unavailable,
+            Some(total as f64),
+            "no expected_uv_counts pin and no min_uv_count threshold; the presence of vt lines \
+             is not preservation evidence"
+                .to_string(),
+            Vec::new(),
+        ));
     }
     if failures.is_empty() {
         Ok(record(
@@ -304,10 +331,7 @@ pub fn check_format_loss_declared(
         CheckId::FormatLossDeclared,
         CheckStatus::Pass,
         Some(losses as f64),
-        format!(
-            "{conversions} conversions with declared losses {:?}",
-            kinds
-        ),
+        format!("{conversions} conversions with declared losses {:?}", kinds),
         Vec::new(),
     ))
 }

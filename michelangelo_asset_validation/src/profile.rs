@@ -45,8 +45,10 @@ impl ProfileKind {
     }
 }
 
-/// The applicability declaration of a profile.
+/// The applicability declaration of a profile. Unknown fields are rejected
+/// (M3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppliesTo {
     pub targets: Vec<TargetKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -66,8 +68,10 @@ pub enum TargetKind {
     SourceSnapshot,
 }
 
-/// One threshold entry: metric, comparison, value.
+/// One threshold entry: metric, comparison, value. Unknown fields are
+/// rejected (M3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Threshold {
     pub check_id: CheckId,
     pub metric: String,
@@ -106,8 +110,10 @@ impl Comparison {
     }
 }
 
-/// Hash-pinned references the evaluators may resolve.
+/// Hash-pinned references the evaluators may resolve. Unknown fields are
+/// rejected (M3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileReferences {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reference_digests: BTreeMap<String, String>,
@@ -119,8 +125,9 @@ pub struct ProfileReferences {
 
 /// The versioned validation profile. Immutable once pinned; a change of any
 /// field changes the digest and invalidates reports pinned to the old digest
-/// (F19).
+/// (F19). Unknown fields are rejected (M3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidationProfile {
     pub schema: String,
     pub profile_id: String,
@@ -160,8 +167,10 @@ impl ValidationProfile {
                         if CheckId::parse(name).is_err() {
                             return Err(ValidationError::rule(
                                 code,
-                                format!("the {field} entry '{name}' is outside the closed \
-                                         check_id registry v0.1 (VALIDATION_MATRIX §1)"),
+                                format!(
+                                    "the {field} entry '{name}' is outside the closed \
+                                         check_id registry v0.1 (VALIDATION_MATRIX §1)"
+                                ),
                             ));
                         }
                     }
@@ -309,6 +318,12 @@ impl ValidationProfile {
     /// check that the matrix marks not-applicable for the kind is a profile
     /// conflict; a conditional required check without its condition token is
     /// a conflict too.
+    ///
+    /// The optional side is guarded symmetrically (M2): `not_required` is
+    /// legal only where the matrix does not require the check. An optional
+    /// entry for an unconditionally required check, or for a conditional
+    /// check whose condition token is present, would let a content probe mask
+    /// the check under `not_required`; both are profile conflicts.
     fn validate_applicability(&self) -> Result<(), ValidationError> {
         for check in &self.required_checks {
             match applicability(self.kind, *check) {
@@ -323,12 +338,41 @@ impl ValidationProfile {
                     ));
                 }
                 Applicability::RequiredWithCondition(condition)
-                    if !self.applies_to.conditions.iter().any(|c| c == condition) =>
+                    if !self.has_condition(condition) =>
                 {
                     return Err(ValidationError::rule(
                         crate::error::VALIDATION_APPLICABILITY_CONFLICT,
                         format!(
                             "the check '{}' requires the profile condition '{}'",
+                            check.as_str(),
+                            condition
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        for check in &self.optional_checks {
+            match applicability(self.kind, *check) {
+                Applicability::Required => {
+                    return Err(ValidationError::rule(
+                        crate::error::VALIDATION_APPLICABILITY_CONFLICT,
+                        format!(
+                            "the check '{}' is unconditionally required by the matrix for the \
+                             kind '{}' and cannot be optional",
+                            check.as_str(),
+                            self.kind.as_str()
+                        ),
+                    ));
+                }
+                Applicability::RequiredWithCondition(condition)
+                    if self.has_condition(condition) =>
+                {
+                    return Err(ValidationError::rule(
+                        crate::error::VALIDATION_APPLICABILITY_CONFLICT,
+                        format!(
+                            "the check '{}' is listed as optional but the profile carries the \
+                             condition '{}' that makes it required",
                             check.as_str(),
                             condition
                         ),
@@ -366,12 +410,18 @@ fn validate_check_known(check: CheckId, required: bool) -> Result<(), Validation
     } else if required {
         Err(ValidationError::rule(
             crate::error::VALIDATION_UNKNOWN_REQUIRED,
-            format!("the required check '{}' is outside the registry", check.as_str()),
+            format!(
+                "the required check '{}' is outside the registry",
+                check.as_str()
+            ),
         ))
     } else {
         Err(ValidationError::rule(
             crate::error::VALIDATION_UNKNOWN_OPTIONAL,
-            format!("the optional check '{}' is outside the registry", check.as_str()),
+            format!(
+                "the optional check '{}' is outside the registry",
+                check.as_str()
+            ),
         ))
     }
 }

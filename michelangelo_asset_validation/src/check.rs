@@ -119,7 +119,10 @@ impl CheckId {
 /// The result status of one check in the NEW report model.
 ///
 /// `NotRequired` is legal only for optional checks and only with a
-/// non-empty `applicability_ref` (F16). `Unavailable` is the honest outcome
+/// non-empty `applicability_ref` (F16). Registration (`write_and_register`)
+/// and verification (`verify_registered_report`) enforce the same rule
+/// against the pinned profile: a required check must be `pass`, `fail` or
+/// `unavailable`, never `not_required`. `Unavailable` is the honest outcome
 /// for a check whose ground truth or verifying backend is missing; it is
 /// never folded into `pass`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,8 +137,10 @@ pub enum CheckStatus {
     NotRequired,
 }
 
-/// One recorded check of a validation report.
+/// One recorded check of a validation report. Unknown fields are rejected
+/// (ghost-field hardening, M3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckRecord {
     pub check_id: CheckId,
     pub result: CheckStatus,
@@ -143,10 +148,7 @@ pub struct CheckRecord {
     pub value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    #[serde(
-        rename = "applicability_ref",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "applicability_ref", skip_serializing_if = "Option::is_none")]
     pub applicability_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<DocRef>,
@@ -189,8 +191,9 @@ impl Verdict {
     }
 }
 
-/// Hash-pinned document reference.
+/// Hash-pinned document reference. Unknown fields are rejected (M3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DocRef {
     pub path: String,
     pub sha256: String,
@@ -253,8 +256,9 @@ pub fn applicability(kind: ProfileKind, check: CheckId) -> Applicability {
         },
         ProfileKind::FamilyRigCompatible => match check {
             PayloadIntegrity | DependencyClosure | PathContainment | AssetDigestFull
-            | BudgetGeometry | ProtectedRoles | MaterialPresence | UvPreservation
-            | RigBindings => Required,
+            | BudgetGeometry | ProtectedRoles | MaterialPresence | UvPreservation | RigBindings => {
+                Required
+            }
             AnimationClips => RequiredWithCondition("clips_pinned"),
             ConnectorCompatibility => RequiredWithCondition("constraints:connector"),
             MinimumClearance => RequiredWithCondition("constraints:clearance"),
@@ -267,10 +271,15 @@ pub fn applicability(kind: ProfileKind, check: CheckId) -> Applicability {
         },
         ProfileKind::AnatomyChange => match check {
             PayloadIntegrity | DependencyClosure | PathContainment | AssetDigestFull
-            | BudgetGeometry | ProtectedRoles | MaterialPresence | RigBindings
-            | AnimationClips => Required,
-            ConnectorCompatibility | MinimumClearance | MaximumDimension | TextureIntegrity
-            | UvPreservation | FormatLossDeclared => Optional,
+            | BudgetGeometry | ProtectedRoles | MaterialPresence | RigBindings | AnimationClips => {
+                Required
+            }
+            ConnectorCompatibility
+            | MinimumClearance
+            | MaximumDimension
+            | TextureIntegrity
+            | UvPreservation
+            | FormatLossDeclared => Optional,
             ExportRoundtrip => RequiredWithCondition("export:glb"),
             SilhouetteConformance => NotApplicable,
             StyleReview => Human,

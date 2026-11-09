@@ -8,7 +8,7 @@ use crate::check::{applicability, Applicability, CheckId, CheckRecord, CheckStat
 use crate::checks::{appearance, backend, geometry, integrity, rig};
 use crate::context::ValidationContext;
 use crate::error::ValidationError;
-use crate::profile::{ProfileKind, ValidationProfile};
+use crate::profile::ValidationProfile;
 use crate::report::{BundleRef, ProfileRef, ValidationReport};
 
 /// The request for one evaluation. `created_at` is supplied by the caller so
@@ -53,7 +53,9 @@ pub fn default_evaluator_versions() -> BTreeMap<String, String> {
 /// fail > unavailable > pass; the report records the digests of the bytes
 /// actually read. Operational errors (unreadable workspace, broken pinned
 /// reference) abort with `Err` instead of fabricating a result.
-pub fn evaluate(request: EvaluationRequest<'_>) -> Result<(ValidationReport, String), ValidationError> {
+pub fn evaluate(
+    request: EvaluationRequest<'_>,
+) -> Result<(ValidationReport, String), ValidationError> {
     let profile = &request.profile;
     // The kind gate runs before profile validation: a reconstruction profile
     // is a valid document that this module must refuse (it belongs to the
@@ -124,7 +126,10 @@ pub fn evaluate(request: EvaluationRequest<'_>) -> Result<(ValidationReport, Str
         .filter(|required| !records.iter().any(|record| &record.check_id == *required))
         .collect();
     if !missing.is_empty() {
-        let names: Vec<String> = missing.iter().map(|check| check.as_str().to_string()).collect();
+        let names: Vec<String> = missing
+            .iter()
+            .map(|check| check.as_str().to_string())
+            .collect();
         return Err(ValidationError::rule(
             crate::error::MISSING_REQUIRED_CHECK,
             format!("the required checks {:?} have no results", names),
@@ -156,7 +161,10 @@ pub fn evaluate(request: EvaluationRequest<'_>) -> Result<(ValidationReport, Str
 /// the NotApplicable class is blocked; Required / RequiredWithCondition /
 /// Optional / Human are all legitimate.
 fn optional_allowed(profile: &ValidationProfile, check: CheckId) -> bool {
-    !matches!(applicability(profile.kind, check), Applicability::NotApplicable)
+    !matches!(
+        applicability(profile.kind, check),
+        Applicability::NotApplicable
+    )
 }
 
 /// Run one required check (or the human-review stub).
@@ -221,7 +229,10 @@ fn dispatch_optional_probe(
     // Content probes: an optional check over content the bundle does not
     // carry is explicitly not_required (with the applicability reference).
     let manifest = context.manifest();
-    let has_mtl_dep = manifest.dependencies.iter().any(|d| d.path.ends_with(".mtl"));
+    let has_mtl_dep = manifest
+        .dependencies
+        .iter()
+        .any(|d| d.path.ends_with(".mtl"));
     let has_obj = manifest
         .artifacts
         .iter()
@@ -235,7 +246,12 @@ fn dispatch_optional_probe(
     };
     let exempt = match check {
         CheckId::MaterialPresence => probe_exempt(
-            manifest.artifacts.iter().any(|a| a.content_kind == "material") || has_obj || has_mtl_dep,
+            manifest
+                .artifacts
+                .iter()
+                .any(|a| a.content_kind == "material")
+                || has_obj
+                || has_mtl_dep,
             "the bundle declares no material content".to_string(),
         ),
         CheckId::TextureIntegrity => probe_exempt(
@@ -247,7 +263,10 @@ fn dispatch_optional_probe(
             "the bundle declares no texture content".to_string(),
         ),
         CheckId::UvPreservation => probe_exempt(
-            has_obj || profile.reference_digest(integrity::reference_keys::EXPECTED_UV_COUNTS).is_some(),
+            has_obj
+                || profile
+                    .reference_digest(integrity::reference_keys::EXPECTED_UV_COUNTS)
+                    .is_some(),
             "the bundle carries no OBJ geometry with UV data".to_string(),
         ),
         CheckId::FormatLossDeclared => probe_exempt(
@@ -338,7 +357,9 @@ fn dispatch_run(
         CheckId::DependencyClosure => integrity::check_dependency_closure(context, profile),
         CheckId::BudgetGeometry => geometry::check_budget_geometry(context, profile),
         CheckId::ProtectedRoles => geometry::check_protected_roles(context, profile),
-        CheckId::ConnectorCompatibility => geometry::check_connector_compatibility(context, profile),
+        CheckId::ConnectorCompatibility => {
+            geometry::check_connector_compatibility(context, profile)
+        }
         CheckId::MinimumClearance => geometry::check_minimum_clearance(context, profile),
         CheckId::MaximumDimension => geometry::check_maximum_dimension(context, profile),
         CheckId::MaterialPresence => appearance::check_material_presence(context),
@@ -390,7 +411,3 @@ fn dispatch_run(
 pub fn matrix_generation() -> &'static str {
     "glm1-contract-gate-draft-0.1"
 }
-
-/// Silence the unused import for ProfileKind when only re-exported.
-#[allow(unused_imports)]
-use ProfileKind as _ProfileKindUnused;

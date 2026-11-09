@@ -180,7 +180,11 @@ pub fn check_animation_clips(
     let mut failures = Vec::new();
     let mut verified = Vec::new();
     for clip in pinned {
-        match manifest.dependencies.iter().find(|dep| dep.path == clip.path) {
+        match manifest
+            .dependencies
+            .iter()
+            .find(|dep| dep.path == clip.path)
+        {
             Some(dep) if dep.sha256 == clip.sha256 => {
                 verified.push(clip.clone());
             }
@@ -214,10 +218,9 @@ pub fn check_animation_clips(
             clip_sha256: clip.sha256.clone(),
         }) {
             BackendOutcome::Verified { .. } => played += 1,
-            BackendOutcome::Failed { detail } => playback_failures.push(format!(
-                "CLIP_PLAYBACK_FAILED: '{}': {detail}",
-                clip.path
-            )),
+            BackendOutcome::Failed { detail } => {
+                playback_failures.push(format!("CLIP_PLAYBACK_FAILED: '{}': {detail}", clip.path))
+            }
             BackendOutcome::Unavailable { reason } => {
                 return Ok(CheckRecord {
                     check_id: CheckId::AnimationClips,
